@@ -16,7 +16,7 @@ memory: "4GiB"    # reduce to 2GiB on 8GB machines
 # Mount provision/ read-only so scripts are accessible inside the VM during provisioning.
 # Code lives ONLY inside the VM — accessed via VS Code Remote SSH or JetBrains Gateway.
 mounts:
-  - location: "./provision"
+  - location: "{{DEVBOX_DIR}}/provision"
     mountPoint: "/provision"
     writable: false
 

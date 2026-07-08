@@ -11,8 +11,9 @@ JAVA_VERSION="21.0.3-tem"
 UV_VERSION="0.4.18"
 # ─────────────────────────────────────────────────────────────────────────────
 
-export HOME="${HOME:-/home/$USER}"
-export XDG_CONFIG_HOME="$HOME/.config"
+# HOME is set correctly by Lima — do not override it.
+# Do NOT export XDG_CONFIG_HOME: nvm uses it to pick its install dir,
+# and setting it causes nvm to install to ~/.config/nvm instead of ~/.nvm.
 
 # ─── Git identity ─────────────────────────────────────────────────────────────
 if [ -n "${GIT_NAME:-}" ] && [ -n "${GIT_EMAIL:-}" ]; then
@@ -72,21 +73,20 @@ fi
 
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init --path)"
 eval "$(pyenv init -)"
 
 if ! pyenv versions --bare | grep -qx "$PYTHON_VERSION"; then
     pyenv install "$PYTHON_VERSION"
 fi
 pyenv global "$PYTHON_VERSION"
+export PATH="$PYENV_ROOT/shims:$PATH"
 
 if ! grep -qF 'PYENV_ROOT' "$HOME/.zshrc" 2>/dev/null; then
     cat >> "$HOME/.zshrc" <<'ZSHEOF'
 
 # pyenv
 export PYENV_ROOT="$HOME/.pyenv"
-export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init --path)"
+export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
 eval "$(pyenv init -)"
 ZSHEOF
 fi
@@ -107,19 +107,22 @@ if [ ! -d "$HOME/.sdkman" ]; then
 fi
 
 export SDKMAN_DIR="$HOME/.sdkman"
-# shellcheck disable=SC1091
+# sdkman uses unbound variables internally — disable set -u for all sdkman operations
+set +u
 [[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]] && source "$SDKMAN_DIR/bin/sdkman-init.sh"
-
-if ! sdk list java 2>/dev/null | grep -q "$JAVA_VERSION" || ! sdk current java 2>/dev/null | grep -q "$JAVA_VERSION"; then
+if ! sdk current java 2>/dev/null | grep -q "$JAVA_VERSION"; then
     sdk install java "$JAVA_VERSION" || true
 fi
+set -u
 
 if ! grep -qF 'SDKMAN_DIR' "$HOME/.zshrc" 2>/dev/null; then
     cat >> "$HOME/.zshrc" <<'ZSHEOF'
 
 # sdkman
 export SDKMAN_DIR="$HOME/.sdkman"
+set +u
 [[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]] && source "$SDKMAN_DIR/bin/sdkman-init.sh"
+set -u
 ZSHEOF
 fi
 
@@ -175,7 +178,12 @@ sed "s|\$USER|$USER|g" /provision/config/opencode/opencode.json > "$HOME/.config
 
 # ─── Databricks CLI ──────────────────────────────────────────────────────────
 if ! command -v databricks >/dev/null; then
-    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+    mkdir -p "$HOME/.local/bin"
+    DATABRICKS_LATEST=$(curl -fsSL https://api.github.com/repos/databricks/cli/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+    curl -fsSL "https://github.com/databricks/cli/releases/download/v${DATABRICKS_LATEST}/databricks_cli_${DATABRICKS_LATEST}_linux_arm64.zip" -o /tmp/databricks.zip
+    unzip -o /tmp/databricks.zip databricks -d "$HOME/.local/bin"
+    chmod +x "$HOME/.local/bin/databricks"
+    rm /tmp/databricks.zip
 fi
 
 if [ -n "${DATABRICKS_HOST:-}" ] && [ -n "${DATABRICKS_TOKEN:-}" ]; then
