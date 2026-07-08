@@ -1,0 +1,63 @@
+vmType: vz          # Apple Virtualization.framework — fastest on Apple Silicon
+                    # Change to "qemu" if you need snapshots
+
+arch: aarch64
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+    # Pin the digest after first start to avoid unexpected image changes:
+    #   limactl list --format '{{.Digest}}' koray-dev
+    # Then uncomment:
+    # digest: "sha256:..."
+
+cpus: 4
+memory: "4GiB"    # reduce to 2GiB on 8GB machines
+
+# Mount provision/ read-only so scripts are accessible inside the VM during provisioning.
+# Code lives ONLY inside the VM — accessed via VS Code Remote SSH or JetBrains Gateway.
+mounts:
+  - location: "./provision"
+    mountPoint: "/provision"
+    writable: false
+
+ssh:
+  forwardAgent: true   # host SSH agent forwarded; private keys never written to VM disk
+
+portForwards:
+  - guestPort: 8080
+    hostPort: 8080
+    hostIP: "127.0.0.1"
+  - guestPort: 3000
+    hostPort: 3000
+    hostIP: "127.0.0.1"
+
+provision:
+  # Step 1: system packages (runs as root)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      bash /provision/system.sh
+
+  # Step 2: write secrets and identity to /etc/environment so tools.sh can read them.
+  # {{.Env.X}} expands from the host shell environment at `limactl start` time.
+  # Values are stored in ~/.lima/koray-dev/ (local-only, not in this repo).
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -e
+      cat >> /etc/environment <<'EOF'
+      ANTHROPIC_API_KEY={{.Env.ANTHROPIC_API_KEY}}
+      DATABRICKS_HOST={{.Env.DATABRICKS_HOST}}
+      DATABRICKS_TOKEN={{.Env.DATABRICKS_TOKEN}}
+      GIT_NAME={{.Env.GIT_NAME}}
+      GIT_EMAIL={{.Env.GIT_EMAIL}}
+      EOF
+
+  # Step 3: user-level tools + configs (runs as the lima user)
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux
+      set -a; source /etc/environment 2>/dev/null || true; set +a
+      bash /provision/tools.sh
