@@ -37,7 +37,7 @@ Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent s
 
 ```sh
 limactl start koray-dev   # start VM
-./shell.sh                # SSH in (opens zsh with all tools on PATH)
+./connect.sh              # SSH in (opens zsh with all tools on PATH)
 limactl stop koray-dev    # shut down
 ```
 
