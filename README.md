@@ -26,7 +26,7 @@ cd devbox
 cp .env.example .env
 # Edit .env — fill in your API keys, git identity, Databricks credentials
 
-source .env && limactl start --name koray-dev lima.yaml
+source .env && ./start.sh
 ```
 
 Provisioning takes ~15–20 min on first boot (downloads runtimes).  
@@ -108,7 +108,7 @@ If the socket is missing, restart the VM: `limactl stop koray-dev && limactl sta
 To re-run all provisioners (after changing `tools.sh` or config files):
 
 ```sh
-source .env && limactl stop koray-dev && limactl start koray-dev
+source .env && limactl stop koray-dev && ./start.sh
 ```
 
 ---
