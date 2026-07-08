@@ -20,9 +20,6 @@ mounts:
     mountPoint: "/provision"
     writable: false
 
-user:
-  uid: 1000   # use a standard Linux UID to avoid .guest suffix on home directory
-
 ssh:
   forwardAgent: true   # host SSH agent forwarded; private keys never written to VM disk
 
