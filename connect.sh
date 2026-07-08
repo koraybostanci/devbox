@@ -1,2 +1,2 @@
 #!/bin/bash
-exec limactl shell koray-dev zsh
+exec limactl shell devbox zsh

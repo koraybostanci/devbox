@@ -36,9 +36,9 @@ Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent s
 ## Daily workflow
 
 ```sh
-limactl start koray-dev   # start VM
+limactl start devbox   # start VM
 ./connect.sh              # SSH in (opens zsh with all tools on PATH)
-limactl stop koray-dev    # shut down
+limactl stop devbox    # shut down
 ```
 
 No need to `source .env` for a normal start — only required when reprovisioning.
@@ -67,7 +67,7 @@ Clone your personal repos under `~/projects/` inside the VM.
 After changing `tools.sh` or any config file under `provision/config/`:
 
 ```sh
-source .env && limactl stop koray-dev && ./start.sh
+source .env && limactl stop devbox && ./start.sh
 ```
 
 This re-runs all provisioners. Your code in `~/projects/` and VM disk data are untouched.
@@ -79,7 +79,7 @@ This re-runs all provisioners. Your code in `~/projects/` and VM disk data are u
 Wipes the VM disk and re-provisions from scratch (~15–20 min):
 
 ```sh
-limactl delete koray-dev
+limactl delete devbox
 source .env && ./start.sh
 ```
 
@@ -121,12 +121,12 @@ Add to `~/.ssh/config` on your Mac (one-time):
 Include ~/.lima/*/ssh.config
 ```
 
-Lima writes `~/.lima/koray-dev/ssh.config` on every start. In VS Code → Remote Explorer → connect to `lima-koray-dev`.
+Lima writes `~/.lima/devbox/ssh.config` on every start. In VS Code → Remote Explorer → connect to `lima-devbox`.
 
 ### JetBrains Gateway
 
 ```sh
-limactl list --format '{{ .SSHLocalPort }}' koray-dev
+limactl list --format '{{ .SSHLocalPort }}' devbox
 ```
 
 Gateway → New Connection → SSH → `127.0.0.1:<port>`, username = your macOS username. Select IDE version and project path on the VM.
@@ -144,7 +144,7 @@ echo $SSH_AUTH_SOCK   # should be /run/host-services/ssh-auth.sock
 ssh-add -l            # should list your keys
 ```
 
-If the socket is missing: `limactl stop koray-dev && limactl start koray-dev`.
+If the socket is missing: `limactl stop devbox && limactl start devbox`.
 
 ---
 
@@ -154,4 +154,4 @@ If the socket is missing: `limactl stop koray-dev && limactl start koray-dev`.
 - No API keys in host shell config (`.env` is gitignored)
 - SSH private keys never written to VM disk — agent-forwarded only
 - All personal tools install inside the VM only
-- VM state lives in `~/.lima/koray-dev/` — isolated from host tools
+- VM state lives in `~/.lima/devbox/` — isolated from host tools

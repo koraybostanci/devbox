@@ -7,4 +7,4 @@ RESOLVED_YAML="/tmp/koray-dev-lima.yaml"
 
 sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
 
-exec limactl start --name koray-dev "$RESOLVED_YAML"
+exec limactl start --name devbox "$RESOLVED_YAML"
