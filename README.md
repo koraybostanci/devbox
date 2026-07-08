@@ -15,12 +15,6 @@ brew install lima
 softwareupdate --install-rosetta   # Apple Silicon; skip if already installed
 ```
 
-Add the `devbox` alias to your Mac's `~/.zshrc`:
-
-```sh
-alias devbox='limactl shell koray-dev zsh'
-```
-
 ---
 
 ## First-time setup
@@ -43,7 +37,7 @@ Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent s
 
 ```sh
 limactl start koray-dev   # start VM
-devbox                    # SSH in (opens zsh with all tools on PATH)
+./shell.sh                # SSH in (opens zsh with all tools on PATH)
 limactl stop koray-dev    # shut down
 ```
 
