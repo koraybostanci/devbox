@@ -28,7 +28,11 @@ apt-get install -y --no-install-recommends \
     libxmlsec1-dev \
     libffi-dev \
     liblzma-dev \
-    jq
+    jq \
+    fzf \
+    bat \
+    git-delta \
+    gh
 
 # Fix Ubuntu network interface naming issue that causes boot hangs with Lima/QEMU
 # (no-op on VZ driver, but safe to apply)
