@@ -169,8 +169,13 @@ mkdir -p "$HOME/.claude"
 sed "s|\$USER|$USER|g" /provision/config/mcp.json > "$HOME/.mcp.json"
 
 # ─── opencode ────────────────────────────────────────────────────────────────
-if ! command -v opencode >/dev/null; then
+if [ ! -f "$HOME/.opencode/bin/opencode" ]; then
     curl -fsSL https://opencode.ai/install | bash
+fi
+export PATH="$HOME/.opencode/bin:$PATH"
+
+if ! grep -qF '.opencode/bin' "$HOME/.zshrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> "$HOME/.zshrc"
 fi
 
 mkdir -p "$HOME/.config/opencode"
