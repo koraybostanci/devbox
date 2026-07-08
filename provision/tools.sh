@@ -206,6 +206,29 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     export ANTHROPIC_API_KEY
 fi
 
+# ─── yq ──────────────────────────────────────────────────────────────────────
+if ! command -v yq >/dev/null; then
+    YQ_LATEST=$(curl -fsSL https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+    curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_LATEST}/yq_linux_arm64" -o "$HOME/.local/bin/yq"
+    chmod +x "$HOME/.local/bin/yq"
+fi
+
+# ─── zsh plugins ─────────────────────────────────────────────────────────────
+ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+
+if [ ! -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ]; then
+    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "$ZSH_CUSTOM/plugins/zsh-autosuggestions"
+fi
+
+if [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ]; then
+    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
+fi
+
+# Enable plugins in .zshrc (replace default plugins line)
+if grep -q "^plugins=(git)" "$HOME/.zshrc" 2>/dev/null; then
+    sed -i 's/^plugins=(git)/plugins=(git fzf zsh-autosuggestions zsh-syntax-highlighting)/' "$HOME/.zshrc"
+fi
+
 # ─── Create projects directory ───────────────────────────────────────────────
 mkdir -p "$HOME/projects"
 
