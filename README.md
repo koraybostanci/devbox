@@ -59,7 +59,7 @@ devbox stop      # shut down
 
 **Shell extras**: fzf, bat, delta, gh, yq, zsh-autosuggestions, zsh-syntax-highlighting
 
-Clone your personal repos under `~/projects/` inside the VM.
+Your `~/projects/` and `~/data/` directories inside the VM are mounts of `../projects/` and `../data/` on the Mac (siblings of this repo). Both persist across `devbox rebuild` and are accessible from Finder, git, and backup tools on the Mac.
 
 ---
 
@@ -71,7 +71,7 @@ Lima provisioners only run at VM creation time. After changing any file under `p
 devbox rebuild
 ```
 
-This wipes the VM disk and re-provisions from scratch (~15–20 min). Your code lives inside the VM — back up anything in `~/projects/` that isn't already in a remote repo before rebuilding.
+This wipes the VM disk and re-provisions from scratch (~15–20 min). `~/projects/` and `~/data/` are Mac-side mounts and are **not** deleted by rebuild.
 
 **Rotating credentials**: secrets are written to `/etc/environment` only once (guarded by a sentinel). To update an API key or token, edit `.env` then:
 
@@ -81,13 +81,32 @@ devbox rotate
 
 ---
 
-## Full rebuild
+## Containers
+
+The VM runs rootless containerd with nerdctl. `docker` and `docker-compose` are aliased to `nerdctl` and `nerdctl compose`.
+
+A Postgres compose file is included. Manage containers from the Mac:
 
 ```sh
-devbox rebuild
+devbox containers up             # start all containers
+devbox containers postgres up    # start only postgres
+devbox containers down           # stop all containers
+devbox containers ps             # list running containers
+devbox containers logs           # follow logs for all containers
+
+# Connect from the Mac
+psql -h localhost -p 15432 -U dev   # password: devpass
 ```
 
-No manual steps — everything is declared in this repo.
+Postgres data is stored in `~/data/postgres/` (Mac-side: `../data/postgres/`).
+
+**Data lifecycle:**
+- `down` + `up` — safe restart, data survives (bind mount, not a named volume)
+- `devbox stop` + `devbox start` — containers restart automatically (`restart: unless-stopped`), data survives
+- `devbox rebuild` / `devbox delete` — VM disk wiped, `../data/` on Mac is untouched, data survives
+- Data is only lost if you manually delete `../data/` on the Mac
+
+To add more services (Valkey, nginx, etc.), create `provision/config/containers/<name>/docker-compose.yml` and add the port forward to `lima.yaml` using the +10000 offset pattern (e.g., guest 6379 → host 16379). The `devbox containers` command picks up new services automatically. Ports below 1024 cannot be bound by rootless containers — use 8080 for nginx, not 80.
 
 ---
 

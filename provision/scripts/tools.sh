@@ -269,8 +269,15 @@ for entry in "${SKILL_INSTALLS[@]+${SKILL_INSTALLS[@]}}"; do
     fi
 done
 
-# ─── Create projects directory ───────────────────────────────────────────────
-mkdir -p "$HOME/projects"
+# ─── Container setup ─────────────────────────────────────────────────────────
+# Enable linger so containerd-rootless.service starts at boot without a login session.
+loginctl enable-linger "$USER" 2>/dev/null || true
+# Pre-create Postgres data dir (mode 0777: works around VZ+virtiofs transient root:root race at container start).
+mkdir -p "$HOME/data/postgres"
+chmod 0777 "$HOME/data/postgres"
+# docker compat aliases (VM-only)
+grep -qF 'alias docker=' "$HOME/.zshrc" 2>/dev/null || echo 'alias docker="nerdctl"' >> "$HOME/.zshrc"
+grep -qF 'alias docker-compose=' "$HOME/.zshrc" 2>/dev/null || echo 'alias docker-compose="nerdctl compose"' >> "$HOME/.zshrc"
 
 echo "=== devbox provisioning complete ==="
 echo "Node: $(node --version)"

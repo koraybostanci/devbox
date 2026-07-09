@@ -15,7 +15,8 @@ devbox stop       # graceful shutdown
 devbox status     # show VM state and resource usage
 devbox rotate     # update secrets in /etc/environment without full rebuild
 devbox rebuild    # wipe disk and reprovision (~15–20 min)
-devbox delete     # delete VM disk (data lost — prompts for confirmation)
+devbox delete     # delete VM disk (projects/data on Mac are NOT lost — prompts for confirmation)
+devbox containers [service] [up|down|ps|logs]  # manage containers from the Mac
 ```
 
 `./devbox` self-installs a symlink to `/usr/local/bin/devbox` on first run. After that, `devbox` works from anywhere.
@@ -28,7 +29,7 @@ Provisioning runs in three sequential Lima stages defined in `lima.yaml`:
 2. **Secrets injection** (root) — writes `.env` values to `/etc/environment` once, guarded by sentinel `/etc/devbox-env-written`
 3. **`scripts/tools.sh`** (lima user) — all user-level installs: nvm/Node, pyenv/Python, sdkman/Java, Go, Rust, uv, Claude Code, opencode, Databricks CLI, zsh plugins, MCP config, skills
 
-`lima.yaml` mounts `provision/` read-only at `/provision` inside the VM. `{{DEVBOX_DIR}}` in `lima.yaml` is substituted at runtime by `devbox start` before passing to `limactl`.
+`lima.yaml` mounts `provision/` read-only at `/provision`, `../projects/` writably at `~/projects/`, and `../data/` writably at `~/data/` (all Mac-side siblings of this repo). `{{DEVBOX_DIR}}`, `{{PROJECTS_DIR}}`, and `{{DATA_DIR}}` in `lima.yaml` are substituted at runtime by `devbox start` via `resolve_yaml()` before passing to `limactl`.
 
 ## Key files
 
@@ -37,6 +38,7 @@ Provisioning runs in three sequential Lima stages defined in `lima.yaml`:
 | `provision/versions.env` | Version pins for all tools |
 | `provision/scripts/tools.sh` | `CLAUDE_PLUGINS` and `SKILL_INSTALLS` arrays; user-level install logic |
 | `provision/scripts/system.sh` | apt packages (root-level, idempotent) |
+| `provision/config/containers/postgres/docker-compose.yml` | Postgres service; data stored in `~/data/postgres/` (Mac: `../data/postgres/`) |
 | `provision/config/mcp.json` | MCP servers for Claude Code (deployed to `~/.mcp.json`) |
 | `provision/config/opencode/opencode.json` | MCP servers for opencode |
 | `provision/config/claude/CLAUDE.md` | Claude Code user preferences deployed to `~/.claude/CLAUDE.md` |
