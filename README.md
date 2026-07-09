@@ -26,7 +26,7 @@ cp .env.example .env
 # Edit .env — fill in your API keys and git identity
 # Databricks vars are optional — leave blank if not used
 
-source .env && ./start.sh
+./devbox start   # installs `devbox` to /usr/local/bin on first run
 ```
 
 Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent starts take ~30 sec.
@@ -36,12 +36,10 @@ Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent s
 ## Daily workflow
 
 ```sh
-limactl start devbox   # start VM
-./connect.sh           # SSH in (opens zsh with all tools on PATH)
-limactl stop devbox    # shut down
+devbox start     # start VM (sources .env automatically)
+devbox connect   # SSH in (opens zsh with all tools on PATH)
+devbox stop      # shut down
 ```
-
-No need to `source .env` for a normal start — only required when reprovisioning.
 
 ---
 
@@ -70,16 +68,15 @@ Clone your personal repos under `~/projects/` inside the VM.
 After changing `tools.sh` or any config file under `provision/config/`:
 
 ```sh
-source .env && limactl stop devbox && ./start.sh
+devbox stop && devbox start
 ```
 
 This re-runs all provisioners. Your code in `~/projects/` and VM disk data are untouched.
 
-**Rotating credentials**: secrets are written to `/etc/environment` only once (guarded by a sentinel). To update an API key or token without a full rebuild:
+**Rotating credentials**: secrets are written to `/etc/environment` only once (guarded by a sentinel). To update an API key or token, edit `.env` then:
 
 ```sh
-limactl shell devbox -- sudo rm /etc/devbox-env-written
-source .env && limactl stop devbox && ./start.sh
+devbox rotate
 ```
 
 ---
@@ -89,8 +86,7 @@ source .env && limactl stop devbox && ./start.sh
 Wipes the VM disk and re-provisions from scratch (~15–20 min):
 
 ```sh
-limactl delete devbox
-source .env && ./start.sh
+devbox rebuild
 ```
 
 No manual steps — everything is declared in this repo.
@@ -194,7 +190,7 @@ echo $SSH_AUTH_SOCK   # should be /run/host-services/ssh-auth.sock
 ssh-add -l            # should list your keys
 ```
 
-If the socket is missing: `limactl stop devbox && limactl start devbox`.
+If the socket is missing: `devbox stop && devbox start`.
 
 ---
 
