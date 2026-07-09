@@ -25,6 +25,7 @@ user:
   home: "/home/{{.User}}"   # prevent Lima from appending .guest or .linux suffix
 
 ssh:
+  localPort: 2222
   forwardAgent: true   # host SSH agent forwarded; private keys never written to VM disk
 
 portForwards:
@@ -41,7 +42,7 @@ provision:
     script: |
       #!/bin/bash
       set -eux
-      bash /provision/system.sh
+      bash /provision/scripts/system.sh
 
   # Step 2: write secrets and identity to /etc/environment.
   # {{.Env.X}} expands from the host shell environment at `limactl start` time.
@@ -66,4 +67,4 @@ provision:
       #!/bin/bash
       set -eux
       set -a; source /etc/environment 2>/dev/null || true; set +a
-      bash /provision/tools.sh
+      bash /provision/scripts/tools.sh

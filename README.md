@@ -19,7 +19,7 @@ brew install lima
 ## First-time setup
 
 ```sh
-git clone git@github-personal:<your-github-username>/devbox.git
+git clone git@github.com:<your-github-username>/devbox.git
 cd devbox
 
 cp .env.example .env
@@ -65,13 +65,13 @@ Clone your personal repos under `~/projects/` inside the VM.
 
 ## Reprovisioning
 
-After changing `tools.sh` or any config file under `provision/config/`:
+Lima provisioners only run at VM creation time. After changing any file under `provision/`, you need a full rebuild to apply changes:
 
 ```sh
-devbox stop && devbox start
+devbox rebuild
 ```
 
-This re-runs all provisioners. Your code in `~/projects/` and VM disk data are untouched.
+This wipes the VM disk and re-provisions from scratch (~15–20 min). Your code lives inside the VM — back up anything in `~/projects/` that isn't already in a remote repo before rebuilding.
 
 **Rotating credentials**: secrets are written to `/etc/environment` only once (guarded by a sentinel). To update an API key or token, edit `.env` then:
 
@@ -82,8 +82,6 @@ devbox rotate
 ---
 
 ## Full rebuild
-
-Wipes the VM disk and re-provisions from scratch (~15–20 min):
 
 ```sh
 devbox rebuild
@@ -106,7 +104,7 @@ Add the server to both config files, then reprovision:
 
 **File-based skills** (a markdown file is all that's needed): add `provision/config/claude/skills/<name>/SKILL.md`. Both Claude Code and opencode read from `~/.claude/skills/`. Reprovision to deploy.
 
-**Skills with an install command**: add an entry to `SKILL_INSTALLS` at the top of `provision/tools.sh`:
+**Skills with an install command**: add an entry to `SKILL_INSTALLS` at the top of `provision/scripts/tools.sh`:
 
 ```sh
 SKILL_INSTALLS=(
@@ -120,7 +118,7 @@ The install command runs once per VM lifetime (idempotent via a sentinel file).
 
 ## Adding Claude Code plugins
 
-Add plugin names to `CLAUDE_PLUGINS` at the top of `provision/tools.sh`:
+Add plugin names to `CLAUDE_PLUGINS` at the top of `provision/scripts/tools.sh`:
 
 ```sh
 CLAUDE_PLUGINS=(
@@ -137,13 +135,13 @@ npm update -g @anthropic-ai/claude-code   # Claude Code
 curl -fsSL https://opencode.ai/install | bash   # opencode
 ```
 
-After updating, pin the new versions in `tools.sh` and commit so rebuilds stay consistent.
+After updating, pin the new versions in `provision/versions.env` and commit so rebuilds stay consistent.
 
 ---
 
 ## Changing tool versions
 
-Edit the pins at the top of `provision/tools.sh`:
+Edit `provision/versions.env`:
 
 ```sh
 GO_VERSION="1.24.4"
@@ -151,6 +149,8 @@ NODE_VERSION="24.3.0"
 PYTHON_VERSION="3.12.4"
 JAVA_VERSION="21.0.3-tem"
 UV_VERSION="0.7.13"
+DATABRICKS_VERSION="1.6.0"
+YQ_VERSION="v4.44.3"
 ```
 
 Then reprovision.
@@ -161,21 +161,13 @@ Then reprovision.
 
 ### VS Code Remote SSH
 
-Add to `~/.ssh/config` on your Mac (one-time):
-
-```
-Include ~/.lima/*/ssh.config
-```
-
-Lima writes `~/.lima/devbox/ssh.config` on every start. In VS Code → Remote Explorer → connect to `lima-devbox`.
+`devbox start` automatically writes a `Host devbox` entry to `~/.ssh/config` with the current port. In VS Code → Remote Explorer → connect to `devbox`.
 
 ### JetBrains Gateway
 
-```sh
-limactl list --format '{{ .SSHLocalPort }}' devbox
-```
+`devbox start` automatically configures `~/.ssh/config` with the Lima include and a `devbox` host alias. No manual setup needed.
 
-Gateway → New Connection → SSH → `127.0.0.1:<port>`, username = your macOS username. Select IDE version and project path on the VM.
+Gateway → New Connection → SSH → host `devbox`, username = your macOS username, no port or private key needed. Select IDE version and project path on the VM.
 
 ---
 

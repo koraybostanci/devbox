@@ -4,13 +4,7 @@
 set -eux
 
 # ─── Version pins ────────────────────────────────────────────────────────────
-GO_VERSION="1.24.4"
-NODE_VERSION="24.3.0"
-PYTHON_VERSION="3.12.4"
-JAVA_VERSION="21.0.3-tem"
-UV_VERSION="0.7.13"
-DATABRICKS_VERSION="1.6.0"
-YQ_VERSION="v4.44.3"
+set -a; source /provision/versions.env; set +a
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Claude Code plugins ─────────────────────────────────────────────────────
@@ -260,13 +254,12 @@ if grep -q "^plugins=(git)" "$HOME/.zshrc" 2>/dev/null; then
 fi
 
 # ─── Claude Code plugins ─────────────────────────────────────────────────────
-for plugin in "${CLAUDE_PLUGINS[@]:-}"; do
-    [ -z "$plugin" ] && continue
+for plugin in "${CLAUDE_PLUGINS[@]+${CLAUDE_PLUGINS[@]}}"; do
     claude plugin install "$plugin" --scope user 2>/dev/null || true
 done
 
 # ─── Skill installs ──────────────────────────────────────────────────────────
-for entry in "${SKILL_INSTALLS[@]:-}"; do
+for entry in "${SKILL_INSTALLS[@]+${SKILL_INSTALLS[@]}}"; do
     [ -z "$entry" ] && continue
     sentinel="${entry%%|*}"
     cmd="${entry#*|}"
