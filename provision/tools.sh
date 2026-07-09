@@ -11,6 +11,23 @@ JAVA_VERSION="21.0.3-tem"
 UV_VERSION="0.4.18"
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─── Claude Code plugins ─────────────────────────────────────────────────────
+# Add plugin names here to install them on every provision.
+# Format: "<name>@<marketplace>"
+CLAUDE_PLUGINS=(
+    # "impeccable@marketplace"   # example
+)
+
+# ─── Skill install commands ──────────────────────────────────────────────────
+# For skills that have their own install command (e.g. curl-based installers).
+# Each entry is a shell command. Use a sentinel file in ~/.claude/skills/ to
+# make each entry idempotent — name it after the skill.
+# Format: "<sentinel-name>|<install command>"
+SKILL_INSTALLS=(
+    # "impeccable|curl -fsSL https://impeccable.style/install | bash"
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # HOME is set correctly by Lima — do not override it.
 # Do NOT export XDG_CONFIG_HOME: nvm uses it to pick its install dir,
 # and setting it causes nvm to install to ~/.config/nvm instead of ~/.nvm.
@@ -228,6 +245,24 @@ fi
 if grep -q "^plugins=(git)" "$HOME/.zshrc" 2>/dev/null; then
     sed -i 's/^plugins=(git)/plugins=(git fzf zsh-autosuggestions zsh-syntax-highlighting)/' "$HOME/.zshrc"
 fi
+
+# ─── Claude Code plugins ─────────────────────────────────────────────────────
+for plugin in "${CLAUDE_PLUGINS[@]:-}"; do
+    [ -z "$plugin" ] && continue
+    claude plugin install "$plugin" --scope user 2>/dev/null || true
+done
+
+# ─── Skill installs ──────────────────────────────────────────────────────────
+mkdir -p "$HOME/.claude/skills"
+for entry in "${SKILL_INSTALLS[@]:-}"; do
+    [ -z "$entry" ] && continue
+    sentinel="${entry%%|*}"
+    cmd="${entry#*|}"
+    if [ ! -f "$HOME/.claude/skills/.installed-${sentinel}" ]; then
+        eval "$cmd"
+        touch "$HOME/.claude/skills/.installed-${sentinel}"
+    fi
+done
 
 # ─── Create projects directory ───────────────────────────────────────────────
 mkdir -p "$HOME/projects"
