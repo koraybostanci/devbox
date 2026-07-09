@@ -24,7 +24,7 @@ CLAUDE_PLUGINS=(
 # make each entry idempotent — name it after the skill.
 # Format: "<sentinel-name>|<install command>"
 SKILL_INSTALLS=(
-    # "impeccable|npx skills add pbakaus/impeccable"
+    # "impeccable|curl -fsSL https://impeccable.style/install | bash"
 )
 # ─────────────────────────────────────────────────────────────────────────────
 
