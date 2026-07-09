@@ -52,13 +52,11 @@ provision:
       #!/bin/bash
       set -e
       if [ ! -f /etc/devbox-env-written ]; then
-        cat >> /etc/environment <<EOF
-ANTHROPIC_API_KEY="{{.Env.ANTHROPIC_API_KEY}}"
-DATABRICKS_HOST="{{.Env.DATABRICKS_HOST}}"
-DATABRICKS_TOKEN="{{.Env.DATABRICKS_TOKEN}}"
-GIT_NAME="{{.Env.GIT_NAME}}"
-GIT_EMAIL="{{.Env.GIT_EMAIL}}"
-EOF
+        printf 'ANTHROPIC_API_KEY="%s"\n' '{{.Env.ANTHROPIC_API_KEY}}' >> /etc/environment
+        printf 'DATABRICKS_HOST="%s"\n'   '{{.Env.DATABRICKS_HOST}}'   >> /etc/environment
+        printf 'DATABRICKS_TOKEN="%s"\n'  '{{.Env.DATABRICKS_TOKEN}}'  >> /etc/environment
+        printf 'GIT_NAME="%s"\n'          '{{.Env.GIT_NAME}}'          >> /etc/environment
+        printf 'GIT_EMAIL="%s"\n'         '{{.Env.GIT_EMAIL}}'         >> /etc/environment
         touch /etc/devbox-env-written
       fi
 

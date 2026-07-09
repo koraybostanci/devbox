@@ -1,0 +1,119 @@
+#!/bin/bash
+# Usage: ./devbox <command>
+# Commands: start, connect, stop, delete, status, rebuild
+
+DEVBOX_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+INSTANCE="devbox"
+
+# Self-install: create /usr/local/bin/devbox symlink on first run if not already on PATH
+if [ "$(command -v devbox 2>/dev/null)" != "/usr/local/bin/devbox" ]; then
+    if sudo ln -sf "$DEVBOX_DIR/devbox" /usr/local/bin/devbox 2>/dev/null; then
+        echo "Installed: devbox -> /usr/local/bin/devbox"
+    else
+        echo "Note: could not install to /usr/local/bin (run: sudo ln -sf \"$DEVBOX_DIR/devbox\" /usr/local/bin/devbox)"
+    fi
+fi
+
+usage() {
+    cat <<'EOF'
+Usage: devbox <command>
+
+Commands:
+  start    Start the VM. Use this for both the initial setup and subsequent
+           starts after a stop. Sources .env automatically if env vars are
+           not set. On first boot, provisioning takes ~15-20 min.
+           Required vars: GIT_NAME, GIT_EMAIL, ANTHROPIC_API_KEY
+           Optional vars: DATABRICKS_HOST, DATABRICKS_TOKEN
+
+  connect  Open a zsh shell inside the VM.
+
+  stop     Gracefully shut down the VM.
+
+  status   Show VM state (Running, Stopped, etc.) and resource usage.
+
+  delete   Delete the VM disk. All data inside the VM will be lost.
+           Prompts for confirmation.
+
+  rebuild  Delete and reprovision the VM from scratch (~15-20 min).
+           Equivalent to: delete + start. Prompts for confirmation.
+
+  rotate   Rotate credentials. Removes the secrets sentinel so updated
+           values from .env are re-written to /etc/environment on next
+           start. Runs: stop → remove sentinel → start.
+
+  help     Show this help message.
+EOF
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+    help|--help|-h)
+        usage
+        exit 0
+        ;;
+    start)
+        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            # shellcheck disable=SC1091
+            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
+        fi
+        RESOLVED_YAML="/tmp/devbox-lima.yaml"
+        REQUIRED_VARS=(GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY)
+        MISSING=()
+        for var in "${REQUIRED_VARS[@]}"; do
+            [ -z "${!var:-}" ] && MISSING+=("$var")
+        done
+        if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing required environment variables: ${MISSING[*]}"
+            echo "Run: devbox start  (after filling in .env)"
+            exit 1
+        fi
+        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        ;;
+    connect)
+        exec limactl shell "$INSTANCE" zsh
+        ;;
+    stop)
+        exec limactl stop "$INSTANCE"
+        ;;
+    status)
+        exec limactl list "$INSTANCE"
+        ;;
+    delete)
+        echo "This will delete the VM disk. All data inside the VM will be lost."
+        read -r -p "Are you sure? (yes/N) " confirm
+        [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
+        exec limactl delete "$INSTANCE"
+        ;;
+    rebuild)
+        echo "This will delete and reprovision the VM from scratch."
+        read -r -p "Are you sure? (yes/N) " confirm
+        [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
+        limactl delete "$INSTANCE" || true
+        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            # shellcheck disable=SC1091
+            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
+        fi
+        RESOLVED_YAML="/tmp/devbox-lima.yaml"
+        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        ;;
+    rotate)
+        limactl shell "$INSTANCE" -- sudo rm -f /etc/devbox-env-written
+        limactl stop "$INSTANCE"
+        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            # shellcheck disable=SC1091
+            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
+        fi
+        RESOLVED_YAML="/tmp/devbox-lima.yaml"
+        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        ;;
+    *)
+        [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""
+        usage
+        exit 1
+        ;;
+esac
