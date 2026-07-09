@@ -5,7 +5,7 @@ set -eux
 
 # ─── Version pins ────────────────────────────────────────────────────────────
 GO_VERSION="1.22.4"
-NODE_VERSION="20.19.0"
+NODE_VERSION="24.3.0"
 PYTHON_VERSION="3.12.4"
 JAVA_VERSION="21.0.3-tem"
 UV_VERSION="0.4.18"
@@ -24,7 +24,7 @@ CLAUDE_PLUGINS=(
 # make each entry idempotent — name it after the skill.
 # Format: "<sentinel-name>|<install command>"
 SKILL_INSTALLS=(
-    # "impeccable|curl -fsSL https://impeccable.style/install | bash"
+    # "impeccable|npx skills add pbakaus/impeccable"
 )
 # ─────────────────────────────────────────────────────────────────────────────
 
