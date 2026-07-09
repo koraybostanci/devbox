@@ -4,7 +4,13 @@ set -eux
 
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update -qq
+# Only update apt lists if they are older than 24 hours
+if [ ! -f /var/lib/apt/lists/.devbox-updated ] || \
+   [ "$(find /var/lib/apt/lists/.devbox-updated -mmin +1440 2>/dev/null | wc -l)" -gt 0 ]; then
+    apt-get update -qq
+    touch /var/lib/apt/lists/.devbox-updated
+fi
+
 apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -26,25 +32,12 @@ apt-get install -y --no-install-recommends \
     tk-dev \
     libxml2-dev \
     libxmlsec1-dev \
-    libffi-dev \
     liblzma-dev \
     jq \
     fzf \
     bat \
     git-delta \
     gh
-
-# Fix .guest home directory suffix — Lima cloud-init appends .guest or .linux
-# when the macOS UID conflicts. Normalize to /home/<user>.
-LIMA_USER=$(id -nu 1000 2>/dev/null || true)
-if [ -n "$LIMA_USER" ]; then
-    CURRENT_HOME=$(getent passwd "$LIMA_USER" | cut -d: -f6)
-    DESIRED_HOME="/home/$LIMA_USER"
-    if [ "$CURRENT_HOME" != "$DESIRED_HOME" ] && [ -d "$CURRENT_HOME" ]; then
-        mv "$CURRENT_HOME" "$DESIRED_HOME"
-        usermod -d "$DESIRED_HOME" "$LIMA_USER"
-    fi
-fi
 
 # Fix Ubuntu network interface naming issue that causes boot hangs with Lima/QEMU
 # (no-op on VZ driver, but safe to apply)
