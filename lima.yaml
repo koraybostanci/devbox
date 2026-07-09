@@ -6,20 +6,23 @@ arch: aarch64
 images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: aarch64
-    # Pin the digest after first start to avoid unexpected image changes:
-    #   limactl list --format '{{.Digest}}' devbox
-    # Then uncomment:
-    # digest: "sha256:..."
+    digest: "sha256:cafa1a965b591b7c4184b484ffd8e625981a79d48f9b4ae8a4adf7b4c5ade927"
 
 cpus: 4
 memory: "4GiB"    # reduce to 2GiB on 8GB machines
 
-# Mount provision/ read-only so scripts are accessible inside the VM during provisioning.
-# Code lives ONLY inside the VM — accessed via VS Code Remote SSH or JetBrains Gateway.
 mounts:
   - location: "{{DEVBOX_DIR}}/provision"
     mountPoint: "/provision"
     writable: false
+  # Projects and data directories live on the Mac, mounted as siblings at ~/projects and ~/data.
+  # Both survive devbox rebuild. Resolved by the devbox script before passing to limactl.
+  - location: "{{PROJECTS_DIR}}"
+    mountPoint: "/home/{{.User}}/projects"
+    writable: true
+  - location: "{{DATA_DIR}}"
+    mountPoint: "/home/{{.User}}/data"
+    writable: true
 
 user:
   home: "/home/{{.User}}"   # prevent Lima from appending .guest or .linux suffix
@@ -28,12 +31,22 @@ ssh:
   localPort: 2222
   forwardAgent: true   # host SSH agent forwarded; private keys never written to VM disk
 
+containerd:
+  system: false
+  user: true   # rootless; nerdctl available without sudo (Lima default for aarch64)
+
 portForwards:
   - guestPort: 8080
     hostPort: 8080
     hostIP: "127.0.0.1"
   - guestPort: 3000
     hostPort: 3000
+    hostIP: "127.0.0.1"
+  # Service ports: +10000 offset avoids conflicts with Mac-local services.
+  # Rootless note: ports < 1024 cannot be bound by containers — use 8080 for nginx, not 80.
+  # To add Valkey: guestPort: 6379  hostPort: 16379
+  - guestPort: 5432
+    hostPort: 15432
     hostIP: "127.0.0.1"
 
 provision:

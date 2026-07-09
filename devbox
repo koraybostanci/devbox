@@ -26,7 +26,6 @@ setup_ssh_config() {
         tmp="$(mktemp)"
         sed '/# BEGIN devbox/,/# END devbox/d' "$ssh_config" > "$tmp"
         mv "$tmp" "$ssh_config"
-        chmod 600 "$ssh_config"
     fi
 
     # Write fresh devbox block with current Lima key and port
@@ -78,8 +77,49 @@ Commands:
            values from .env are re-written to /etc/environment on next
            start. Runs: remove sentinel → stop → start.
 
+  containers [service] <subcommand>
+           Manage containers inside the VM.
+           service: name of a subdirectory under provision/config/containers/
+                    (e.g. postgres, valkey). Omit to target all services.
+           Subcommands: up, down, ps, logs
+             up    Start containers (detached)
+             down  Stop and remove containers
+             ps    List running containers
+             logs  Follow container logs
+
   help     Show this help message.
 EOF
+}
+
+require_env() {
+    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+        # shellcheck disable=SC1091
+        [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
+    fi
+    local var
+    MISSING=()
+    for var in GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY; do
+        [ -z "${!var:-}" ] && MISSING+=("$var")
+    done
+    if [ ${#MISSING[@]} -gt 0 ]; then
+        echo "ERROR: Missing required environment variables: ${MISSING[*]}"
+        exit 1
+    fi
+}
+
+ensure_mount_dirs() {
+    mkdir -p "${DEVBOX_DIR%/*}/projects" "${DEVBOX_DIR%/*}/data"
+}
+
+resolve_yaml() {
+    ensure_mount_dirs
+    PROJECTS_DIR="${DEVBOX_DIR%/*}/projects"
+    DATA_DIR="${DEVBOX_DIR%/*}/data"
+    RESOLVED_YAML="/tmp/devbox-lima.yaml"
+    sed -e "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" \
+        -e "s|{{PROJECTS_DIR}}|$PROJECTS_DIR|g" \
+        -e "s|{{DATA_DIR}}|$DATA_DIR|g" \
+        "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
 }
 
 cmd="${1:-}"
@@ -91,34 +131,23 @@ case "$cmd" in
         exit 0
         ;;
     start)
-        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            # shellcheck disable=SC1091
-            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
-        fi
-        RESOLVED_YAML="/tmp/devbox-lima.yaml"
-        REQUIRED_VARS=(GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY)
-        MISSING=()
-        for var in "${REQUIRED_VARS[@]}"; do
-            [ -z "${!var:-}" ] && MISSING+=("$var")
-        done
-        if [ ${#MISSING[@]} -gt 0 ]; then
-            echo "ERROR: Missing required environment variables: ${MISSING[*]}"
-            echo "Run: devbox start  (after filling in .env)"
-            exit 1
-        fi
-        if limactl list --format '{{.Name}}' 2>/dev/null | grep -qx "$INSTANCE"; then
-            STATE="$(limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null)"
+        require_env
+        STATE="$(limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null)"
+        if [ -n "$STATE" ]; then
             if [ "$STATE" = "Running" ]; then
                 setup_ssh_config
                 exec limactl shell "$INSTANCE" zsh
             fi
+            ensure_mount_dirs
             limactl start "$INSTANCE"
             setup_ssh_config
+            limactl protect "$INSTANCE" 2>/dev/null || true
             exec limactl shell "$INSTANCE" zsh
         fi
-        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        resolve_yaml
         limactl start --name "$INSTANCE" "$RESOLVED_YAML"
         setup_ssh_config
+        limactl protect "$INSTANCE" 2>/dev/null || true
         exec limactl shell "$INSTANCE" zsh
         ;;
     connect)
@@ -132,32 +161,24 @@ case "$cmd" in
         ;;
     delete)
         echo "This will delete the VM disk. All data inside the VM will be lost."
+        echo "Your projects directory on the Mac is NOT deleted."
         read -r -p "Are you sure? (yes/N) " confirm
         [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
+        limactl unprotect "$INSTANCE" 2>/dev/null || true
         exec limactl delete "$INSTANCE"
         ;;
     rebuild)
-        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            # shellcheck disable=SC1091
-            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
-        fi
-        REQUIRED_VARS=(GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY)
-        MISSING=()
-        for var in "${REQUIRED_VARS[@]}"; do
-            [ -z "${!var:-}" ] && MISSING+=("$var")
-        done
-        if [ ${#MISSING[@]} -gt 0 ]; then
-            echo "ERROR: Missing required environment variables: ${MISSING[*]}"
-            exit 1
-        fi
+        require_env
         echo "This will delete and reprovision the VM from scratch."
+        echo "Your projects directory on the Mac is NOT deleted."
         read -r -p "Are you sure? (yes/N) " confirm
         [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
-        limactl delete "$INSTANCE" || true
-        RESOLVED_YAML="/tmp/devbox-lima.yaml"
-        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        limactl unprotect "$INSTANCE" 2>/dev/null || true
+        limactl delete "$INSTANCE"
+        resolve_yaml
         limactl start --name "$INSTANCE" "$RESOLVED_YAML"
         setup_ssh_config
+        limactl protect "$INSTANCE" 2>/dev/null || true
         exec limactl shell "$INSTANCE" zsh
         ;;
     rotate)
@@ -167,9 +188,58 @@ case "$cmd" in
             # shellcheck disable=SC1091
             [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
         fi
+        ensure_mount_dirs
         limactl start "$INSTANCE"
         setup_ssh_config
         exec limactl shell "$INSTANCE" zsh
+        ;;
+    containers)
+        # containers [service] <subcommand>
+        # If first arg is a known subcommand, treat it as "all services".
+        # Otherwise treat first arg as a service name and second as subcommand.
+        case "${1:-}" in
+            up|down|ps|logs|"")
+                subcmd="${1:-up}"
+                service=""
+                ;;
+            *)
+                service="$1"
+                subcmd="${2:-up}"
+                shift
+                ;;
+        esac
+        shift || true
+
+        if [ -n "$service" ]; then
+            compose_file="/provision/config/containers/${service}/docker-compose.yml"
+            COMPOSE="nerdctl compose -f $compose_file"
+            # Verify the compose file exists inside the VM before running
+            limactl shell "$INSTANCE" -- test -f "$compose_file" 2>/dev/null || {
+                echo "ERROR: No compose file found for service '${service}'."
+                echo "Expected: provision/config/containers/${service}/docker-compose.yml"
+                exit 1
+            }
+        else
+            # Build -f flags for every service found under provision/config/containers/
+            compose_files=""
+            for f in "$DEVBOX_DIR/provision/config/containers"/*/docker-compose.yml; do
+                [ -f "$f" ] || continue
+                compose_files="$compose_files -f /provision/config/containers/$(basename "$(dirname "$f")")/docker-compose.yml"
+            done
+            if [ -z "$compose_files" ]; then
+                echo "No compose files found under provision/config/containers/."
+                exit 1
+            fi
+            COMPOSE="nerdctl compose$compose_files"
+        fi
+
+        case "$subcmd" in
+            up)    exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE up -d" ;;
+            down)  exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE down" ;;
+            ps)    exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE ps -a" ;;
+            logs)  exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE logs -f" ;;
+            *)     echo "Unknown subcommand: $subcmd"; echo "Usage: devbox containers [service] [up|down|ps|logs]"; exit 1 ;;
+        esac
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""
