@@ -4,24 +4,22 @@
 set -eux
 
 # ─── Version pins ────────────────────────────────────────────────────────────
-GO_VERSION="1.22.4"
+GO_VERSION="1.24.4"
 NODE_VERSION="24.3.0"
 PYTHON_VERSION="3.12.4"
 JAVA_VERSION="21.0.3-tem"
-UV_VERSION="0.4.18"
+UV_VERSION="0.7.13"
+DATABRICKS_VERSION="1.6.0"
+YQ_VERSION="v4.44.3"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Claude Code plugins ─────────────────────────────────────────────────────
-# Add plugin names here to install them on every provision.
 # Format: "<name>@<marketplace>"
 CLAUDE_PLUGINS=(
     # "impeccable@marketplace"   # example
 )
 
 # ─── Skill install commands ──────────────────────────────────────────────────
-# For skills that have their own install command (e.g. curl-based installers).
-# Each entry is a shell command. Use a sentinel file in ~/.claude/skills/ to
-# make each entry idempotent — name it after the skill.
 # Format: "<sentinel-name>|<install command>"
 SKILL_INSTALLS=(
     # "impeccable|curl -fsSL https://impeccable.style/install | bash"
@@ -32,6 +30,24 @@ SKILL_INSTALLS=(
 # Do NOT export XDG_CONFIG_HOME: nvm uses it to pick its install dir,
 # and setting it causes nvm to install to ~/.config/nvm instead of ~/.nvm.
 
+# ─── SSH config ──────────────────────────────────────────────────────────────
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+if ! grep -qF 'github-personal' "$HOME/.ssh/config" 2>/dev/null; then
+    cat >> "$HOME/.ssh/config" << 'EOF'
+Host github-personal
+    HostName github.com
+    User git
+EOF
+    chmod 600 "$HOME/.ssh/config"
+fi
+
+# Pre-populate GitHub host key to avoid interactive prompt on first connect
+if ! grep -qF 'github.com' "$HOME/.ssh/known_hosts" 2>/dev/null; then
+    ssh-keyscan -t ed25519 github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+    chmod 600 "$HOME/.ssh/known_hosts"
+fi
+
 # ─── Git identity ─────────────────────────────────────────────────────────────
 if [ -n "${GIT_NAME:-}" ] && [ -n "${GIT_EMAIL:-}" ]; then
     git config --global user.name  "$GIT_NAME"
@@ -39,23 +55,20 @@ if [ -n "${GIT_NAME:-}" ] && [ -n "${GIT_EMAIL:-}" ]; then
 fi
 git config --global init.defaultBranch main
 
-# ─── SSH agent socket (Lima VZ path) ─────────────────────────────────────────
-# Lima exposes the host agent at this socket. Add to .zshrc so interactive
-# sessions pick it up; also set for this provisioning run.
-SSH_SOCK_EXPR='export SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock'
-grep -qF 'SSH_AUTH_SOCK' "$HOME/.zshrc" 2>/dev/null || echo "$SSH_SOCK_EXPR" >> "$HOME/.zshrc"
-eval "$SSH_SOCK_EXPR" || true
-
-# ─── zsh + oh-my-zsh ──────────────────────────────────────────────────────────
+# ─── zsh + oh-my-zsh ─────────────────────────────────────────────────────────
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
     RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 fi
 
-# Set zsh as default shell (requires root — Lima runs this block as the user
-# but chsh needs the entry to exist in /etc/shells)
 if command -v zsh >/dev/null && [ "$(getent passwd "$USER" | cut -d: -f7)" != "$(command -v zsh)" ]; then
     sudo chsh -s "$(command -v zsh)" "$USER" || true
 fi
+
+# ─── SSH agent socket (Lima VZ path) ─────────────────────────────────────────
+# Must come AFTER oh-my-zsh install — oh-my-zsh replaces .zshrc on first run.
+SSH_SOCK_EXPR='export SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock'
+grep -qF 'SSH_AUTH_SOCK' "$HOME/.zshrc" 2>/dev/null || echo "$SSH_SOCK_EXPR" >> "$HOME/.zshrc"
+eval "$SSH_SOCK_EXPR" || true
 
 # ─── nvm + Node.js ───────────────────────────────────────────────────────────
 if [ ! -d "$HOME/.nvm" ]; then
@@ -72,7 +85,6 @@ if ! node --version 2>/dev/null | grep -q "^v$NODE_VERSION"; then
 fi
 nvm use "$NODE_VERSION"
 
-# Persist nvm init in .zshrc
 if ! grep -qF 'NVM_DIR' "$HOME/.zshrc" 2>/dev/null; then
     cat >> "$HOME/.zshrc" <<'ZSHEOF'
 
@@ -161,29 +173,39 @@ export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 ZSHEOF
 fi
 
+# ─── Rust ────────────────────────────────────────────────────────────────────
+if ! command -v rustc >/dev/null; then
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+
+if ! grep -qF '.cargo/bin' "$HOME/.zshrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$HOME/.zshrc"
+fi
+
 # ─── Claude Code CLI ─────────────────────────────────────────────────────────
 if ! command -v claude >/dev/null; then
     npm install -g @anthropic-ai/claude-code
 fi
 
-# Write ANTHROPIC_API_KEY to .zshrc so Claude Code picks it up in interactive shells
-if [ -n "${ANTHROPIC_API_KEY:-}" ] && ! grep -qF 'ANTHROPIC_API_KEY' "$HOME/.zshrc" 2>/dev/null; then
-    echo "export ANTHROPIC_API_KEY=\"$ANTHROPIC_API_KEY\"" >> "$HOME/.zshrc"
+# Source /etc/environment in .zshrc so ANTHROPIC_API_KEY is available in interactive shells
+# without writing the literal key value into .zshrc
+if ! grep -qF '/etc/environment' "$HOME/.zshrc" 2>/dev/null; then
+    echo 'set -a; source /etc/environment 2>/dev/null || true; set +a' >> "$HOME/.zshrc"
 fi
 
 # Claude Code user config
-mkdir -p "$HOME/.claude"
+mkdir -p "$HOME/.claude/skills"
 cp /provision/config/claude/CLAUDE.md "$HOME/.claude/CLAUDE.md"
 cp /provision/config/claude/settings.json "$HOME/.claude/settings.json"
 
-# Skills (both Claude Code and opencode read ~/.claude/skills/)
 if [ -d /provision/config/claude/skills ] && [ "$(ls -A /provision/config/claude/skills 2>/dev/null)" ]; then
     cp -r /provision/config/claude/skills/. "$HOME/.claude/skills/"
 fi
 
-# User-scoped MCPs (~/.mcp.json) — substitute $USER in the filesystem path
-mkdir -p "$HOME/.claude"
-sed "s|\$USER|$USER|g" /provision/config/mcp.json > "$HOME/.mcp.json"
+# User-scoped MCPs — substitute username and node version for absolute npx path
+NPX_BIN="$NVM_DIR/versions/node/v${NODE_VERSION}/bin/npx"
+sed -e "s|\$USER|$USER|g" -e "s|\"npx\"|\"$NPX_BIN\"|g" /provision/config/mcp.json > "$HOME/.mcp.json"
 
 # ─── opencode ────────────────────────────────────────────────────────────────
 if [ ! -f "$HOME/.opencode/bin/opencode" ]; then
@@ -196,13 +218,12 @@ if ! grep -qF '.opencode/bin' "$HOME/.zshrc" 2>/dev/null; then
 fi
 
 mkdir -p "$HOME/.config/opencode"
-sed "s|\$USER|$USER|g" /provision/config/opencode/opencode.json > "$HOME/.config/opencode/opencode.json"
+sed -e "s|\$USER|$USER|g" -e "s|\"npx\"|\"$NPX_BIN\"|g" /provision/config/opencode/opencode.json > "$HOME/.config/opencode/opencode.json"
 
 # ─── Databricks CLI ──────────────────────────────────────────────────────────
-if ! command -v databricks >/dev/null; then
+if ! databricks --version 2>/dev/null | grep -q "$DATABRICKS_VERSION"; then
     mkdir -p "$HOME/.local/bin"
-    DATABRICKS_LATEST=$(curl -fsSL https://api.github.com/repos/databricks/cli/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
-    curl -fsSL "https://github.com/databricks/cli/releases/download/v${DATABRICKS_LATEST}/databricks_cli_${DATABRICKS_LATEST}_linux_arm64.zip" -o /tmp/databricks.zip
+    curl -fsSL "https://github.com/databricks/cli/releases/download/v${DATABRICKS_VERSION}/databricks_cli_${DATABRICKS_VERSION}_linux_arm64.zip" -o /tmp/databricks.zip
     unzip -o /tmp/databricks.zip databricks -d "$HOME/.local/bin"
     chmod +x "$HOME/.local/bin/databricks"
     rm /tmp/databricks.zip
@@ -217,16 +238,9 @@ EOF
     chmod 600 "$HOME/.databrickscfg"
 fi
 
-# ─── ANTHROPIC_API_KEY for non-interactive provisioner runs ──────────────────
-# (already in /etc/environment; this export covers the current session only)
-if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-    export ANTHROPIC_API_KEY
-fi
-
 # ─── yq ──────────────────────────────────────────────────────────────────────
-if ! command -v yq >/dev/null; then
-    YQ_LATEST=$(curl -fsSL https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-    curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_LATEST}/yq_linux_arm64" -o "$HOME/.local/bin/yq"
+if ! yq --version 2>/dev/null | grep -q "${YQ_VERSION#v}"; then
+    curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_arm64" -o "$HOME/.local/bin/yq"
     chmod +x "$HOME/.local/bin/yq"
 fi
 
@@ -241,7 +255,6 @@ if [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ]; then
     git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
 fi
 
-# Enable plugins in .zshrc (replace default plugins line)
 if grep -q "^plugins=(git)" "$HOME/.zshrc" 2>/dev/null; then
     sed -i 's/^plugins=(git)/plugins=(git fzf zsh-autosuggestions zsh-syntax-highlighting)/' "$HOME/.zshrc"
 fi
@@ -253,7 +266,6 @@ for plugin in "${CLAUDE_PLUGINS[@]:-}"; do
 done
 
 # ─── Skill installs ──────────────────────────────────────────────────────────
-mkdir -p "$HOME/.claude/skills"
 for entry in "${SKILL_INSTALLS[@]:-}"; do
     [ -z "$entry" ] && continue
     sentinel="${entry%%|*}"

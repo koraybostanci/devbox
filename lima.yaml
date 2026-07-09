@@ -1,12 +1,13 @@
 vmType: vz          # Apple Virtualization.framework — fastest on Apple Silicon
-                    # Change to "qemu" if you need snapshots
+                    # Change to "qemu" if you need snapshots; note: SSH agent socket
+                    # path in tools.sh is VZ-specific (/run/host-services/ssh-auth.sock)
 
 arch: aarch64
 images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: aarch64
     # Pin the digest after first start to avoid unexpected image changes:
-    #   limactl list --format '{{.Digest}}' koray-dev
+    #   limactl list --format '{{.Digest}}' devbox
     # Then uncomment:
     # digest: "sha256:..."
 
@@ -19,6 +20,9 @@ mounts:
   - location: "{{DEVBOX_DIR}}/provision"
     mountPoint: "/provision"
     writable: false
+
+user:
+  home: "/home/{{.User}}"   # prevent Lima from appending .guest or .linux suffix
 
 ssh:
   forwardAgent: true   # host SSH agent forwarded; private keys never written to VM disk
@@ -39,20 +43,24 @@ provision:
       set -eux
       bash /provision/system.sh
 
-  # Step 2: write secrets and identity to /etc/environment so tools.sh can read them.
+  # Step 2: write secrets and identity to /etc/environment.
   # {{.Env.X}} expands from the host shell environment at `limactl start` time.
-  # Values are stored in ~/.lima/koray-dev/ (local-only, not in this repo).
+  # Guarded by a sentinel so values are only written once — prevents duplicate
+  # entries accumulating across stop/start cycles.
   - mode: system
     script: |
       #!/bin/bash
       set -e
-      cat >> /etc/environment <<'EOF'
-      ANTHROPIC_API_KEY={{.Env.ANTHROPIC_API_KEY}}
-      DATABRICKS_HOST={{.Env.DATABRICKS_HOST}}
-      DATABRICKS_TOKEN={{.Env.DATABRICKS_TOKEN}}
-      GIT_NAME={{.Env.GIT_NAME}}
-      GIT_EMAIL={{.Env.GIT_EMAIL}}
-      EOF
+      if [ ! -f /etc/devbox-env-written ]; then
+        cat >> /etc/environment <<EOF
+ANTHROPIC_API_KEY="{{.Env.ANTHROPIC_API_KEY}}"
+DATABRICKS_HOST="{{.Env.DATABRICKS_HOST}}"
+DATABRICKS_TOKEN="{{.Env.DATABRICKS_TOKEN}}"
+GIT_NAME="{{.Env.GIT_NAME}}"
+GIT_EMAIL="{{.Env.GIT_EMAIL}}"
+EOF
+        touch /etc/devbox-env-written
+      fi
 
   # Step 3: user-level tools + configs (runs as the lima user)
   - mode: user
