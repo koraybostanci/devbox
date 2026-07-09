@@ -14,6 +14,43 @@ if [ "$(command -v devbox 2>/dev/null)" != "/usr/local/bin/devbox" ]; then
     fi
 fi
 
+setup_ssh_config() {
+    local ssh_config="$HOME/.ssh/config"
+    mkdir -p "$HOME/.ssh"
+    touch "$ssh_config"
+    chmod 600 "$ssh_config"
+
+    # Remove existing devbox block before rewriting
+    if grep -qF '# BEGIN devbox' "$ssh_config" 2>/dev/null; then
+        local tmp
+        tmp="$(mktemp)"
+        sed '/# BEGIN devbox/,/# END devbox/d' "$ssh_config" > "$tmp"
+        mv "$tmp" "$ssh_config"
+        chmod 600 "$ssh_config"
+    fi
+
+    # Write fresh devbox block with current Lima key and port
+    local identity
+    identity="$HOME/.lima/_config/user"
+    if [ -f "$identity" ]; then
+        cat >> "$ssh_config" << EOF
+
+# BEGIN devbox
+Host devbox
+    HostName 127.0.0.1
+    Port 2222
+    User $USER
+    IdentityFile $identity
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    ForwardAgent yes
+# END devbox
+EOF
+        chmod 600 "$ssh_config"
+    fi
+}
+
 usage() {
     cat <<'EOF'
 Usage: devbox <command>
@@ -39,7 +76,7 @@ Commands:
 
   rotate   Rotate credentials. Removes the secrets sentinel so updated
            values from .env are re-written to /etc/environment on next
-           start. Runs: stop → remove sentinel → start.
+           start. Runs: remove sentinel → stop → start.
 
   help     Show this help message.
 EOF
@@ -69,8 +106,20 @@ case "$cmd" in
             echo "Run: devbox start  (after filling in .env)"
             exit 1
         fi
+        if limactl list --format '{{.Name}}' 2>/dev/null | grep -qx "$INSTANCE"; then
+            STATE="$(limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null)"
+            if [ "$STATE" = "Running" ]; then
+                setup_ssh_config
+                exec limactl shell "$INSTANCE" zsh
+            fi
+            limactl start "$INSTANCE"
+            setup_ssh_config
+            exec limactl shell "$INSTANCE" zsh
+        fi
         sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
-        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        setup_ssh_config
+        exec limactl shell "$INSTANCE" zsh
         ;;
     connect)
         exec limactl shell "$INSTANCE" zsh
@@ -88,17 +137,28 @@ case "$cmd" in
         exec limactl delete "$INSTANCE"
         ;;
     rebuild)
-        echo "This will delete and reprovision the VM from scratch."
-        read -r -p "Are you sure? (yes/N) " confirm
-        [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
-        limactl delete "$INSTANCE" || true
         if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             # shellcheck disable=SC1091
             [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
         fi
+        REQUIRED_VARS=(GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY)
+        MISSING=()
+        for var in "${REQUIRED_VARS[@]}"; do
+            [ -z "${!var:-}" ] && MISSING+=("$var")
+        done
+        if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing required environment variables: ${MISSING[*]}"
+            exit 1
+        fi
+        echo "This will delete and reprovision the VM from scratch."
+        read -r -p "Are you sure? (yes/N) " confirm
+        [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
+        limactl delete "$INSTANCE" || true
         RESOLVED_YAML="/tmp/devbox-lima.yaml"
         sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
-        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        setup_ssh_config
+        exec limactl shell "$INSTANCE" zsh
         ;;
     rotate)
         limactl shell "$INSTANCE" -- sudo rm -f /etc/devbox-env-written
@@ -107,9 +167,9 @@ case "$cmd" in
             # shellcheck disable=SC1091
             [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
         fi
-        RESOLVED_YAML="/tmp/devbox-lima.yaml"
-        sed "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
-        exec limactl start --name "$INSTANCE" "$RESOLVED_YAML"
+        limactl start "$INSTANCE"
+        setup_ssh_config
+        exec limactl shell "$INSTANCE" zsh
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""
