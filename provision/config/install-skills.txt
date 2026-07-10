@@ -1,0 +1,7 @@
+# Claude Code skills with install commands.
+# One entry per line: <sentinel-name>|<install command>
+# Lines starting with # are ignored.
+#
+# Example:
+# impeccable|npx impeccable install
+impeccable|npx impeccable install

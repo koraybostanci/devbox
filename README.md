@@ -11,8 +11,10 @@ Everything (tool versions, configs, MCP registrations, skills, plugins) lives in
 One-time setup per host machine (~2 min):
 
 ```sh
-brew install lima
+brew install colima
 ```
+
+If you already have Colima running for Docker/containers, `devbox` runs as a separate named profile (`colima-devbox`) — completely isolated from your default Colima instance.
 
 ---
 
@@ -36,9 +38,10 @@ Provisioning takes ~15–20 min on first boot (downloads runtimes). Subsequent s
 ## Daily workflow
 
 ```sh
-devbox start     # start VM (sources .env automatically)
-devbox connect   # SSH in (opens zsh with all tools on PATH)
-devbox stop      # shut down
+devbox start          # start VM (sources .env automatically)
+devbox connect        # SSH in (opens zsh with all tools on PATH)
+devbox exec <cmd>     # run a command inside the VM and return
+devbox stop           # shut down
 ```
 
 ---
@@ -47,8 +50,8 @@ devbox stop      # shut down
 
 | Tool | Version |
 |---|---|
-| Python | 3.12.4 (pyenv) + uv |
-| Node.js | 24.3.0 (nvm) |
+| Python | 3.12.4 (pyenv) + uv 0.7.13 |
+| Node.js | 24.15.0 (nvm) |
 | Java | 21.0.3-tem (sdkman) |
 | Go | 1.24.4 |
 | Rust | stable (rustup) |
@@ -65,7 +68,7 @@ Your `~/projects/` and `~/data/` directories inside the VM are mounts of `../pro
 
 ## Reprovisioning
 
-Lima provisioners only run at VM creation time. After changing any file under `provision/`, you need a full rebuild to apply changes:
+Colima provision scripts run on every VM start, but are idempotent. After changing any file under `provision/`, a full rebuild applies changes cleanly:
 
 ```sh
 devbox rebuild
@@ -73,7 +76,7 @@ devbox rebuild
 
 This wipes the VM disk and re-provisions from scratch (~15–20 min). `~/projects/` and `~/data/` are Mac-side mounts and are **not** deleted by rebuild.
 
-**Rotating credentials**: secrets are written to `/etc/environment` only once (guarded by a sentinel). To update an API key or token, edit `.env` then:
+**Rotating credentials**: Lima re-injects `--env` vars into `/etc/environment` on every VM start. To update an API key or token, edit `.env` then:
 
 ```sh
 devbox rotate
@@ -83,7 +86,7 @@ devbox rotate
 
 ## Containers
 
-The VM runs rootless containerd with nerdctl. `docker` and `docker-compose` are aliased to `nerdctl` and `nerdctl compose`.
+The VM runs Docker (managed by Colima). Use `docker` and `docker compose` inside the VM as normal.
 
 A Postgres compose file is included. Manage containers from the Mac:
 
@@ -91,7 +94,7 @@ A Postgres compose file is included. Manage containers from the Mac:
 devbox containers up             # start all containers
 devbox containers postgres up    # start only postgres
 devbox containers down           # stop all containers
-devbox containers ps             # list running containers
+devbox containers ps             # list all containers (including stopped)
 devbox containers logs           # follow logs for all containers
 
 # Connect from the Mac
@@ -106,7 +109,7 @@ Postgres data is stored in `~/data/postgres/` (Mac-side: `../data/postgres/`).
 - `devbox rebuild` / `devbox delete` — VM disk wiped, `../data/` on Mac is untouched, data survives
 - Data is only lost if you manually delete `../data/` on the Mac
 
-To add more services (Valkey, nginx, etc.), create `provision/config/containers/<name>/docker-compose.yml` and add the port forward to `lima.yaml` using the +10000 offset pattern (e.g., guest 6379 → host 16379). The `devbox containers` command picks up new services automatically. Ports below 1024 cannot be bound by rootless containers — use 8080 for nginx, not 80.
+To add more services (Valkey, nginx, etc.), create `provision/config/containers/<name>/docker-compose.yml`. Bind the host port at +10000 offset (e.g., `"127.0.0.1:16379:6379"` for Valkey) — Colima auto-forwards the port to the same number on the Mac. The `devbox containers` command picks up new services automatically.
 
 ---
 
@@ -121,14 +124,12 @@ Add the server to both config files, then reprovision:
 
 ## Adding skills
 
-**File-based skills** (a markdown file is all that's needed): add `provision/config/claude/skills/<name>/SKILL.md`. Both Claude Code and opencode read from `~/.claude/skills/`. Reprovision to deploy.
+**File-based skills** (a markdown file is all that's needed): add `provision/config/skills/<name>/SKILL.md`. Both Claude Code and opencode read from `~/.claude/skills/`. Reprovision to deploy.
 
-**Skills with an install command**: add an entry to `SKILL_INSTALLS` at the top of `provision/scripts/tools.sh`:
+**Skills with an install command**: add a line to `provision/config/install-skills.txt`:
 
-```sh
-SKILL_INSTALLS=(
-    "skill-name|<install command>"
-)
+```
+skill-name|<install command>
 ```
 
 The install command runs once per VM lifetime (idempotent via a sentinel file).
@@ -137,12 +138,10 @@ The install command runs once per VM lifetime (idempotent via a sentinel file).
 
 ## Adding Claude Code plugins
 
-Add plugin names to `CLAUDE_PLUGINS` at the top of `provision/scripts/tools.sh`:
+Add a line to `provision/config/install-plugins.txt`:
 
-```sh
-CLAUDE_PLUGINS=(
-    "plugin-name@marketplace"
-)
+```
+plugin-name@marketplace
 ```
 
 ---
@@ -164,7 +163,7 @@ Edit `provision/versions.env`:
 
 ```sh
 GO_VERSION="1.24.4"
-NODE_VERSION="24.3.0"
+NODE_VERSION="24.15.0"
 PYTHON_VERSION="3.12.4"
 JAVA_VERSION="21.0.3-tem"
 UV_VERSION="0.7.13"
@@ -180,13 +179,11 @@ Then reprovision.
 
 ### VS Code Remote SSH
 
-`devbox start` automatically writes a `Host devbox` entry to `~/.ssh/config` with the current port. In VS Code → Remote Explorer → connect to `devbox`.
+`devbox start` configures `~/.ssh/config` with a `Host colima-devbox` entry (written by Colima). In VS Code → Remote Explorer → connect to `colima-devbox`.
 
 ### JetBrains Gateway
 
-`devbox start` automatically configures `~/.ssh/config` with the Lima include and a `devbox` host alias. No manual setup needed.
-
-Gateway → New Connection → SSH → host `devbox`, username = your macOS username, no port or private key needed. Select IDE version and project path on the VM.
+Gateway → New Connection → SSH → host `colima-devbox`, username = your macOS username. No port or private key entry needed — Colima writes the SSH config automatically on `devbox start`. Select the IDE version and project path on the VM.
 
 ---
 
@@ -208,7 +205,7 @@ If the socket is missing: `devbox stop && devbox start`.
 ## Host isolation
 
 - No personal `.gitconfig` on the host
-- No API keys in host shell config (`.env` is gitignored)
+- No API keys in host shell config (`.env` is gitignored; secrets passed at start time only)
 - SSH private keys never written to VM disk — agent-forwarded only
 - All personal tools install inside the VM only
-- VM state lives in `~/.lima/devbox/` — isolated from host tools
+- VM state lives in `~/.colima/devbox/` — isolated from host tools and from the default Colima instance
