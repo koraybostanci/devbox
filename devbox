@@ -1,9 +1,9 @@
 #!/bin/bash
 # Usage: ./devbox <command>
-# Commands: start, connect, stop, delete, status, rebuild
+# Commands: start, stop, connect, exec, status, rotate, rebuild, delete, containers
 
 DEVBOX_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-INSTANCE="devbox"
+PROFILE="devbox"
 
 # Self-install: create /usr/local/bin/devbox symlink on first run if not already on PATH
 if [ "$(command -v devbox 2>/dev/null)" != "/usr/local/bin/devbox" ]; then
@@ -14,58 +14,25 @@ if [ "$(command -v devbox 2>/dev/null)" != "/usr/local/bin/devbox" ]; then
     fi
 fi
 
-setup_ssh_config() {
-    local ssh_config="$HOME/.ssh/config"
-    mkdir -p "$HOME/.ssh"
-    touch "$ssh_config"
-    chmod 600 "$ssh_config"
-
-    # Remove existing devbox block before rewriting
-    if grep -qF '# BEGIN devbox' "$ssh_config" 2>/dev/null; then
-        local tmp
-        tmp="$(mktemp)"
-        sed '/# BEGIN devbox/,/# END devbox/d' "$ssh_config" > "$tmp"
-        mv "$tmp" "$ssh_config"
-    fi
-
-    # Write fresh devbox block with current Lima key and port
-    local identity
-    identity="$HOME/.lima/_config/user"
-    if [ -f "$identity" ]; then
-        cat >> "$ssh_config" << EOF
-
-# BEGIN devbox
-Host devbox
-    HostName 127.0.0.1
-    Port 2222
-    User $USER
-    IdentityFile $identity
-    IdentitiesOnly yes
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-    ForwardAgent yes
-# END devbox
-EOF
-        chmod 600 "$ssh_config"
-    fi
-}
-
 usage() {
     cat <<'EOF'
 Usage: devbox <command>
 
 Commands:
-  start    Start the VM. Use this for both the initial setup and subsequent
-           starts after a stop. Sources .env automatically if env vars are
-           not set. On first boot, provisioning takes ~15-20 min.
+  start    Start the VM. Sources .env automatically if env vars are not set.
+           On first boot, provisioning takes ~15-20 min.
            Required vars: GIT_NAME, GIT_EMAIL, ANTHROPIC_API_KEY
            Optional vars: DATABRICKS_HOST, DATABRICKS_TOKEN
 
   connect  Open a zsh shell inside the VM.
 
+  exec     Run a command inside the VM and return.
+           Usage: devbox exec <command> [args...]
+           Example: devbox exec python train.py
+
   stop     Gracefully shut down the VM.
 
-  status   Show VM state (Running, Stopped, etc.) and resource usage.
+  status   Show VM state and resource usage.
 
   delete   Delete the VM disk. All data inside the VM will be lost.
            Prompts for confirmation.
@@ -73,9 +40,9 @@ Commands:
   rebuild  Delete and reprovision the VM from scratch (~15-20 min).
            Equivalent to: delete + start. Prompts for confirmation.
 
-  rotate   Rotate credentials. Removes the secrets sentinel so updated
-           values from .env are re-written to /etc/environment on next
-           start. Runs: remove sentinel → stop → start.
+  rotate   Rotate credentials. Stops the VM (if running) and restarts it
+           with fresh values from .env. Lima re-injects --env vars into
+           /etc/environment on every start, so no sentinel manipulation needed.
 
   containers [service] <subcommand>
            Manage containers inside the VM.
@@ -92,10 +59,9 @@ EOF
 }
 
 require_env() {
-    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-        # shellcheck disable=SC1091
-        [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
-    fi
+    # Always source .env so updated values (e.g. after rotate) override stale shell exports.
+    # shellcheck disable=SC1091
+    [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
     local var
     MISSING=()
     for var in GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY; do
@@ -111,15 +77,27 @@ ensure_mount_dirs() {
     mkdir -p "${DEVBOX_DIR%/*}/projects" "${DEVBOX_DIR%/*}/data"
 }
 
-resolve_yaml() {
+# Write colima.yaml to ~/.colima/devbox/colima.yaml, substituting path placeholders.
+# Secrets are passed as --env flags at colima start time — not stored in this file.
+write_colima_config() {
     ensure_mount_dirs
-    PROJECTS_DIR="${DEVBOX_DIR%/*}/projects"
-    DATA_DIR="${DEVBOX_DIR%/*}/data"
-    RESOLVED_YAML="/tmp/devbox-lima.yaml"
+    local projects_dir="${DEVBOX_DIR%/*}/projects"
+    local data_dir="${DEVBOX_DIR%/*}/data"
+    mkdir -p "$HOME/.colima/$PROFILE"
     sed -e "s|{{DEVBOX_DIR}}|$DEVBOX_DIR|g" \
-        -e "s|{{PROJECTS_DIR}}|$PROJECTS_DIR|g" \
-        -e "s|{{DATA_DIR}}|$DATA_DIR|g" \
-        "$DEVBOX_DIR/lima.yaml" > "$RESOLVED_YAML"
+        -e "s|{{PROJECTS_DIR}}|$projects_dir|g" \
+        -e "s|{{DATA_DIR}}|$data_dir|g" \
+        "$DEVBOX_DIR/colima.yaml" > "$HOME/.colima/$PROFILE/colima.yaml"
+}
+
+build_env_flags() {
+    ENV_FLAGS=(
+        --env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+        --env "DATABRICKS_HOST=${DATABRICKS_HOST:-}"
+        --env "DATABRICKS_TOKEN=${DATABRICKS_TOKEN:-}"
+        --env "GIT_NAME=${GIT_NAME}"
+        --env "GIT_EMAIL=${GIT_EMAIL}"
+    )
 }
 
 cmd="${1:-}"
@@ -132,40 +110,38 @@ case "$cmd" in
         ;;
     start)
         require_env
-        STATE="$(limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null)"
-        if [ -n "$STATE" ]; then
-            if [ "$STATE" = "Running" ]; then
-                setup_ssh_config
-                exec limactl shell "$INSTANCE" zsh
-            fi
-            ensure_mount_dirs
-            limactl start "$INSTANCE"
-            setup_ssh_config
-            limactl protect "$INSTANCE" 2>/dev/null || true
-            exec limactl shell "$INSTANCE" zsh
+        STATE="$(colima list 2>/dev/null | awk -v p="$PROFILE" '$1==p {print $2}')"
+        if [ "$STATE" = "Running" ]; then
+            exec colima ssh -p "$PROFILE" -- zsh
         fi
-        resolve_yaml
-        limactl start --name "$INSTANCE" "$RESOLVED_YAML"
-        setup_ssh_config
-        limactl protect "$INSTANCE" 2>/dev/null || true
-        exec limactl shell "$INSTANCE" zsh
+        if [ -n "$STATE" ] && [ "$STATE" != "Stopped" ]; then
+            echo "ERROR: VM is in state '$STATE' — wait for it to settle and retry."
+            exit 1
+        fi
+        write_colima_config
+        build_env_flags
+        colima start "$PROFILE" "${ENV_FLAGS[@]}" --save-config=false
+        exec colima ssh -p "$PROFILE" -- zsh
         ;;
     connect)
-        exec limactl shell "$INSTANCE" zsh
+        exec colima ssh -p "$PROFILE" -- zsh
+        ;;
+    exec)
+        [ $# -gt 0 ] || { echo "Usage: devbox exec <command> [args...]"; exit 1; }
+        exec colima ssh -p "$PROFILE" -- "$@"
         ;;
     stop)
-        exec limactl stop "$INSTANCE"
+        exec colima stop --force "$PROFILE"
         ;;
     status)
-        exec limactl list "$INSTANCE"
+        colima list | awk -v p="$PROFILE" 'NR==1 || $1==p'
         ;;
     delete)
         echo "This will delete the VM disk. All data inside the VM will be lost."
         echo "Your projects directory on the Mac is NOT deleted."
         read -r -p "Are you sure? (yes/N) " confirm
         [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
-        limactl unprotect "$INSTANCE" 2>/dev/null || true
-        exec limactl delete "$INSTANCE"
+        exec colima delete --force "$PROFILE"
         ;;
     rebuild)
         require_env
@@ -173,27 +149,81 @@ case "$cmd" in
         echo "Your projects directory on the Mac is NOT deleted."
         read -r -p "Are you sure? (yes/N) " confirm
         [ "$confirm" = "yes" ] || { echo "Aborted."; exit 1; }
-        limactl unprotect "$INSTANCE" 2>/dev/null || true
-        limactl delete "$INSTANCE"
-        resolve_yaml
-        limactl start --name "$INSTANCE" "$RESOLVED_YAML"
-        setup_ssh_config
-        limactl protect "$INSTANCE" 2>/dev/null || true
-        exec limactl shell "$INSTANCE" zsh
+        colima delete --force "$PROFILE" || { echo "ERROR: VM delete failed — aborting rebuild."; exit 1; }
+        write_colima_config
+        build_env_flags
+        # colima start exits 1 when Lima's own per-boot script fails (cloud-init reports
+        # error), even though our provisioning succeeded. Run it in background and check
+        # the real outcome by waiting for cloud-final to finish instead.
+        colima start "$PROFILE" "${ENV_FLAGS[@]}" --save-config=false &>/dev/null &
+        COLIMA_PID=$!
+
+        echo "Waiting for SSH..."
+        for i in $(seq 1 60); do
+            colima ssh -p "$PROFILE" -- true 2>/dev/null && break
+            sleep 3
+        done
+
+        if ! colima ssh -p "$PROFILE" -- true 2>/dev/null; then
+            echo "ERROR: SSH did not come up after 3 minutes."
+            kill $COLIMA_PID 2>/dev/null
+            exit 1
+        fi
+
+        echo "Provisioning (Ctrl-C safe — provisioning continues in background):"
+        colima ssh -p "$PROFILE" -- \
+            journalctl -u cloud-final -f --no-pager --output=cat 2>/dev/null &
+        JOURNAL_PID=$!
+
+        # Wait for provisioning to complete by polling cloud-init status
+        while colima ssh -p "$PROFILE" -- \
+                cloud-init status 2>/dev/null | grep -q 'running'; do
+            sleep 5
+        done
+        kill $JOURNAL_PID 2>/dev/null
+        wait $JOURNAL_PID 2>/dev/null
+        # colima start blocks until it times out (Lima's per-boot script fails,
+        # cloud-init reports error, colima never sees "running" event). Kill it —
+        # the VM is already up and provisioned.
+        kill $COLIMA_PID 2>/dev/null
+        wait $COLIMA_PID 2>/dev/null
+
+        # Check if our provisioning script printed the completion marker
+        if colima ssh -p "$PROFILE" -- \
+                journalctl -u cloud-final --no-pager --output=cat 2>/dev/null \
+                | grep -q '=== devbox provisioning complete ==='; then
+            echo "Rebuild complete. Run 'devbox connect' to open a shell."
+        else
+            echo "ERROR: provisioning did not complete — check logs with:"
+            echo "  colima ssh -p $PROFILE -- journalctl -u cloud-final --no-pager"
+            exit 1
+        fi
         ;;
     rotate)
-        limactl shell "$INSTANCE" -- sudo rm -f /etc/devbox-env-written
-        limactl stop "$INSTANCE"
-        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            # shellcheck disable=SC1091
-            [ -f "$DEVBOX_DIR/.env" ] && source "$DEVBOX_DIR/.env"
+        # Secrets are injected by Lima on every start (--env flags → /etc/environment).
+        # Rotating is just stop + start with fresh values from .env.
+        STATE="$(colima list 2>/dev/null | awk -v p="$PROFILE" '$1==p {print $2}')"
+        if [ -z "$STATE" ]; then
+            echo "ERROR: VM does not exist — run 'devbox start' first."
+            exit 1
         fi
-        ensure_mount_dirs
-        limactl start "$INSTANCE"
-        setup_ssh_config
-        exec limactl shell "$INSTANCE" zsh
+        if [ "$STATE" != "Running" ] && [ "$STATE" != "Stopped" ]; then
+            echo "ERROR: VM is in state '$STATE' — wait for it to settle and retry."
+            exit 1
+        fi
+        [ "$STATE" = "Running" ] && colima stop --force "$PROFILE"
+        require_env
+        write_colima_config
+        build_env_flags
+        colima start "$PROFILE" "${ENV_FLAGS[@]}" --save-config=false
+        exec colima ssh -p "$PROFILE" -- zsh
         ;;
     containers)
+        if ! colima ssh -p "$PROFILE" -- true 2>/dev/null; then
+            echo "ERROR: VM is not running — run 'devbox start' first."
+            exit 1
+        fi
+
         # containers [service] <subcommand>
         # If first arg is a known subcommand, treat it as "all services".
         # Otherwise treat first arg as a service name and second as subcommand.
@@ -210,34 +240,33 @@ case "$cmd" in
         esac
         shift || true
 
+        COMPOSE=(docker compose)
         if [ -n "$service" ]; then
             compose_file="/provision/config/containers/${service}/docker-compose.yml"
-            COMPOSE="nerdctl compose -f $compose_file"
-            # Verify the compose file exists inside the VM before running
-            limactl shell "$INSTANCE" -- test -f "$compose_file" 2>/dev/null || {
+            colima ssh -p "$PROFILE" -- test -f "$compose_file" 2>/dev/null || {
                 echo "ERROR: No compose file found for service '${service}'."
                 echo "Expected: provision/config/containers/${service}/docker-compose.yml"
                 exit 1
             }
+            COMPOSE+=(-f "$compose_file")
         else
-            # Build -f flags for every service found under provision/config/containers/
-            compose_files=""
+            found=0
             for f in "$DEVBOX_DIR/provision/config/containers"/*/docker-compose.yml; do
                 [ -f "$f" ] || continue
-                compose_files="$compose_files -f /provision/config/containers/$(basename "$(dirname "$f")")/docker-compose.yml"
+                COMPOSE+=(-f "/provision/config/containers/$(basename "$(dirname "$f")")/docker-compose.yml")
+                found=1
             done
-            if [ -z "$compose_files" ]; then
+            if [ "$found" -eq 0 ]; then
                 echo "No compose files found under provision/config/containers/."
                 exit 1
             fi
-            COMPOSE="nerdctl compose$compose_files"
         fi
 
         case "$subcmd" in
-            up)    exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE up -d" ;;
-            down)  exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE down" ;;
-            ps)    exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE ps -a" ;;
-            logs)  exec limactl shell "$INSTANCE" -- bash -lc "$COMPOSE logs -f" ;;
+            up)    exec colima ssh -p "$PROFILE" -- "${COMPOSE[@]}" up -d ;;
+            down)  exec colima ssh -p "$PROFILE" -- "${COMPOSE[@]}" down ;;
+            ps)    exec colima ssh -p "$PROFILE" -- "${COMPOSE[@]}" ps -a ;;
+            logs)  exec colima ssh -p "$PROFILE" -- "${COMPOSE[@]}" logs -f ;;
             *)     echo "Unknown subcommand: $subcmd"; echo "Usage: devbox containers [service] [up|down|ps|logs]"; exit 1 ;;
         esac
         ;;
