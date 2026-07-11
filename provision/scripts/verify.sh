@@ -25,6 +25,10 @@ has_mode() {
     [ -f "$path" ] && [ "$(stat -c '%a' "$path")" = "$expected" ]
 }
 
+login_shell_is_clean() {
+    [ -z "$(zsh -lic 'true' 2>&1)" ]
+}
+
 check "guest environment permissions" has_mode "$HOME/.config/devbox/env" 600
 check "projects mount is writable" test -w /mnt/devbox/projects
 check "data mount is writable" test -w /mnt/devbox/data
@@ -32,6 +36,7 @@ check "Docker daemon" docker info
 check "Docker Compose" docker compose version
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
+check "zsh login shell starts cleanly" login_shell_is_clean
 
 tool_failures=0
 zsh -lic '

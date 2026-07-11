@@ -39,6 +39,10 @@ while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
 done < <(find . \( -type f -name '*.sh' -o -path './devbox' \) | sort)
 bash -n "${shell_files[@]}"
+[ "$(tail -c 1 provision/config/zsh/zshrc | wc -l | tr -d ' ')" = 1 ] || {
+    printf 'ERROR: provision/config/zsh/zshrc must end with a newline\n' >&2
+    exit 1
+}
 
 profile_home="$validation_root/home"
 profile_path="$profile_home/.colima/devbox/colima.yaml"
