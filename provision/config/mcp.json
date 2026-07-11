@@ -2,7 +2,7 @@
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/$USER/projects"]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/mnt/devbox/projects"]
     }
   }
 }
