@@ -19,13 +19,69 @@ ENV_KEYS=(
 )
 
 configure_paths() {
+    local colima_home
+
     DEVBOX_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
     DEVBOX_CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/devbox"
-    COLIMA_HOME="$DEVBOX_STATE_ROOT/colima"
+    DEVBOX_LEGACY_COLIMA_HOME="$DEVBOX_STATE_ROOT/colima"
+    colima_home="${COLIMA_HOME:-$HOME/.colima}"
     DOCKER_CONFIG="$DEVBOX_CONFIG_ROOT/docker"
     DEVBOX_LOCK_DIR="$DEVBOX_STATE_ROOT/locks"
-    DEVBOX_COLIMA_CONFIG="$COLIMA_HOME/$PROFILE/colima.yaml"
-    export COLIMA_HOME DOCKER_CONFIG DEVBOX_LOCK_DIR
+    DEVBOX_COLIMA_PROFILE="$colima_home/$PROFILE"
+    DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
+    DEVBOX_COLIMA_OWNER="$DEVBOX_COLIMA_PROFILE/.devbox-owner"
+    DEVBOX_LEGACY_COLIMA_PROFILE="$DEVBOX_LEGACY_COLIMA_HOME/$PROFILE"
+    export DOCKER_CONFIG DEVBOX_LOCK_DIR
+}
+
+check_colima_home() {
+    case "$(dirname "$DEVBOX_COLIMA_PROFILE")" in
+        "$HOME/.colima" | "$DEVBOX_LEGACY_COLIMA_HOME") ;;
+        *) die "COLIMA_HOME must point to $HOME/.colima; unset it to use the standard Colima home" ;;
+    esac
+}
+
+check_legacy_colima_profile() {
+    check_colima_home
+    [ "$DEVBOX_LEGACY_COLIMA_PROFILE" = "$DEVBOX_COLIMA_PROFILE" ] && return
+    [ ! -e "$DEVBOX_LEGACY_COLIMA_PROFILE" ] ||
+        die "Legacy private Colima profile found at $DEVBOX_LEGACY_COLIMA_PROFILE; migrate it before continuing (see $DEVBOX_DIR/docs/troubleshooting.md)"
+}
+
+check_colima_profile_ownership() {
+    local owner_checkout owner_version provision_location runtime
+
+    [ "$DEVBOX_LEGACY_COLIMA_PROFILE" = "$DEVBOX_COLIMA_PROFILE" ] && return
+    check_legacy_colima_profile
+    [ -e "$DEVBOX_COLIMA_PROFILE" ] || return
+    if [ -f "$DEVBOX_COLIMA_OWNER" ]; then
+        owner_version="$(sed -n '1p' "$DEVBOX_COLIMA_OWNER")"
+        owner_checkout="$(sed -n '2p' "$DEVBOX_COLIMA_OWNER")"
+        [ "$owner_version" = "devbox-profile-v1" ] ||
+            die "Invalid ownership marker in $DEVBOX_COLIMA_OWNER"
+        [ "$owner_checkout" = "$DEVBOX_DIR" ] ||
+            die "Colima profile '$PROFILE' is owned by another devbox checkout: $owner_checkout (see $DEVBOX_DIR/docs/troubleshooting.md#checkout-moved-or-renamed)"
+        return
+    fi
+
+    if [ -f "$DEVBOX_COLIMA_CONFIG" ] && command -v yq >/dev/null 2>&1; then
+        runtime="$(yq eval '.runtime // ""' "$DEVBOX_COLIMA_CONFIG" 2>/dev/null || true)"
+        provision_location="$(yq eval '.mounts[] | select(.mountPoint == "/provision") | .location' "$DEVBOX_COLIMA_CONFIG" 2>/dev/null || true)"
+        if [ "$runtime" = "docker" ] && [ "$provision_location" = "$DEVBOX_DIR/provision" ]; then
+            return
+        fi
+    fi
+
+    die "Colima profile '$PROFILE' already exists but is not owned by this devbox checkout; inspect it with 'colima list' before continuing"
+}
+
+mark_colima_profile_owned() {
+    local temporary
+
+    temporary="$(mktemp "$DEVBOX_COLIMA_PROFILE/.devbox-owner.XXXXXX")"
+    printf '%s\n%s\n' "devbox-profile-v1" "$DEVBOX_DIR" >"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$DEVBOX_COLIMA_OWNER"
 }
 
 check_host_platform() {
@@ -220,7 +276,8 @@ render_colima_config() {
 
     load_env
     configure_paths
-    mkdir -p "$DEVBOX_PROJECTS_DIR" "$DEVBOX_DATA_DIR" "$(dirname "$DEVBOX_COLIMA_CONFIG")"
+    check_colima_profile_ownership
+    mkdir -p "$DEVBOX_PROJECTS_DIR" "$DEVBOX_DATA_DIR" "$DEVBOX_COLIMA_PROFILE"
 
     devbox_path="$(json_string "$DEVBOX_DIR/provision")"
     projects_path="$(json_string "$DEVBOX_PROJECTS_DIR")"
@@ -242,5 +299,6 @@ render_colima_config() {
     fi
     chmod 600 "$temporary"
     mv "$temporary" "$DEVBOX_COLIMA_CONFIG"
+    mark_colima_profile_owned
     log "Rendered $DEVBOX_COLIMA_CONFIG"
 }

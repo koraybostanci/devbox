@@ -16,7 +16,7 @@ devbox start      # start the VM and converge changed provisioning inputs
 devbox provision  # force non-destructive guest provisioning
 devbox connect    # open a guest zsh shell
 devbox exec <cmd> # run a command inside the guest and return
-devbox status     # show isolated VM state and resources
+devbox status     # show named VM profile state and resources
 devbox ide        # verify and print current IDE SSH settings
 devbox doctor     # run host and guest readiness diagnostics
 devbox stop       # graceful shutdown; --force is explicit
@@ -40,7 +40,7 @@ Provisioning runs in three sequential guest stages:
 
 The host parses an allowlisted `.env` and streams guest values over stdin into mode-0600 files under `~/.config/devbox`. Secrets never appear in Colima arguments or `/etc/environment`.
 
-`colima.yaml` mounts `provision/` read-only at `/provision`, projects at `/mnt/devbox/projects`, and data at `/mnt/devbox/data`; safe guest-home symlinks expose the latter two as `~/projects` and `~/data`. Template values are rendered into the isolated `COLIMA_HOME` before start. A content digest of `colima.yaml` and `provision/` controls convergence.
+`colima.yaml` mounts `provision/` read-only at `/provision`, projects at `/mnt/devbox/projects`, and data at `/mnt/devbox/data`; safe guest-home symlinks expose the latter two as `~/projects` and `~/data`. Template values are rendered into the standard `devbox` Colima profile before start. A content digest of `colima.yaml` and `provision/` controls convergence.
 
 The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` because JetBrains may not follow `Include` directives. The block is refreshed after every start/rebuild with Colima's dynamic port and dedicated key. Host SSH-agent forwarding is disabled.
 

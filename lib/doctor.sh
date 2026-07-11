@@ -32,7 +32,7 @@ run_doctor() {
     fi
 
     state="$(colima_state)"
-    printf 'INFO: isolated VM state: %s\n' "${state:-Not created}"
+    printf 'INFO: devbox profile state: %s\n' "${state:-Not created}"
     if [ "$state" = "Running" ]; then
         doctor_check "Colima SSH is reachable" guest_exec true
         doctor_check "managed SSH host is reachable" ssh -o BatchMode=yes -o ConnectTimeout=10 devbox true

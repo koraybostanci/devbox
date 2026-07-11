@@ -1,6 +1,7 @@
 #!/bin/bash
 
 colima_cmd() {
+    check_colima_profile_ownership
     command colima "$@"
 }
 

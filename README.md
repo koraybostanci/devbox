@@ -13,6 +13,7 @@ Keep your editors and project files on macOS. Run shells, compilers, CLIs, crede
 | Editors | macOS |
 | Projects and durable data | Mac-backed virtiofs mounts |
 | Toolchains and processes | Ubuntu 24.04 guest |
+| VM identity | Standard Colima profile named `devbox` |
 | GitHub and Databricks credentials | Guest-local stores |
 | Containers and volumes | Docker inside the guest |
 | IDE transport | Managed OpenSSH host `devbox` |
@@ -26,7 +27,7 @@ flowchart LR
 	VM -->|HTTPS| CLOUD[GitHub and Databricks]
 ```
 
-The host Docker context stays untouched. Host SSH agents and private keys never enter the VM. Rebuild the guest whenever you like; your projects remain on the Mac.
+The VM uses Colima's standard profile home, so `colima list` shows it alongside other profiles. The `devbox` profile name is reserved for this repository. The host Docker context stays untouched, and host SSH agents and private keys never enter the VM. Rebuild the guest whenever you like; your projects remain on the Mac.
 
 ## Requirements
 
@@ -71,12 +72,16 @@ devbox github login
 ```sh
 devbox doctor
 devbox ide
+colima list
 ```
 
-When both pass, connect an editor or enter the guest with `devbox connect`.
+When the checks pass and `colima list` shows `devbox` with the Docker runtime, connect an editor or enter the guest with `devbox connect`.
 
 > [!NOTE]
 > Upgrading a profile from the old home-based mount layout? Run `devbox rebuild` once to move it to `/mnt/devbox/*`.
+
+> [!IMPORTANT]
+> Versions that used a private Colima home require a one-time data migration. The CLI stops with a link to the [migration procedure](docs/troubleshooting.md#legacy-private-colima-home) instead of touching either profile. Back up Docker data before deleting the legacy VM.
 
 ## Daily Workflow
 
