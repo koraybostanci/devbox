@@ -1,0 +1,15 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation tools
+        run: brew install jq yq docker docker-compose
+      - name: Run checks
+        run: scripts/check.sh

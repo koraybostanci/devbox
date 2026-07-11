@@ -1,50 +1,23 @@
-cpu: 4
-memory: 4      # reduce to 2 on 8GB machines
-disk: 60       # GiB
+cpu: {{CPU}}
+memory: {{MEMORY}}
+disk: {{DISK}}
 arch: aarch64
-vmType: vz     # Apple Virtualization.framework — fastest on Apple Silicon
+vmType: vz
 runtime: docker
 mountType: virtiofs
+autoActivate: false
 
 mounts:
-  - location: "{{DEVBOX_DIR}}/provision"
+  - location: {{PROVISION_PATH}}
     mountPoint: /provision
     writable: false
-  # Projects and data directories live on the Mac, mounted as siblings at ~/projects and ~/data.
-  # Both survive devbox rebuild. Resolved by the devbox script before passing to colima.
-  - location: "{{PROJECTS_DIR}}"
-    mountPoint: "/home/{{.User}}/projects"
+  - location: {{PROJECTS_PATH}}
+    mountPoint: /mnt/devbox/projects
     writable: true
-  - location: "{{DATA_DIR}}"
-    mountPoint: "/home/{{.User}}/data"
+  - location: {{DATA_PATH}}
+    mountPoint: /mnt/devbox/data
     writable: true
 
-sshPort: 2222
-forwardAgent: true  # host SSH agent forwarded; private keys never written to VM disk
-sshConfig: true
-
-# Explicit port forwards: guest port → same port on Mac (127.0.0.1 only).
-# Ports below 1024 cannot be bound by unprivileged containers — use 8080 for nginx, not 80.
-# Postgres uses 15432 (not 5432) to avoid conflicts with a Mac-local postgres.
-portForwards:
-  - guestPort: 15432
-    hostPort: 15432
-    hostIP: "127.0.0.1"
-
-provision:
-  # Step 1: system packages (runs as root)
-  - mode: system
-    script: |
-      #!/bin/bash
-      set -e
-      bash /provision/scripts/system.sh
-
-  # Step 2: user-level tools + configs (runs as the VM user).
-  # Secrets are available via Lima's native --env injection (written to
-  # /etc/environment as #LIMA-START...#LIMA-END on every colima start).
-  - mode: user
-    script: |
-      #!/bin/bash
-      set -e
-      set -a; source /etc/environment 2>/dev/null || true; set +a
-      bash /provision/scripts/tools.sh
+sshPort: 0
+forwardAgent: false
+sshConfig: false

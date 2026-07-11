@@ -1,12 +1,22 @@
 services:
   postgres:
-    image: postgres:18
-    restart: unless-stopped
+    image: postgres:18.3
+    restart: "no"
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpass}
-      POSTGRES_USER: ${POSTGRES_USER:-dev}
-      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
     ports:
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:?POSTGRES_PORT is required}:5432"
     volumes:
-      - ${HOME}/data/postgres:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:
+    name: devbox-postgres-data

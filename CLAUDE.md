@@ -9,49 +9,62 @@ Infrastructure-as-code for a personal dev VM (Colima named profile `devbox`) run
 ## Commands
 
 ```sh
-./devbox start    # start VM (auto-sources .env if env vars missing)
-devbox connect    # SSH into VM (zsh with all tools on PATH)
-devbox exec <cmd> # run a command inside the VM and return
-devbox stop       # graceful shutdown
-devbox status     # show VM state and resource usage
-devbox rotate     # update secrets in /etc/environment without full rebuild
-devbox rebuild    # wipe disk and reprovision (~15–20 min)
-devbox delete     # delete VM disk (projects/data on Mac are NOT lost — prompts for confirmation)
+./devbox init     # validate host prerequisites and initialize mode-0600 .env
+./devbox install  # install a user-local CLI symlink without sudo
+devbox uninstall  # remove only a symlink owned by this checkout
+devbox start      # start the VM and converge changed provisioning inputs
+devbox provision  # force non-destructive guest provisioning
+devbox connect    # open a guest zsh shell
+devbox exec <cmd> # run a command inside the guest and return
+devbox status     # show isolated VM state and resources
+devbox ide        # verify and print current IDE SSH settings
+devbox doctor     # run host and guest readiness diagnostics
+devbox stop       # graceful shutdown; --force is explicit
+devbox rotate     # update .env-managed guest credentials without restarting
+devbox rebuild    # recreate guest OS/tools while preserving volumes and mounts
+devbox destroy    # remove VM/runtime data after strong confirmation
+devbox github [login|status|logout]
+devbox databricks [login|status|logout]
 devbox containers [service] [up|down|ps|logs]  # manage containers from the Mac
 ```
 
-`./devbox` self-installs a symlink to `/usr/local/bin/devbox` on first run. After that, `devbox` works from anywhere.
+`devbox install` creates a symlink in a writable user-local directory already on `PATH`; it never writes `/usr/local/bin` with `sudo`.
 
 ## Architecture
 
-Provisioning runs in two sequential stages defined in `colima.yaml`:
+Provisioning runs in three sequential guest stages:
 
-1. **`scripts/system.sh`** (root) — apt packages, system-level deps
-2. **`scripts/tools.sh`** (user) — all user-level installs: nvm/Node, pyenv/Python, sdkman/Java, Go, Rust, uv, Claude Code, opencode, Databricks CLI, zsh plugins, MCP config, skills
+1. **`provision/scripts/system.sh`** (root) - apt packages and system dependencies
+2. **`provision/scripts/tools.sh`** (user) - runtimes, applications, configuration, and optional add-ons
+3. **`provision/scripts/verify.sh`** (user) - versions, mounts, Docker, isolation, and readiness
 
-Secrets (API keys, git identity) are passed as `--env` flags at `colima start` time. Lima injects them into `/etc/environment` (under a `#LIMA-START...#LIMA-END` block) on every start — no sentinel needed.
+The host parses an allowlisted `.env` and streams guest values over stdin into mode-0600 files under `~/.config/devbox`. Secrets never appear in Colima arguments or `/etc/environment`.
 
-`colima.yaml` mounts `provision/` read-only at `/provision`, `../projects/` writably at `~/projects/`, and `../data/` writably at `~/data/` (all Mac-side siblings of this repo). `{{DEVBOX_DIR}}`, `{{PROJECTS_DIR}}`, and `{{DATA_DIR}}` in `colima.yaml` are substituted at runtime by `devbox start` via `write_colima_config()` before writing to `~/.colima/devbox/colima.yaml`. Secrets are passed as `--env` flags at `colima start` time and are never stored in the repo or config files.
+`colima.yaml` mounts `provision/` read-only at `/provision`, projects at `/mnt/devbox/projects`, and data at `/mnt/devbox/data`; safe guest-home symlinks expose the latter two as `~/projects` and `~/data`. Template values are rendered into the isolated `COLIMA_HOME` before start. A content digest of `colima.yaml` and `provision/` controls convergence.
+
+The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` because JetBrains may not follow `Include` directives. The block is refreshed after every start/rebuild with Colima's dynamic port and dedicated key. Host SSH-agent forwarding is disabled.
 
 ## Key files
 
 | File | Purpose |
 |---|---|
 | `provision/versions.env` | Version pins for all tools |
-| `provision/scripts/tools.sh` | `CLAUDE_PLUGINS` and `SKILL_INSTALLS` arrays; user-level install logic |
+| `provision/scripts/tools.sh` | User-level provisioning orchestrator |
+| `provision/scripts/lib/addons.sh` | Optional plugin and safe argv-based skill installers |
 | `provision/scripts/system.sh` | apt packages (root-level, idempotent) |
-| `provision/config/containers/postgres/docker-compose.yml` | Postgres service; data stored in `~/data/postgres/` (Mac: `../data/postgres/`) |
+| `provision/scripts/verify.sh` | Guest readiness checks |
+| `provision/config/containers/postgres/docker-compose.yml` | PostgreSQL service with a named Docker volume |
 | `provision/config/mcp.json` | MCP servers for Claude Code (deployed to `~/.mcp.json`) |
 | `provision/config/opencode/opencode.json` | MCP servers for opencode |
 | `provision/config/claude/CLAUDE.md` | Claude Code user preferences deployed to `~/.claude/CLAUDE.md` |
 | `provision/config/claude/settings.json` | Claude Code settings deployed to `~/.claude/settings.json` |
-| `provision/config/skills/` | File-based skills deployed to `~/.claude/skills/` (Claude Code + opencode) |
+| `provision/config/skills/` | Repository-owned skills copied to `~/.claude/skills/` |
 | `provision/config/install-skills.txt` | Skills requiring an install command (sentinel-guarded) |
 | `provision/config/install-plugins.txt` | Claude Code plugins to install at provisioning time |
 
 ## Idempotency pattern
 
-All provisioning scripts are designed to be re-run safely. Tools check whether they're already installed at the correct version before downloading. Skills install commands are guarded by sentinel files in `~/.claude/skills/.installed-<name>`.
+All provisioning scripts are designed to be re-run safely. Tools check whether they are already installed at the requested version before downloading. Skill commands are tokenized into argv without `eval`, must include installer-level `-y` or `--yes`, and are guarded by a SHA-256 sentinel derived from the full command.
 
 ## Adding MCPs
 
@@ -63,8 +76,10 @@ Edit both `provision/config/mcp.json` (Claude Code) and `provision/config/openco
 
 **Skills with install commands**: add a line to `provision/config/install-skills.txt`:
 ```
-sentinel-name|<install command>
+npx <package> <installer arguments including -y or --yes>
 ```
+
+Commands are whitespace-separated; quoting and shell syntax are intentionally unsupported. Keep browser-based or approval-requiring installers outside provisioning.
 
 **Claude Code plugins**: add a line to `provision/config/install-plugins.txt`:
 ```
@@ -77,8 +92,8 @@ Edit `provision/versions.env`, then run `devbox rebuild` to reprovision.
 
 ## Changing VM resources
 
-Edit `cpu`, `memory`, and `disk` in `colima.yaml`. Defaults: 4 CPUs, 4 GiB RAM, 60 GiB disk. Reduce memory to 2 on 8 GB machines.
+Set `DEVBOX_CPU`, `DEVBOX_MEMORY`, and `DEVBOX_DISK` in `.env`, then rebuild. Defaults: 4 CPUs, 4 GiB RAM, 60 GiB disk. Reduce memory to 2 on 8 GB machines.
 
 ## SSH agent
 
-Private keys stay on the Mac — agent-forwarded via `/run/host-services/ssh-auth.sock`. If `git clone` fails inside the VM, check `echo $SSH_AUTH_SOCK` and `ssh-add -l`, then `devbox stop && devbox start` if the socket is missing.
+Host SSH agents and private keys are intentionally unavailable in the guest. GitHub access uses guest-local `gh` authentication over HTTPS; run `devbox github login` after rebuilding. The IDE transport uses only Colima's dedicated key and explicit `ForwardAgent no`.
