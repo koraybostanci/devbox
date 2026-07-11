@@ -2,7 +2,7 @@
 
 ## Trust Boundary
 
-The host owns only the repository, `.env`, Mac-backed project/data directories, isolated Colima and Docker configuration roots, a user-local CLI symlink, and one marked OpenSSH host block. Development tools and processes run in the guest.
+The host owns only the repository, `.env`, Mac-backed project/data directories, the named Colima profile, an isolated Docker configuration root, a user-local CLI symlink, and one marked OpenSSH host block. Development tools and processes run in the guest.
 
 ```mermaid
 flowchart LR
@@ -16,12 +16,13 @@ flowchart LR
     DOCKER --> VOLUME[Named volumes]
 ```
 
-## Isolated Host State
+## Host State
 
-Every Colima invocation receives:
+Every Colima invocation targets the named `devbox` profile in Colima's standard home. This keeps the VM visible to normal commands such as `colima list` while Colima's profile boundary isolates its disk, runtime, sockets, keys, and configuration from other VMs. Before reading, starting, rebuilding, or destroying an existing profile, the launcher requires an ownership marker bound to this checkout. Profiles created before the marker are adopted only when their Docker runtime and `/provision` mount identify this repository; unrelated profiles and other checkouts fail closed before configuration is changed.
 
-- `COLIMA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}/devbox/colima`
-- `DOCKER_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/devbox/docker`
+The Docker CLI still receives `DOCKER_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/devbox/docker` so plugin configuration remains independent from the host's normal Docker settings.
+
+`COLIMA_HOME` may be unset or explicitly name the standard home. The former private home is accepted only when explicitly selected for the documented one-time migration workflow; other namespaces are rejected.
 
 The generated Colima profile disables Docker auto-activation, automatic SSH config edits, and SSH-agent forwarding. Starting devbox therefore does not change the host's active Docker context or expose host signing capabilities.
 
@@ -35,7 +36,7 @@ This transport is only for host-to-guest IDE/CLI access. GitHub repository acces
 
 `/mnt/devbox/projects` and `/mnt/devbox/data` are virtiofs mounts from explicit host directories. Safe links expose them as `~/projects` and `~/data`; provisioning fails on collisions and never deletes existing user paths.
 
-Docker data remains in the isolated Colima runtime. A soft Colima delete used by `rebuild` preserves named volumes. `destroy --data` removes them. Mac-backed mounts are outside both operations.
+Docker data remains in the named Colima profile. A soft Colima delete used by `rebuild` preserves named volumes. `destroy --data` removes them. Mac-backed mounts are outside both operations.
 
 ## Provisioning
 

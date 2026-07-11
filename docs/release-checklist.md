@@ -27,12 +27,15 @@ ssh -G github.com
 - Run `devbox install`; verify a user-local symlink and no sudo prompt.
 - Run first `devbox start`; verify exact guest versions and readiness.
 - Run second `devbox start`; verify provisioning is skipped.
+- Confirm `colima list` shows the `devbox` profile with the Docker runtime.
+- Confirm a second checkout cannot operate on the owned profile.
 - Confirm host Docker context is unchanged.
 - Confirm host SSH changes are limited to the documented managed block and backup.
 - Confirm `~/.ssh/config` contains the current dynamic port and dedicated Colima identity directly, without requiring an `Include` directive.
 
 ## Isolation
 
+- Confirm the named `devbox` profile remains independent from the default Colima profile.
 - Confirm `SSH_AUTH_SOCK` is absent in the guest.
 - Confirm personal/work host SSH aliases and private keys are unavailable in the guest.
 - Run `devbox github login`; confirm the device page opens in the macOS browser and select the intended account.
@@ -76,4 +79,6 @@ Induce and verify actionable diagnostics for:
 - Corrupt generated YAML/JSON
 - Unauthenticated GitHub CLI
 - Legacy mount layout
+- Legacy private Colima home
+- Moved checkout ownership mismatch
 - Stale lifecycle lock

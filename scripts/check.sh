@@ -40,6 +40,123 @@ while IFS= read -r shell_file; do
 done < <(find . \( -type f -name '*.sh' -o -path './devbox' \) | sort)
 bash -n "${shell_files[@]}"
 
+profile_home="$validation_root/home"
+profile_path="$profile_home/.colima/devbox/colima.yaml"
+profile_root="$profile_home/.colima/devbox"
+actual_profile_path="$(
+    env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+        HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" /bin/bash -c '
+            source "$ROOT/lib/common.sh"
+            source "$ROOT/lib/config.sh"
+            configure_paths
+            printf "%s" "$DEVBOX_COLIMA_CONFIG"
+        '
+)"
+[ "$actual_profile_path" = "$profile_path" ] || {
+    printf 'ERROR: devbox must use the standard Colima profile path\n' >&2
+    exit 1
+}
+COLIMA_HOME="$profile_home/.colima" HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" \
+    /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        [ "$DEVBOX_COLIMA_CONFIG" = "$HOME/.colima/devbox/colima.yaml" ]
+    '
+if COLIMA_HOME="$profile_home/custom-colima" HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" \
+    /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: nonstandard COLIMA_HOME override was not rejected\n' >&2
+    exit 1
+fi
+COLIMA_HOME="$profile_home/custom-colima" HOME="$profile_home" "$ROOT/devbox" help >/dev/null
+mkdir -p "$profile_home/.local/share/devbox/colima/devbox"
+if env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_legacy_colima_profile
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: legacy private Colima profile was not rejected\n' >&2
+    exit 1
+fi
+COLIMA_HOME="$profile_home/.local/share/devbox/colima" \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+    '
+rm -rf "$profile_home/.local/share/devbox/colima"
+mkdir -p "$profile_root"
+printf 'runtime: containerd\nmounts: []\n' >"$profile_path"
+unowned_profile_digest="$(shasum -a 256 "$profile_path" | awk '{print $1}')"
+if env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" "$ROOT/devbox" status >/dev/null 2>&1; then
+    printf 'ERROR: CLI accepted an unrelated standard Colima profile\n' >&2
+    exit 1
+fi
+[ "$(shasum -a 256 "$profile_path" | awk '{print $1}')" = "$unowned_profile_digest" ] || {
+    printf 'ERROR: CLI modified an unrelated standard Colima profile\n' >&2
+    exit 1
+}
+if env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: unrelated standard Colima profile was not rejected\n' >&2
+    exit 1
+fi
+cat >"$profile_path" <<EOF
+runtime: docker
+mounts:
+  - location: "$ROOT/provision"
+    mountPoint: /provision
+    writable: false
+EOF
+env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+        mark_colima_profile_owned
+    '
+[ "$(sed -n '1p' "$profile_root/.devbox-owner")" = "devbox-profile-v1" ] &&
+    [ "$(sed -n '2p' "$profile_root/.devbox-owner")" = "$ROOT" ] || {
+    printf 'ERROR: devbox profile ownership marker was not written\n' >&2
+    exit 1
+}
+if env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" DEVBOX_DIR="$ROOT/other-checkout" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: another checkout was allowed to use the owned devbox profile\n' >&2
+    exit 1
+fi
+printf 'invalid\n' >"$profile_root/.devbox-owner"
+if env -u COLIMA_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    HOME="$profile_home" PROFILE=devbox ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        configure_paths
+        check_colima_profile_ownership
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: invalid devbox profile ownership marker was accepted\n' >&2
+    exit 1
+fi
+
 jq empty \
     provision/config/claude/settings.json \
     provision/config/mcp.json \
@@ -54,6 +171,15 @@ sed \
     -e 's|{{DATA_PATH}}|"/tmp/devbox/data"|g' \
     colima.yaml >"$rendered_colima"
 yq eval '.' "$rendered_colima" >/dev/null
+[ "$(yq eval '.runtime' "$rendered_colima")" = docker ]
+[ "$(yq eval '.mountType' "$rendered_colima")" = virtiofs ]
+[ "$(yq eval '.autoActivate' "$rendered_colima")" = false ]
+[ "$(yq eval '.sshConfig' "$rendered_colima")" = false ]
+[ "$(yq eval '.forwardAgent' "$rendered_colima")" = false ]
+[ "$(yq eval '.mounts[0].mountPoint' "$rendered_colima")" = /provision ]
+[ "$(yq eval '.mounts[0].writable' "$rendered_colima")" = false ]
+[ "$(yq eval '.mounts[1].mountPoint' "$rendered_colima")" = /mnt/devbox/projects ]
+[ "$(yq eval '.mounts[2].mountPoint' "$rendered_colima")" = /mnt/devbox/data ]
 
 awk '
     !/^[[:space:]]*(#|$)/ {
