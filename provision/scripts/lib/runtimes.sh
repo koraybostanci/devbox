@@ -51,10 +51,12 @@ install_uv() {
 }
 
 install_java() {
+    local major
+    major="${JAVA_VERSION%%.*}"
     stage "Java $JAVA_VERSION"
-    export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-arm64
+    export JAVA_HOME=/usr/lib/jvm/java-${major}-openjdk-arm64
     export PATH="$JAVA_HOME/bin:$PATH"
-    java -version 2>&1 | grep -qF "version \"$JAVA_VERSION"
+    java -version 2>&1 | grep -qF "version \"${major}."
 }
 
 install_go() {
