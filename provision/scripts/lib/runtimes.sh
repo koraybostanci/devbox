@@ -29,6 +29,8 @@ install_python() {
             https://pyenv.run -o "$installer"
         bash "$installer"
         rm -f "$installer"
+    else
+        git -C "$PYENV_ROOT" pull --ff-only --quiet
     fi
     pyenv versions --bare | grep -qx "$PYTHON_VERSION" || pyenv install "$PYTHON_VERSION"
     pyenv global "$PYTHON_VERSION"
