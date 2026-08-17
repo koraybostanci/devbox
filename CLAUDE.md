@@ -50,6 +50,9 @@ The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` 
 |---|---|
 | `provision/versions.env` | Version pins for all tools |
 | `provision/scripts/tools.sh` | User-level provisioning orchestrator |
+| `provision/scripts/lib/runtimes.sh` | Installs Node.js, Python, uv, Java, Go, and Rust |
+| `provision/scripts/lib/apps.sh` | Installs Claude Code, opencode, Databricks CLI, yq, and oh-my-zsh |
+| `provision/scripts/lib/configure.sh` | Sets up mounts, git identity, MCP/opencode JSON, Claude files, and zsh |
 | `provision/scripts/lib/addons.sh` | Optional plugin and safe argv-based skill installers |
 | `provision/scripts/system.sh` | apt packages (root-level, idempotent) |
 | `provision/scripts/verify.sh` | Guest readiness checks |
@@ -68,7 +71,7 @@ All provisioning scripts are designed to be re-run safely. Tools check whether t
 
 ## Adding MCPs
 
-Edit both `provision/config/mcp.json` (Claude Code) and `provision/config/opencode/opencode.json` (opencode), then reprovision. `$USER` and `"npx"` in these files are substituted at deploy time.
+Edit both `provision/config/mcp.json` (Claude Code) and `provision/config/opencode/opencode.json` (opencode), then reprovision. At deploy time, the `npx` command is replaced with the versioned absolute path and the projects argument is set to `$HOME/projects`.
 
 ## Adding skills / plugins
 

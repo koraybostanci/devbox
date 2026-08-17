@@ -9,8 +9,8 @@ flowchart LR
     IDE[VS Code or IntelliJ] -->|OpenSSH Host devbox| VM[Colima VZ VM]
     CLI[devbox CLI] -->|Colima dedicated key| VM
     ENV[mode-0600 .env] -->|allowlist over stdin| GENV[guest mode-0600 env]
-    PROJECTS[Mac projects] -->|virtiofs| PMOUNT[/mnt/devbox/projects]
-    DATA[Mac data] -->|virtiofs| DMOUNT[/mnt/devbox/data]
+    PROJECTS[Mac projects] -->|virtiofs| PMOUNT["/mnt/devbox/projects"]
+    DATA[Mac data] -->|virtiofs| DMOUNT["/mnt/devbox/data"]
     VM -->|HTTPS gh credentials| GH[GitHub]
     VM --> DOCKER[Guest Docker]
     DOCKER --> VOLUME[Named volumes]

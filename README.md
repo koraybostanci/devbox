@@ -20,11 +20,11 @@ Keep your editors and project files on macOS. Run shells, compilers, CLIs, crede
 
 ```mermaid
 flowchart LR
-	IDE[VS Code or IntelliJ on macOS] -->|SSH host devbox| VM[Colima VM]
-	FILES[Mac projects and data] <-->|virtiofs| VM
-	VM --> TOOLS[Toolchains and CLIs]
-	VM --> DOCKER[Docker services]
-	VM -->|HTTPS| CLOUD[GitHub and Databricks]
+    IDE[VS Code or IntelliJ on macOS] -->|SSH host devbox| VM[Colima VM]
+    FILES[Mac projects and data] <-->|virtiofs| VM
+    VM --> TOOLS[Toolchains and CLIs]
+    VM --> DOCKER[Docker services]
+    VM -->|HTTPS| CLOUD[GitHub and Databricks]
 ```
 
 The VM uses Colima's standard profile home, so `colima list` shows it alongside other profiles. The `devbox` profile name is reserved for this repository. The host Docker context stays untouched, and host SSH agents and private keys never enter the VM. Rebuild the guest whenever you like; your projects remain on the Mac.
@@ -56,16 +56,15 @@ cd devbox
 
 The first `init` creates `.env` with mode `0600`. Fill in your Git identity, Anthropic key, optional Databricks host, local-service credentials, VM resources, and storage paths.
 
-### 3. Validate and Start
+### 3. Install and Start
 
 ```sh
-./devbox init
 ./devbox install
 devbox start
 devbox github login
 ```
 
-`init` validates rather than installing host packages. `install` adds a user-local symlink without `sudo`. GitHub authorization opens on macOS and stores the resulting credential only in the guest.
+`install` adds a user-local symlink without `sudo`. GitHub authorization opens on macOS and stores the resulting credential only in the guest.
 
 ### 4. Check the Result
 
@@ -188,7 +187,7 @@ Mac-backed projects and data live outside the VM lifecycle. Lima may use a home 
 
 ## Containers
 
-PostgreSQL 18.3 is included but never auto-started:
+PostgreSQL 18.3 is included but never auto-started. The version is pinned in `provision/config/containers/postgres/docker-compose.yml`.
 
 ```sh
 devbox containers postgres up
@@ -238,7 +237,7 @@ Run `devbox help` for subcommand details.
 ## Customize and Maintain
 
 - VM resources and Mac-backed paths: edit `.env`.
-- Guest tool versions: edit `provision/versions.env`.
+- Guest tool versions: edit `provision/versions.env`. Note: the PostgreSQL version is pinned separately in `provision/config/containers/postgres/docker-compose.yml`.
 - Repository-owned skills: add files under `provision/config/skills/`.
 - Unattended remote skills: add validated `npx` commands to `provision/config/install-skills.txt`.
 - Claude Code plugins: edit `provision/config/install-plugins.txt`.
