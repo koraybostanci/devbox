@@ -11,11 +11,11 @@ install_claude() {
 install_opencode() {
     stage "opencode $OPENCODE_VERSION"
     rm -f "$HOME/.local/bin/opencode"
-    if command -v opencode >/dev/null 2>&1 && version_equals "$(opencode --version)" "$OPENCODE_VERSION"; then
-        return
+    if ! command -v opencode >/dev/null 2>&1 || ! version_equals "$(opencode --version)" "$OPENCODE_VERSION"; then
+        npm install --global --silent --allow-scripts=opencode-ai \
+            "opencode-ai@$OPENCODE_VERSION"
     fi
-    npm install --global --silent --allow-scripts=opencode-ai \
-        "opencode-ai@$OPENCODE_VERSION"
+    npm explore --global opencode-ai -- node postinstall.mjs
     version_equals "$(opencode --version)" "$OPENCODE_VERSION"
 }
 
