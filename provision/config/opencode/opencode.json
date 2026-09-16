@@ -11,5 +11,46 @@
     "skill": {
       "*": "allow"
     }
+  },
+  "agent": {
+    "loop-implementer": {
+      "description": "Internal implementation agent for the implementation-review loop.",
+      "mode": "subagent",
+      "hidden": true
+    },
+    "loop-reviewer": {
+      "description": "Internal read-only reviewer for the implementation-review loop.",
+      "mode": "subagent",
+      "hidden": true,
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "git show*": "allow",
+          "git log*": "allow",
+          "git rev-parse*": "allow",
+          "git ls-files*": "allow"
+        }
+      }
+    },
+    "loop-reviewer-deep": {
+      "description": "Internal deep read-only reviewer for the implementation-review loop.",
+      "mode": "subagent",
+      "hidden": true,
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "git show*": "allow",
+          "git log*": "allow",
+          "git rev-parse*": "allow",
+          "git ls-files*": "allow"
+        }
+      }
+    }
   }
 }
