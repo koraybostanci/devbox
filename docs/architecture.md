@@ -2,7 +2,7 @@
 
 ## Trust Boundary
 
-The host owns only the repository, `.env`, Mac-backed project/data directories, the named Colima profile, an isolated Docker configuration root, a user-local CLI symlink, and one marked OpenSSH host block. Development tools and processes run in the guest.
+The host owns only the repository, `.env`, Mac-backed project/data directories, the named Colima profile, an isolated Docker configuration root, a user-local CLI symlink, and separate marked OpenSSH host blocks for legacy `devbox` and v2 `devbox-v2`. Development tools and processes run in the guest.
 
 ```mermaid
 flowchart LR
@@ -42,20 +42,25 @@ Colima's generated `user-v2` network.
 ## Experimental v2 no-mount profile
 
 `devbox v2` owns a second standard-home Colima profile, `devbox-v2`, with its
-own ownership schema, lock, host state root, and guest state root. Its VZ/Docker
+own ownership schema, host state root, and guest state root. Its lifecycle uses
+the normal profile's shared host lock so lifecycle and SSH-config changes cannot
+race. Its VZ/Docker
 template intentionally omits the `mounts` key, disables auto activation, host
 SSH configuration, SSH-agent forwarding, and Colima port forwarding. It invokes
-Colima with `DOCKER_CONFIG` unset and does not use the normal profile wrapper,
-mount wait, Docker configuration, SSH alias, or Mac project/data paths.
+Colima with its own isolated v2 Docker configuration and does not use the normal
+profile wrapper, mount wait, or Mac project/data paths.
 
-The v2 bundle digest is a sorted list of each `provision/` file and its SHA-256
-digest. On a stale digest, the launcher streams the sorted tree as a tar archive
-over the profile's dedicated SSH transport. The guest extracts to a temporary
+The v2 bundle digest is computed from a sorted list of each `provision/` file
+and its SHA-256 digest. On a stale digest, the launcher separately streams the
+`provision/` tree as a tar archive over the profile's dedicated SSH transport;
+the archive traversal is not sorted. The guest extracts to a temporary
 directory, verifies the required stage scripts, writes the digest marker, and
-atomically moves the `provision/` tree to
-`~/.local/share/devbox-v2/bundles/<digest>`. The system, tools, and verification
-stages run from that installed root; the guest environment is separately
-transferred to `~/.config/devbox-v2/env`.
+atomically moves the `provision/` tree below `/var/lib/devbox-v2`. Root
+provisioning creates and reconciles the separate unprivileged `devbox` user,
+its zsh login shell, and the real `/home/devbox/workspace` directory. The
+root-owned provisioning input is readable but not writable by `devbox`, which
+runs the tools and verifier; its allowlisted environment is transferred to
+`/home/devbox/.config/devbox-v2/env`.
 
 No-mount v2 does not assert strict network isolation. Phase 1 showed that stock
 Colima 0.10.3 retains a Lima `user-v2` network in the isolation POC. The v2
@@ -66,6 +71,13 @@ profile neither depends on nor resolves that finding.
 Colima generates the raw connection details and dedicated identity path. The launcher normalizes these into `Host devbox`, inserts `ForwardAgent no`, atomically writes `~/.ssh/config.d/devbox`, and mirrors that entry in a marked block in `~/.ssh/config`. The direct block supports IDE SSH parsers that do not follow `Include` directives and is refreshed whenever Colima changes the port. `destroy` removes both managed representations without touching unrelated SSH hosts.
 
 This transport is only for host-to-guest IDE/CLI access. GitHub repository access uses `gh` over HTTPS inside the guest.
+
+For v2, the generated Colima account remains an internal provisioning transport.
+The dedicated host key remains authorized for that generated bootstrap/admin
+account and is separately authorized for `devbox` in root-owned OpenSSH
+authorized-keys files. A separate marked host entry exposes `Host devbox-v2`
+with `User devbox`, `IdentitiesOnly yes`, and `ForwardAgent no`. This entry is
+refreshed without changing the legacy `Host devbox` block.
 
 ## Persistence
 

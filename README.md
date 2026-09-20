@@ -121,10 +121,13 @@ devbox v2 stop
 ```
 
 Supported v2 actions are `start`, `provision`, `connect`, `exec`, `status`,
-`stop`, and `destroy`. v2 does not create an SSH host alias, alter host Docker
-configuration, or use the legacy projects/data directories. It currently uses
-the configured guest's normal user only; a dedicated v2 identity, workspace,
-and authentication workflow are future phases.
+`stop`, and `destroy`. v2 daily work runs as the unprivileged guest user
+`devbox`, with its workspace at `/home/devbox/workspace`; it never creates or
+uses legacy `~/projects` or `~/data` mounts. The generated Colima account is
+reserved for bundle deployment and root provisioning. v2 adds the separate
+`devbox-v2` SSH host alias for direct IDE access as `devbox`, without changing
+the legacy `devbox` alias or host Docker configuration. Credential and service
+lifecycle remain future phases.
 
 > [!IMPORTANT]
 > No-mount v2 is not a network-isolation claim. Phase 1 found that stock
