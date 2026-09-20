@@ -222,12 +222,18 @@ HOME="$poc_home" PROFILE=devbox COLIMA_HOME="$poc_home/.colima" LIMA_HOME="$poc_
     validate_isolation_poc_interface
     validate_isolation_poc_dns
     validate_isolation_poc_deny_targets
-    render_isolation_poc_config
-    verify_isolation_poc_config
-    [ "$(yq eval ".mounts == null" "$ISOLATION_POC_COLIMA_CONFIG")" = true ]
-    [ "$(yq eval ".network.mode" "$ISOLATION_POC_COLIMA_CONFIG")" = bridged ]
-    [ "$(yq eval ".network.dns | join(\",\")" "$ISOLATION_POC_COLIMA_CONFIG")" = "1.1.1.1,1.0.0.1" ]
-    [ "$(yq eval ".portForwarder" "$ISOLATION_POC_COLIMA_CONFIG")" = none ]
+    if ! check_isolation_poc_ownership; then
+        printf "ERROR: a missing isolation POC profile was not accepted\n" >&2
+        exit 1
+    fi
+    if ! render_isolation_poc_config; then
+        printf "ERROR: isolation POC configuration rendering failed\n" >&2
+        exit 1
+    fi
+    if ! verify_isolation_poc_config; then
+        printf "ERROR: isolation POC runtime configuration verification failed\n" >&2
+        exit 1
+    fi
 '
 if HOME="$validation_root/isolation-poc-untrusted-lima-home" PROFILE=devbox \
     COLIMA_HOME="$validation_root/isolation-poc-untrusted-lima-home/.colima" \
