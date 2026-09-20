@@ -9,14 +9,27 @@ install_claude() {
 }
 
 install_opencode() {
-    stage "opencode $OPENCODE_VERSION"
-    rm -f "$HOME/.local/bin/opencode"
-    if ! command -v opencode >/dev/null 2>&1 || ! version_equals "$(opencode --version)" "$OPENCODE_VERSION"; then
-        npm install --global --silent --allow-scripts=opencode-ai \
-            "opencode-ai@$OPENCODE_VERSION"
+    local archive directory
+
+    stage "OpenCode $OPENCODE_VERSION"
+    if command -v opencode >/dev/null 2>&1 &&
+        version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"; then
+        return
     fi
-    npm explore --global opencode-ai -- node postinstall.mjs
-    version_equals "$(opencode --version)" "$OPENCODE_VERSION"
+
+    npm uninstall --global --silent opencode-ai >/dev/null 2>&1 || true
+    archive="$(mktemp)"
+    directory="$(mktemp -d)"
+    curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+        "https://opencode.ai/files/bin/$OPENCODE_VERSION/opencode-linux-arm64.tar.gz" \
+        -o "$archive"
+    printf '%s  %s\n' "$OPENCODE_SHA256" "$archive" | sha256sum -c -
+    tar -xzf "$archive" -C "$directory"
+    [ -f "$directory/opencode" ]
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 "$directory/opencode" "$HOME/.local/bin/opencode"
+    rm -rf "$archive" "$directory"
+    version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"
 }
 
 install_databricks() {

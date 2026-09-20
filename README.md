@@ -54,7 +54,7 @@ cd devbox
 ./devbox init
 ```
 
-The first `init` creates `.env` with mode `0600`. Fill in your Git identity, Anthropic key, optional Databricks host, local-service credentials, VM resources, and storage paths.
+The first `init` creates `.env` with mode `0600`. Fill in your Git identity, optional Databricks host, local-service credentials, VM resources, and storage paths. Authenticate Claude Code and OpenCode inside the guest only when you need them.
 
 ### 3. Install and Start
 
@@ -171,6 +171,19 @@ devbox databricks logout
 > [!IMPORTANT]
 > Authentication is intentionally outside provisioning. After `rebuild` or `destroy`, log in to GitHub and Databricks again. No GitHub or Databricks token belongs in `.env`.
 
+### AI Coding Tools
+
+Claude Code and OpenCode v2 are installed without provider credentials. Connect
+to the guest, then use OpenCode's native `/connect` and `/models` flows when
+you are ready to configure a model provider:
+
+```sh
+devbox connect
+opencode
+```
+
+No Anthropic API key belongs in `.env`.
+
 ## Persistence
 
 Defaults can be overridden in `.env`.
@@ -238,8 +251,8 @@ Run `devbox help` for subcommand details.
 
 - VM resources and Mac-backed paths: edit `.env`.
 - Guest tool versions: edit `provision/versions.env`. Note: the PostgreSQL version is pinned separately in `provision/config/containers/postgres/docker-compose.yml`.
-- Repository-owned skills: add files under `provision/config/skills/`.
-- Unattended remote skills: add validated `npx` commands to `provision/config/install-skills.txt`.
+- OpenCode v2 agents and configuration: edit `provision/config/opencode/`.
+- Repository-owned skills: add files under `provision/config/skills/`; remote skill installers are intentionally unsupported.
 - Claude Code plugins: edit `provision/config/install-plugins.txt`.
 
 Provisioning is idempotent and content-digest driven. Optional plugins and skills warn on failure without invalidating core readiness.

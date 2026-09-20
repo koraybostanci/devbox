@@ -1,0 +1,29 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "shell": "/usr/bin/zsh",
+  "share": "disabled",
+  "update": "disable",
+  "snapshots": false,
+  "server": {
+    "hostname": "127.0.0.1",
+    "mdns": false
+  },
+  "permissions": [
+    { "action": "shell", "resource": "git push *", "effect": "deny" },
+    { "action": "shell", "resource": "git rebase *", "effect": "deny" },
+    { "action": "shell", "resource": "git reset --hard*", "effect": "deny" },
+    { "action": "shell", "resource": "git branch -d *", "effect": "deny" },
+    { "action": "shell", "resource": "git branch -D *", "effect": "deny" },
+    { "action": "shell", "resource": "git commit *", "effect": "ask" }
+  ],
+  "agents": {
+    "build": {
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "loop-implementer", "effect": "allow" },
+        { "action": "subagent", "resource": "loop-reviewer", "effect": "allow" },
+        { "action": "subagent", "resource": "loop-reviewer-deep", "effect": "allow" }
+      ]
+    }
+  }
+}

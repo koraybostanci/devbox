@@ -1,14 +1,14 @@
 ---
 name: implement-review-loop
-description: Use only when the user explicitly requests an implementation and independent review loop. Uses hidden OpenCode subagents and a parent-mediated bounded loop.
+description: Use only when the user explicitly requests an implementation and independent review loop. Uses named OpenCode subagents and a parent-mediated bounded loop.
 ---
 
 # Implement-Review Loop
 
 Run this loop in the current OpenCode session. The main agent owns the task,
-worktree, verification, user communication, and publication approvals. It uses
-hidden child subagents through the Task tool; they are separate sessions, not
-concurrent writers to one terminal.
+worktree, verification, user communication, and publication approvals. It
+launches named child subagents; they are separate sessions, not concurrent
+writers to one terminal.
 
 ## Invariants
 
@@ -34,22 +34,21 @@ concurrent writers to one terminal.
 
 ## Roles
 
-- `loop-implementer`: hidden high-effort subagent. Use it only for the initial
+- `loop-implementer`: implementation subagent. Use it only for the initial
   implementation and bounded revisions.
-- `loop-reviewer`: hidden medium-effort read-only subagent. Use it by default.
-- `loop-reviewer-deep`: hidden high-effort read-only subagent. Use it only for
+- `loop-reviewer`: read-only review subagent. Use it by default.
+- `loop-reviewer-deep`: deep read-only review subagent. Use it only for
   authentication, migrations, infrastructure, schemas, or explicit deep review.
 
-The roles are configured as hidden `mode: subagent` agents. They do not appear
-in the primary-agent selector or `@` autocomplete, but the parent can invoke
-them through Task.
+The roles are visible `mode: subagent` agents. The parent may launch only these
+roles; the roles themselves cannot launch child subagents.
 
 ## Configuration and Resumption
 
 - When a role cannot launch because its configured model is unavailable, do not
   substitute another role or continue the loop manually. Update the managed
-  agent configuration, sync it to the active OpenCode config, and restart
-  OpenCode before resuming. Configuration is loaded only at session start.
+  agent configuration, restart OpenCode, and revalidate the effective
+  configuration before resuming.
 - Record the base ref, allowed paths, current phase, implementation-attempt
   count, reviewer-finding count, and scoped diff fingerprint before a restart.
   In the new session, revalidate those values and resume at the interrupted
@@ -64,14 +63,14 @@ them through Task.
 
 ## Loop
 
-1. Verify required roles are launchable, then ask `loop-implementer` to perform the task. Include the task, base ref,
+1. Verify required roles are launchable, then launch `loop-implementer` to perform the task. Include the task, base ref,
    allowed paths, required checks, the round number, and a prohibition on
    publication. Require `IMPLEMENTATION_READY` with changed files and concise
    verification evidence, or `IMPLEMENTATION_BLOCKED` with a reason.
 2. Independently run `git diff --check`, inspect `git status --short`, and
    verify the base ref and scope. Record the scoped diff fingerprint and do not
    review if these checks fail.
-3. Ask `loop-reviewer` or `loop-reviewer-deep` to review the current scoped
+3. Launch `loop-reviewer` or `loop-reviewer-deep` to review the current scoped
    diff against the recorded base. Include the task, allowed paths, changed
    files, and any relevant test result. Require exactly one of
    `REVIEW_APPROVED`, `REVIEW_CHANGES_REQUESTED`, or `REVIEW_BLOCKED`.
@@ -79,7 +78,7 @@ them through Task.
    A reviewer approval must contain no findings. The parent verifies the current
    Git state is unchanged since dispatch before accepting either result.
 5. On requested changes, confirm that an implementation attempt remains, then
-   relay only the bounded findings to a new `loop-implementer` task. Do not
+   relay only the bounded findings to a new `loop-implementer` subagent. Do not
    paste full worker history. Repeat from step 2 with a new review.
 6. On approval, run final deterministic checks. If they fail or the scoped diff
    changed, invalidate approval and return the evidence to the implementer.
@@ -89,7 +88,7 @@ them through Task.
 
 ## Result Handling
 
-Task completion and an idle child session are only lifecycle observations. The
+Subagent completion and an idle child session are only lifecycle observations. The
 parent accepts a worker result only when it matches the active role and round.
 If a worker returns an empty or malformed result, ask that same worker once to
 reprint its result without doing more work; otherwise stop for the user.
@@ -98,7 +97,7 @@ A task-launch error has no worker result. Treat it as a configuration blocker;
 do not retry it as another implementation attempt or ask a different worker to
 perform its role.
 
-Do not paste a large diff into a Task prompt. For a large change, tell the
+Do not paste a large diff into a subagent prompt. For a large change, tell the
 reviewer to inspect the scoped Git diff and relevant source files directly. If
 the changed scope is too broad to review meaningfully, stop and split the work
 instead of raising the context limit.

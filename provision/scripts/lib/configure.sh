@@ -32,24 +32,32 @@ configure_git() {
     gh config set git_protocol https --host github.com
 }
 
-configure_json() {
-    local npx_bin="$HOME/.nvm/versions/node/v$NODE_VERSION/bin/npx"
-    [ -x "$npx_bin" ]
+configure_opencode() {
+    local config_directory="$HOME/.config/opencode"
+    local legacy_mcp="$HOME/.mcp.json" temporary
 
-    jq --arg npx "$npx_bin" --arg projects "$HOME/projects" \
-        '.mcpServers.filesystem.command = $npx | .mcpServers.filesystem.args[-1] = $projects' \
-        /provision/config/mcp.json >"$HOME/.mcp.json.tmp"
-    jq empty "$HOME/.mcp.json.tmp"
-    chmod 600 "$HOME/.mcp.json.tmp"
-    mv "$HOME/.mcp.json.tmp" "$HOME/.mcp.json"
+    stage "OpenCode v2 configuration"
+    mkdir -p "$config_directory/agents" "$config_directory/skills"
+    command rm -f "$config_directory/opencode.json"
+    atomic_copy /provision/config/opencode/opencode.jsonc "$config_directory/opencode.jsonc"
+    cp -R /provision/config/opencode/agents/. "$config_directory/agents/"
+    cp -R /provision/config/skills/. "$config_directory/skills/"
+    atomic_copy /provision/config/opencode/AGENTS.md "$config_directory/AGENTS.md" 644
 
-    mkdir -p "$HOME/.config/opencode"
-    jq --arg npx "$npx_bin" --arg projects "$HOME/projects" \
-        '.mcp.filesystem.command[0] = $npx | .mcp.filesystem.command[-1] = $projects' \
-        /provision/config/opencode/opencode.json >"$HOME/.config/opencode/opencode.json.tmp"
-    jq empty "$HOME/.config/opencode/opencode.json.tmp"
-    chmod 600 "$HOME/.config/opencode/opencode.json.tmp"
-    mv "$HOME/.config/opencode/opencode.json.tmp" "$HOME/.config/opencode/opencode.json"
+    if [ -f "$legacy_mcp" ] && jq -e '
+        .mcpServers.filesystem |
+        .command == "npx" and (.args | index("@modelcontextprotocol/server-filesystem"))
+    ' "$legacy_mcp" >/dev/null 2>&1; then
+        temporary="$(mktemp "$HOME/.mcp.XXXXXX")"
+        jq 'del(.mcpServers.filesystem) | if .mcpServers == {} then del(.mcpServers) else . end' \
+            "$legacy_mcp" >"$temporary"
+        if jq -e 'length == 0' "$temporary" >/dev/null; then
+            command rm -f "$legacy_mcp" "$temporary"
+        else
+            chmod 600 "$temporary"
+            mv "$temporary" "$legacy_mcp"
+        fi
+    fi
 }
 
 configure_claude() {
@@ -72,7 +80,7 @@ configure_shell() {
 configure_guest() {
     configure_mounts
     configure_git
-    configure_json
+    configure_opencode
     configure_claude
     configure_shell
 }

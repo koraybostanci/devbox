@@ -1,7 +1,0 @@
-# Claude Code skills installed through npx commands.
-# One whitespace-separated command per line; shell syntax and quoting are not supported.
-# Commands must include the installer's -y or --yes flag for unattended provisioning.
-# Lines starting with # are ignored.
-#
-npx impeccable install -y --providers=claude,opencode --scope=global --force
-npx skills add nutlope/hallmark -g -a claude-code -a opencode -y

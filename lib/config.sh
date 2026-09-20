@@ -206,11 +206,10 @@ load_env() {
     if [ -z "${GIT_EMAIL:-}" ] || [ "$GIT_EMAIL" = "you@personal.com" ]; then
         die "Set GIT_EMAIL in $DEVBOX_DIR/.env"
     fi
-    if [ -z "${ANTHROPIC_API_KEY:-}" ] || [ "$ANTHROPIC_API_KEY" = "sk-ant-..." ]; then
-        die "Set ANTHROPIC_API_KEY in $DEVBOX_DIR/.env"
-    fi
     [ -z "${DATABRICKS_TOKEN:-}" ] ||
         warn "DATABRICKS_TOKEN is ignored; remove it from $DEVBOX_DIR/.env because Databricks uses OAuth login"
+    [ -z "${ANTHROPIC_API_KEY:-}" ] ||
+        warn "ANTHROPIC_API_KEY is ignored; authenticate Claude Code inside the guest and remove it from $DEVBOX_DIR/.env"
 
     DEVBOX_CPU="${DEVBOX_CPU:-4}"
     DEVBOX_MEMORY="${DEVBOX_MEMORY:-4}"
