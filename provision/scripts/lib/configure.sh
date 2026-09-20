@@ -32,24 +32,16 @@ configure_git() {
     gh config set git_protocol https --host github.com
 }
 
-configure_json() {
-    local npx_bin="$HOME/.nvm/versions/node/v$NODE_VERSION/bin/npx"
-    [ -x "$npx_bin" ]
+configure_opencode() {
+    local config_directory="$HOME/.config/opencode"
 
-    jq --arg npx "$npx_bin" --arg projects "$HOME/projects" \
-        '.mcpServers.filesystem.command = $npx | .mcpServers.filesystem.args[-1] = $projects' \
-        /provision/config/mcp.json >"$HOME/.mcp.json.tmp"
-    jq empty "$HOME/.mcp.json.tmp"
-    chmod 600 "$HOME/.mcp.json.tmp"
-    mv "$HOME/.mcp.json.tmp" "$HOME/.mcp.json"
-
-    mkdir -p "$HOME/.config/opencode"
-    jq --arg npx "$npx_bin" --arg projects "$HOME/projects" \
-        '.mcp.filesystem.command[0] = $npx | .mcp.filesystem.command[-1] = $projects' \
-        /provision/config/opencode/opencode.json >"$HOME/.config/opencode/opencode.json.tmp"
-    jq empty "$HOME/.config/opencode/opencode.json.tmp"
-    chmod 600 "$HOME/.config/opencode/opencode.json.tmp"
-    mv "$HOME/.config/opencode/opencode.json.tmp" "$HOME/.config/opencode/opencode.json"
+    stage "OpenCode v2 configuration"
+    mkdir -p "$config_directory/agents" "$config_directory/skills"
+    command rm -f "$config_directory/opencode.json"
+    atomic_copy /provision/config/opencode/opencode.jsonc "$config_directory/opencode.jsonc"
+    cp -R /provision/config/opencode/agents/. "$config_directory/agents/"
+    cp -R /provision/config/skills/. "$config_directory/skills/"
+    atomic_copy /provision/config/opencode/AGENTS.md "$HOME/AGENTS.md" 644
 }
 
 configure_claude() {
@@ -72,7 +64,7 @@ configure_shell() {
 configure_guest() {
     configure_mounts
     configure_git
-    configure_json
+    configure_opencode
     configure_claude
     configure_shell
 }

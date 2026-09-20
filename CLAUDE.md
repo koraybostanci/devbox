@@ -51,38 +51,30 @@ The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` 
 | `provision/versions.env` | Version pins for all tools |
 | `provision/scripts/tools.sh` | User-level provisioning orchestrator |
 | `provision/scripts/lib/runtimes.sh` | Installs Node.js, Python, uv, Java, Go, and Rust |
-| `provision/scripts/lib/apps.sh` | Installs Claude Code, opencode, Databricks CLI, yq, and oh-my-zsh |
-| `provision/scripts/lib/configure.sh` | Sets up mounts, git identity, MCP/opencode JSON, Claude files, and zsh |
-| `provision/scripts/lib/addons.sh` | Optional plugin and safe argv-based skill installers |
+| `provision/scripts/lib/apps.sh` | Installs Claude Code, OpenCode v2, Databricks CLI, yq, and oh-my-zsh |
+| `provision/scripts/lib/configure.sh` | Sets up mounts, git identity, OpenCode v2, Claude files, and zsh |
+| `provision/scripts/lib/addons.sh` | Optional Claude plugin installer |
 | `provision/scripts/system.sh` | apt packages (root-level, idempotent) |
 | `provision/scripts/verify.sh` | Guest readiness checks |
 | `provision/config/containers/postgres/docker-compose.yml` | PostgreSQL service with a named Docker volume |
-| `provision/config/mcp.json` | MCP servers for Claude Code (deployed to `~/.mcp.json`) |
-| `provision/config/opencode/opencode.json` | MCP servers for opencode |
+| `provision/config/opencode/opencode.jsonc` | OpenCode v2 global configuration |
+| `provision/config/opencode/agents/` | OpenCode v2 subagent definitions |
 | `provision/config/claude/CLAUDE.md` | Claude Code user preferences deployed to `~/.claude/CLAUDE.md` |
 | `provision/config/claude/settings.json` | Claude Code settings deployed to `~/.claude/settings.json` |
-| `provision/config/skills/` | Repository-owned skills copied to `~/.claude/skills/` |
-| `provision/config/install-skills.txt` | Skills requiring an install command (sentinel-guarded) |
+| `provision/config/skills/` | Repository-owned skills copied to Claude and OpenCode locations |
 | `provision/config/install-plugins.txt` | Claude Code plugins to install at provisioning time |
 
 ## Idempotency pattern
 
-All provisioning scripts are designed to be re-run safely. Tools check whether they are already installed at the requested version before downloading. Skill commands are tokenized into argv without `eval`, must include installer-level `-y` or `--yes`, and are guarded by a SHA-256 sentinel derived from the full command.
+All provisioning scripts are designed to be re-run safely. Tools check whether they are already installed at the requested version before downloading. OpenCode v2 is installed from a versioned Linux ARM64 artifact verified with a SHA-256 digest.
 
 ## Adding MCPs
 
-Edit both `provision/config/mcp.json` (Claude Code) and `provision/config/opencode/opencode.json` (opencode), then reprovision. At deploy time, the `npx` command is replaced with the versioned absolute path and the projects argument is set to `$HOME/projects`.
+Add only pinned, reviewed MCP servers to `provision/config/opencode/opencode.jsonc`, then reprovision. The default filesystem MCP is intentionally omitted because OpenCode v2 has native workspace tools.
 
 ## Adding skills / plugins
 
-**File-based skills**: add `provision/config/skills/<name>/SKILL.md` — deployed to `~/.claude/skills/` (read by both Claude Code and opencode).
-
-**Skills with install commands**: add a line to `provision/config/install-skills.txt`:
-```
-npx <package> <installer arguments including -y or --yes>
-```
-
-Commands are whitespace-separated; quoting and shell syntax are intentionally unsupported. Keep browser-based or approval-requiring installers outside provisioning.
+**File-based skills**: add `provision/config/skills/<name>/SKILL.md`. They are deployed to Claude and OpenCode v2 locations. Remote skill installation commands are intentionally unsupported.
 
 **Claude Code plugins**: add a line to `provision/config/install-plugins.txt`:
 ```

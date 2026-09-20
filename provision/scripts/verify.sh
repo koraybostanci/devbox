@@ -37,6 +37,11 @@ check "Docker Compose" docker compose version
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
+check "OpenCode v2 config" test -f "$HOME/.config/opencode/opencode.jsonc"
+check "OpenCode v1 config is absent" test ! -e "$HOME/.config/opencode/opencode.json"
+check "OpenCode loop agents" test -f "$HOME/.config/opencode/agents/loop-implementer.md" -a \
+    -f "$HOME/.config/opencode/agents/loop-reviewer.md" -a \
+    -f "$HOME/.config/opencode/agents/loop-reviewer-deep.md"
 
 tool_failures=0
 zsh -lic '
@@ -62,7 +67,8 @@ zsh -lic '
     tool_check "Go version" test "$(go version 2>/dev/null | awk "{print \$3}" | sed "s/^go//")" = "$GO_VERSION"
     tool_check "Rust version" test "$(rustc --version 2>/dev/null | awk "{print \$2}")" = "$RUST_VERSION"
     tool_check "Claude Code version" grep -qF "$CLAUDE_CODE_VERSION" < <(claude --version 2>/dev/null)
-    tool_check "opencode version" test "$(opencode --version 2>/dev/null)" = "$OPENCODE_VERSION"
+    tool_check "opencode version" test "$(opencode --version 2>/dev/null | sed "s/^opencode v//")" = "$OPENCODE_VERSION"
+    tool_check "OpenCode MCP configuration" opencode mcp list
     tool_check "Databricks CLI version" grep -qF "v$DATABRICKS_VERSION" < <(databricks version 2>/dev/null)
     tool_check "yq version" grep -qF "$YQ_VERSION" < <(yq --version 2>/dev/null)
     exit "$tool_failures"
