@@ -18,6 +18,20 @@ If Docker exists but Compose does not:
 brew install docker-compose
 ```
 
+## Experimental Isolation POC
+
+`devbox isolation-poc` is independent of normal `devbox` lifecycle commands.
+It fails before creating its separate profile if its interface, non-host DNS,
+or deny targets are missing or invalid. It requires exactly Colima 0.10.3 and
+rejects a `LIMA_HOME` outside `$HOME/.colima/_lima`. See [the experimental POC
+guide](isolation-poc.md) for the required `.env` values.
+
+If the final check reports `user-v2`, that is the expected strict failure for
+Colima 0.10.3: its supported bridged configuration still generates a Lima
+user-mode network. Do not treat successful guest reachability checks as proof
+that an external firewall/VLAN exists; configure and validate that policy
+outside devbox.
+
 ## Environment Rejected
 
 `.env` must contain only supported uppercase assignments with JSON-compatible double-quoted string values and have mode 0600:

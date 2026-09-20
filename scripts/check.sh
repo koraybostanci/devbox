@@ -194,6 +194,107 @@ yq eval '.' "$rendered_colima" >/dev/null
 [ "$(yq eval '.mounts[1].mountPoint' "$rendered_colima")" = /mnt/devbox/projects ]
 [ "$(yq eval '.mounts[2].mountPoint' "$rendered_colima")" = /mnt/devbox/data ]
 
+poc_home="$validation_root/isolation-poc-home"
+poc_colima_bin="$validation_root/isolation-poc-bin"
+poc_colima_capture="$validation_root/isolation-poc-colima-env"
+mkdir -p "$poc_colima_bin"
+cat >"$poc_colima_bin/colima" <<'EOF'
+#!/bin/bash
+if [ "$1" = version ]; then
+    printf 'colima version %s\n' "${POC_COLIMA_VERSION:-0.10.3}"
+else
+    printf '%s\n%s\n' "$LIMA_HOME" "$DOCKER_CONFIG" >"$ISOLATION_POC_COLIMA_CAPTURE"
+fi
+EOF
+chmod 700 "$poc_colima_bin/colima"
+HOME="$poc_home" PROFILE=devbox COLIMA_HOME="$poc_home/.colima" LIMA_HOME="$poc_home/.colima/_lima" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/isolation-poc.sh"
+    DEVBOX_DIR="$ROOT"
+    ifconfig() { return 0; }
+    scutil() { :; }
+    configure_paths
+    configure_isolation_poc_paths
+    DEVBOX_ISOLATION_POC_INTERFACE="en0"
+    DEVBOX_ISOLATION_POC_DNS="1.1.1.1,1.0.0.1"
+    DEVBOX_ISOLATION_POC_DENY_TARGETS="10.0.0.10:443,10.0.0.11:8443"
+    validate_isolation_poc_interface
+    validate_isolation_poc_dns
+    validate_isolation_poc_deny_targets
+    render_isolation_poc_config
+    verify_isolation_poc_config
+    [ "$(yq eval ".mounts == null" "$ISOLATION_POC_COLIMA_CONFIG")" = true ]
+    [ "$(yq eval ".network.mode" "$ISOLATION_POC_COLIMA_CONFIG")" = bridged ]
+    [ "$(yq eval ".network.dns | join(\",\")" "$ISOLATION_POC_COLIMA_CONFIG")" = "1.1.1.1,1.0.0.1" ]
+    [ "$(yq eval ".portForwarder" "$ISOLATION_POC_COLIMA_CONFIG")" = none ]
+'
+if HOME="$validation_root/isolation-poc-untrusted-lima-home" PROFILE=devbox \
+    COLIMA_HOME="$validation_root/isolation-poc-untrusted-lima-home/.colima" \
+    LIMA_HOME="$validation_root/isolation-poc-untrusted-lima-home/custom-lima" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/isolation-poc.sh"
+    DEVBOX_DIR="$ROOT"
+    configure_paths
+    configure_isolation_poc_paths
+' >/dev/null 2>&1; then
+    printf 'ERROR: isolation POC accepted a redirected LIMA_HOME\n' >&2
+    exit 1
+fi
+[ ! -e "$validation_root/isolation-poc-untrusted-lima-home/.colima/devbox-isolation-poc" ] || {
+    printf 'ERROR: redirected LIMA_HOME test created an isolation POC profile\n' >&2
+    exit 1
+}
+HOME="$poc_home" PROFILE=devbox COLIMA_HOME="$poc_home/.colima" LIMA_HOME="$poc_home/.colima/_lima" \
+    PATH="$poc_colima_bin:$PATH" ISOLATION_POC_COLIMA_CAPTURE="$poc_colima_capture" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/isolation-poc.sh"
+        configure_paths
+        configure_isolation_poc_paths
+        normal_docker_config="$DOCKER_CONFIG"
+        prepare_isolation_poc_docker_config
+        isolation_poc_colima start "$ISOLATION_POC_PROFILE"
+        [ "$ISOLATION_POC_DOCKER_CONFIG" != "$normal_docker_config" ]
+    '
+[ "$(sed -n '1p' "$poc_colima_capture")" = "$poc_home/.colima/_lima" ] || {
+    printf 'ERROR: isolation POC Colima invocation did not pin LIMA_HOME\n' >&2
+    exit 1
+}
+[ "$(sed -n '2p' "$poc_colima_capture")" = "$poc_home/.config/devbox/isolation-poc/docker" ] || {
+    printf 'ERROR: isolation POC Colima invocation did not use its Docker config\n' >&2
+    exit 1
+}
+[ "$(sed -n '2p' "$poc_colima_capture")" != "$poc_home/.config/devbox/docker" ] || {
+    printf 'ERROR: isolation POC Colima invocation used the normal devbox Docker config\n' >&2
+    exit 1
+}
+if HOME="$poc_home" PROFILE=devbox COLIMA_HOME="$poc_home/.colima" LIMA_HOME="$poc_home/.colima/_lima" \
+    PATH="$poc_colima_bin:$PATH" POC_COLIMA_VERSION="0.10.4" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/isolation-poc.sh"
+        configure_paths
+        configure_isolation_poc_paths
+        prepare_isolation_poc_docker_config
+        check_isolation_poc_dependencies
+    ' >/dev/null 2>&1; then
+    printf 'ERROR: isolation POC accepted an unvalidated Colima topology version\n' >&2
+    exit 1
+fi
+if HOME="$poc_home" COLIMA_HOME="$poc_home/.colima" LIMA_HOME="$poc_home/.colima/_lima" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/isolation-poc.sh"
+    DEVBOX_DIR="$ROOT"
+    DEVBOX_ISOLATION_POC_DENY_TARGETS="not-an-ip:443"
+    validate_isolation_poc_deny_targets
+' >/dev/null 2>&1; then
+    printf 'ERROR: invalid isolation POC deny target was accepted\n' >&2
+    exit 1
+fi
+
 awk '
     !/^[[:space:]]*(#|$)/ && $0 !~ /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$/ { exit 1 }
 ' provision/config/install-plugins.txt
