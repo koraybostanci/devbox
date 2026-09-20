@@ -13,7 +13,7 @@ install_claude_plugins() {
             printf 'WARNING: Claude plugin install failed: %s\n' "$plugin" >&2
             ADDON_FAILURES=$((ADDON_FAILURES + 1))
         }
-    done </provision/config/install-plugins.txt
+    done <"$DEVBOX_PROVISION_ROOT/config/install-plugins.txt"
 }
 
 install_addons() {

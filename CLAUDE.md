@@ -47,6 +47,13 @@ The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` 
 
 `devbox isolation-poc` is an experimental, opt-in profile named `devbox-isolation-poc`. It is separate from the normal profile and deliberately does not provision or mount repository files. Its external firewall/VLAN prerequisites and the Colima 0.10.3 user-mode-network limitation are documented in `docs/isolation-poc.md`.
 
+`devbox v2` is an experimental, opt-in profile named `devbox-v2`. It has no
+host filesystem mounts: provisioning is a content-addressed `provision/` bundle
+streamed through Colima SSH and installed in guest-local storage. It has
+separate ownership/state/locking and never writes host SSH configuration or
+uses the normal Docker configuration. It is independent of the unresolved
+network-isolation limitation documented for the isolation POC.
+
 ## Key files
 
 | File | Purpose |

@@ -17,6 +17,7 @@ fi
 
 validation_root="$(mktemp -d)"
 rendered_colima="$validation_root/colima.yaml"
+rendered_v2_colima="$validation_root/colima-v2.yaml"
 service_env="$validation_root/service.env"
 DOCKER_CONFIG="$validation_root/docker"
 export DOCKER_CONFIG
@@ -41,6 +42,24 @@ done < <(find . \( -type f -name '*.sh' -o -path './devbox' \) | sort)
 bash -n "${shell_files[@]}"
 [ "$(tail -c 1 provision/config/zsh/zshrc | wc -l | tr -d ' ')" = 1 ] || {
     printf 'ERROR: provision/config/zsh/zshrc must end with a newline\n' >&2
+    exit 1
+}
+zsh_profile_home="$validation_root/zsh-profile-home"
+mkdir -p "$zsh_profile_home/.config/devbox" "$zsh_profile_home/.config/devbox-v2"
+printf 'DEVBOX_ENV_SOURCE=legacy\n' >"$zsh_profile_home/.config/devbox/env"
+HOME="$zsh_profile_home" ROOT="$ROOT" zsh -dfc '
+    source "$ROOT/provision/config/zsh/zshrc"
+    [ "$DEVBOX_ENV_SOURCE" = legacy ]
+' || {
+    printf 'ERROR: zsh did not retain legacy guest environment selection\n' >&2
+    exit 1
+}
+printf 'DEVBOX_ENV_SOURCE=v2\n' >"$zsh_profile_home/.config/devbox-v2/env"
+HOME="$zsh_profile_home" ROOT="$ROOT" zsh -dfc '
+    source "$ROOT/provision/config/zsh/zshrc"
+    [ "$DEVBOX_ENV_SOURCE" = v2 ]
+' || {
+    printf 'ERROR: zsh did not select the v2 guest environment\n' >&2
     exit 1
 }
 
@@ -193,6 +212,192 @@ yq eval '.' "$rendered_colima" >/dev/null
 [ "$(yq eval '.mounts[0].writable' "$rendered_colima")" = false ]
 [ "$(yq eval '.mounts[1].mountPoint' "$rendered_colima")" = /mnt/devbox/projects ]
 [ "$(yq eval '.mounts[2].mountPoint' "$rendered_colima")" = /mnt/devbox/data ]
+
+sed \
+    -e 's/{{CPU}}/4/g' \
+    -e 's/{{MEMORY}}/4/g' \
+    -e 's/{{DISK}}/60/g' \
+    colima-v2.yaml >"$rendered_v2_colima"
+yq eval '.' "$rendered_v2_colima" >/dev/null
+yq -e '
+    .runtime == "docker" and
+    .vmType == "vz" and
+    .autoActivate == false and
+    .sshConfig == false and
+    .forwardAgent == false and
+    .portForwarder == "none" and
+    (.mounts == null)
+' "$rendered_v2_colima" >/dev/null || {
+    printf 'ERROR: v2 Colima configuration must be a mount-free VZ/Docker profile\n' >&2
+    exit 1
+}
+if grep -q 'mounts:' colima-v2.yaml; then
+    printf 'ERROR: v2 template must omit, not empty, the mounts key\n' >&2
+    exit 1
+fi
+
+v2_home="$validation_root/v2-home"
+v2_colima_bin="$validation_root/v2-bin"
+v2_guest_bin="$validation_root/v2-guest-bin"
+v2_colima_capture="$validation_root/v2-colima-env"
+v2_archive_capture="$validation_root/v2-provision.tar"
+v2_dispatch_capture="$validation_root/v2-dispatch"
+mkdir -p "$v2_colima_bin" "$v2_guest_bin"
+cat >"$v2_colima_bin/colima" <<'EOF'
+#!/bin/bash
+printf '%s\n%s\n%s\n' "$COLIMA_HOME" "$LIMA_HOME" "$DOCKER_CONFIG" >"$V2_COLIMA_CAPTURE"
+if [ "$1" = list ]; then
+    printf '%s\n' '{"name":"devbox-v2","status":"Running","arch":"aarch64","cpus":4,"memory":4294967296,"disk":64424509440}'
+fi
+EOF
+chmod 700 "$v2_colima_bin/colima"
+cat >"$v2_guest_bin/sha256sum" <<'EOF'
+#!/bin/bash
+exec shasum -a 256 "$@"
+EOF
+chmod 700 "$v2_guest_bin/sha256sum"
+env -u COLIMA_HOME -u LIMA_HOME -u DOCKER_CONFIG \
+    XDG_DATA_HOME="$validation_root/v2-xdg-data" XDG_CONFIG_HOME="$validation_root/v2-xdg-config" \
+    HOME="$v2_home" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    configure_v2_paths
+    [ "$DEVBOX_V2_COLIMA_PROFILE" = "$HOME/.colima/devbox-v2" ]
+    [ "$DEVBOX_V2_STATE_ROOT" = "$HOME/.local/share/devbox/v2" ]
+    [ "$DEVBOX_V2_LIMA_HOME" = "$HOME/.colima/_lima" ]
+    [ "$DEVBOX_V2_DOCKER_CONFIG" = "$HOME/.config/devbox/v2/docker" ]
+    [ "$DEVBOX_LOCK_DIR" = "$HOME/.local/share/devbox/v2/locks" ]
+    [ "${DOCKER_CONFIG+x}" != x ]
+' || {
+    printf 'ERROR: v2 paths are not separate from legacy paths\n' >&2
+    exit 1
+}
+if HOME="$v2_home" LIMA_HOME="$v2_home/custom-lima" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    configure_v2_paths
+' >/dev/null 2>&1; then
+    printf 'ERROR: v2 accepted a redirected LIMA_HOME\n' >&2
+    exit 1
+fi
+XDG_DATA_HOME="$validation_root/v2-xdg-data" XDG_CONFIG_HOME="$validation_root/v2-xdg-config" \
+    HOME="$v2_home" PATH="$v2_colima_bin:$PATH" V2_COLIMA_CAPTURE="$v2_colima_capture" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    configure_v2_paths
+    if ! check_v2_ownership; then
+        printf "ERROR: a missing v2 profile was not accepted\n" >&2
+        exit 1
+    fi
+    show_v2_status
+    stop_v2_vm
+    printf "%s\n" "$V2_PROFILE" | run_v2 destroy
+'
+[ ! -s "$v2_colima_capture" ] || {
+    printf 'ERROR: absent v2 profile acted on a same-named Colima profile\n' >&2
+    exit 1
+}
+mkdir -p "$v2_home/.colima/devbox-v2"
+printf 'devbox-v2-profile-v1\n%s\n' "$ROOT" >"$v2_home/.colima/devbox-v2/.devbox-owner"
+HOME="$v2_home" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    configure_v2_paths
+    check_v2_ownership
+'
+XDG_DATA_HOME="$validation_root/v2-xdg-data" XDG_CONFIG_HOME="$validation_root/v2-xdg-config" \
+    HOME="$v2_home" PATH="$v2_colima_bin:$PATH" V2_COLIMA_CAPTURE="$v2_colima_capture" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    configure_v2_paths
+    v2_colima status
+'
+[ "$(sed -n '1p' "$v2_colima_capture")" = "$v2_home/.colima" ] || {
+    printf 'ERROR: v2 Colima invocation did not pin COLIMA_HOME\n' >&2
+    exit 1
+}
+[ "$(sed -n '2p' "$v2_colima_capture")" = "$v2_home/.colima/_lima" ] || {
+    printf 'ERROR: v2 Colima invocation did not pin LIMA_HOME\n' >&2
+    exit 1
+}
+[ "$(sed -n '3p' "$v2_colima_capture")" = "$v2_home/.config/devbox/v2/docker" ] || {
+    printf 'ERROR: v2 Colima invocation did not use its Docker config\n' >&2
+    exit 1
+}
+[ "$(sed -n '3p' "$v2_colima_capture")" != "$v2_home/.docker" ] &&
+    [ "$(sed -n '3p' "$v2_colima_capture")" != "$v2_home/.config/devbox/docker" ] || {
+    printf 'ERROR: v2 Colima invocation used legacy or normal Docker state\n' >&2
+    exit 1
+}
+HOME="$v2_home" V2_ARCHIVE_CAPTURE="$v2_archive_capture" V2_GUEST_BIN="$v2_guest_bin" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    create_v2_bundle_snapshot
+    [ "$V2_BUNDLE_DIGEST" = "$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")" ]
+    if tar -tf "$V2_BUNDLE_ARCHIVE" | grep -Eq "(^|/)\\._[^/]*$"; then
+        printf "ERROR: v2 bundle archive contains AppleDouble entries\\n" >&2
+        exit 1
+    fi
+    v2_guest() { cat >"$V2_ARCHIVE_CAPTURE"; }
+    stream_v2_bundle "$V2_BUNDLE_DIGEST" "$V2_BUNDLE_ARCHIVE"
+    cmp "$V2_BUNDLE_ARCHIVE" "$V2_ARCHIVE_CAPTURE"
+    v2_guest() { PATH="$V2_GUEST_BIN:$PATH" "$@"; }
+    stream_v2_bundle "$V2_BUNDLE_DIGEST" "$V2_BUNDLE_ARCHIVE"
+    target="$HOME/.local/share/devbox-v2/bundles/$V2_BUNDLE_DIGEST"
+    [ "$(cat "$target/.devbox-bundle.sha256")" = "$V2_BUNDLE_DIGEST" ]
+    v2_guest_bundle_is_valid "$V2_BUNDLE_DIGEST"
+    target_inode="$(stat -f "%i" "$target")"
+    stream_v2_bundle "$V2_BUNDLE_DIGEST" "$V2_BUNDLE_ARCHIVE"
+    [ "$(stat -f "%i" "$target")" = "$target_inode" ]
+    chmod u+w "$target/scripts/system.sh"
+    printf "# corruption coverage\\n" >>"$target/scripts/system.sh"
+    if v2_guest_bundle_is_valid "$V2_BUNDLE_DIGEST"; then
+        printf "ERROR: corrupt cached v2 bundle was accepted\\n" >&2
+        exit 1
+    fi
+    stream_v2_bundle "$V2_BUNDLE_DIGEST" "$V2_BUNDLE_ARCHIVE"
+    [ "$(stat -f "%i" "$target")" != "$target_inode" ]
+    v2_guest_bundle_is_valid "$V2_BUNDLE_DIGEST"
+    v2_digest_snapshot="$(mktemp -d)"
+    cp -R "$V2_BUNDLE_SNAPSHOT/provision" "$v2_digest_snapshot/provision"
+    original_digest="$(v2_bundle_digest "$v2_digest_snapshot/provision")"
+    printf "invalid marker\\n" >"$v2_digest_snapshot/provision/.devbox-bundle.sha256"
+    [ "$original_digest" = "$(v2_bundle_digest "$v2_digest_snapshot/provision")" ]
+    touch "$v2_digest_snapshot/provision/scripts/system.sh"
+    [ "$original_digest" = "$(v2_bundle_digest "$v2_digest_snapshot/provision")" ]
+    chmod u+w "$v2_digest_snapshot/provision/scripts/system.sh"
+    printf "# digest coverage\n" >>"$v2_digest_snapshot/provision/scripts/system.sh"
+    [ "$original_digest" != "$(v2_bundle_digest "$v2_digest_snapshot/provision")" ]
+    rm -rf "$v2_digest_snapshot"
+    rm -rf "$V2_BUNDLE_SNAPSHOT"
+'
+HOME="$v2_home" V2_DISPATCH_CAPTURE="$v2_dispatch_capture" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/v2.sh"
+    v2_state() { printf Running; }
+    v2_guest() { printf "%s\n" "$*" >"$V2_DISPATCH_CAPTURE"; }
+    run_v2 connect
+    [ "$(cat "$V2_DISPATCH_CAPTURE")" = "zsh -l" ]
+    run_v2 exec printf "v2 exec coverage"
+    [ "$(cat "$V2_DISPATCH_CAPTURE")" = "printf v2 exec coverage" ]
+'
+grep -q 'DEVBOX_PROVISION_ROOT="$HOME/.local/share/devbox-v2/bundles/$1"' lib/v2.sh
+grep -q 'DEVBOX_GUEST_CONFIG_ROOT="$HOME/.config/devbox-v2"' lib/v2.sh
+if "$ROOT/devbox" v2 invalid >/dev/null 2>&1; then
+    printf 'ERROR: invalid v2 command was accepted\n' >&2
+    exit 1
+fi
+if "$ROOT/devbox" v2 exec >/dev/null 2>&1; then
+    printf 'ERROR: v2 exec without a command was accepted\n' >&2
+    exit 1
+fi
 
 poc_home="$validation_root/isolation-poc-home"
 poc_colima_bin="$validation_root/isolation-poc-bin"
