@@ -38,10 +38,17 @@ check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
 check "OpenCode v2 config" test -f "$HOME/.config/opencode/opencode.jsonc"
+check "OpenCode global guidance" test -f "$HOME/.config/opencode/AGENTS.md"
 check "OpenCode v1 config is absent" test ! -e "$HOME/.config/opencode/opencode.json"
 check "OpenCode loop agents" test -f "$HOME/.config/opencode/agents/loop-implementer.md" -a \
     -f "$HOME/.config/opencode/agents/loop-reviewer.md" -a \
     -f "$HOME/.config/opencode/agents/loop-reviewer-deep.md"
+check "legacy filesystem MCP is absent" bash -c '
+    [ ! -f "$HOME/.mcp.json" ] || ! jq -e "
+        .mcpServers.filesystem |
+        .command == \"npx\" and (.args | index(\"@modelcontextprotocol/server-filesystem\"))
+    " "$HOME/.mcp.json" >/dev/null 2>&1
+'
 
 tool_failures=0
 zsh -lic '

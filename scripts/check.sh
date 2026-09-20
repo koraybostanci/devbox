@@ -200,7 +200,7 @@ awk '
 grep -q '^OPENCODE_VERSION="2\.' provision/versions.env
 grep -q '^OPENCODE_SHA256="[0-9a-f]\{64\}"' provision/versions.env
 if grep -R -E -- 'install-skills\.txt|server-filesystem' \
-    provision/config/opencode provision/scripts/lib/configure.sh provision/scripts/lib/addons.sh; then
+    provision/config/opencode provision/scripts/lib/addons.sh; then
     printf 'ERROR: legacy OpenCode v1 or filesystem MCP configuration found\n' >&2
     exit 1
 fi

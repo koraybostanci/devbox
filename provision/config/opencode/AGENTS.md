@@ -1,6 +1,6 @@
 # Devbox Agent Guidance
 
-Work only within the active repository under `~/workspace`. Do not read or
+Work only within the active repository under `~/projects`. Do not read or
 modify credential files, provider state, or files outside the active project
 unless the user explicitly asks.
 
