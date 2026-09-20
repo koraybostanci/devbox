@@ -10,7 +10,7 @@ shell_quote() {
 render_guest_env() {
     local key value
     local -a guest_keys=(
-        GIT_NAME GIT_EMAIL ANTHROPIC_API_KEY
+        GIT_NAME GIT_EMAIL
         POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_PORT
     )
 

@@ -163,8 +163,17 @@ fi
 
 jq empty \
     provision/config/claude/settings.json \
-    provision/config/mcp.json \
-    provision/config/opencode/opencode.json
+    provision/config/opencode/opencode.jsonc
+jq -e '
+    .update == "disable" and
+    .server.hostname == "127.0.0.1" and
+    .server.mdns == false and
+    (.agents.build.permissions | length == 4)
+' provision/config/opencode/opencode.jsonc >/dev/null
+[ -f provision/config/opencode/AGENTS.md ]
+[ -f provision/config/opencode/agents/loop-implementer.md ]
+[ -f provision/config/opencode/agents/loop-reviewer.md ]
+[ -f provision/config/opencode/agents/loop-reviewer-deep.md ]
 
 sed \
     -e 's/{{CPU}}/4/g' \
@@ -186,19 +195,16 @@ yq eval '.' "$rendered_colima" >/dev/null
 [ "$(yq eval '.mounts[2].mountPoint' "$rendered_colima")" = /mnt/devbox/data ]
 
 awk '
-    !/^[[:space:]]*(#|$)/ {
-        if (NF < 3 || $1 != "npx" || $2 ~ /^-/) exit 1
-        unattended = 0
-        for (field = 2; field <= NF; field++) {
-            if ($field == "-y" || $field == "--yes") unattended = 1
-            if ($field !~ /^[A-Za-z0-9@.,_=\/:\-]+$/) exit 1
-        }
-        if (!unattended) exit 1
-    }
-' provision/config/install-skills.txt
-awk '
     !/^[[:space:]]*(#|$)/ && $0 !~ /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$/ { exit 1 }
 ' provision/config/install-plugins.txt
+grep -q '^OPENCODE_VERSION="2\.' provision/versions.env
+grep -q '^OPENCODE_SHA256="[0-9a-f]\{64\}"' provision/versions.env
+if grep -R -E -- 'install-skills\.txt|server-filesystem' \
+    provision/config/opencode provision/scripts/lib/addons.sh; then
+    printf 'ERROR: legacy OpenCode v1 or filesystem MCP configuration found\n' >&2
+    exit 1
+fi
+grep -q 'npm uninstall --global --silent opencode-ai' provision/scripts/lib/apps.sh
 if grep -q '^PYENV_VERSION=' provision/versions.env; then
     printf 'ERROR: PYENV_VERSION is reserved by pyenv as a runtime selector\n' >&2
     exit 1
