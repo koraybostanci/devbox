@@ -244,6 +244,7 @@ PostgreSQL binds only to `127.0.0.1:${POSTGRES_PORT}` and stores data in the `de
 | `devbox rebuild` | Recreate guest OS and tools |
 | `devbox destroy` | Remove VM and Docker runtime data |
 | `devbox uninstall` | Remove the CLI symlink |
+| `devbox isolation-poc [check]` | Run or verify the separate experimental isolation POC |
 
 Run `devbox help` for subcommand details.
 
@@ -263,4 +264,4 @@ Validate repository changes with:
 scripts/check.sh
 ```
 
-For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), and the [release checklist](docs/release-checklist.md).
+For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental isolation POC](docs/isolation-poc.md), and the [release checklist](docs/release-checklist.md).

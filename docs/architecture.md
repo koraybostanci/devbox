@@ -26,6 +26,19 @@ The Docker CLI still receives `DOCKER_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/d
 
 The generated Colima profile disables Docker auto-activation, automatic SSH config edits, and SSH-agent forwarding. Starting devbox therefore does not change the host's active Docker context or expose host signing capabilities.
 
+## Experimental Isolation POC
+
+The opt-in `devbox isolation-poc` command owns a separate
+`devbox-isolation-poc` profile and does not interact with normal-profile
+ownership, mounts, data, or SSH configuration. It renders only supported
+Colima 0.10.3 bridged-network settings and no `mounts` key, then verifies the
+resulting guest and generated Lima configuration. It rejects other Colima
+versions because its literal `user-v2` topology check is specific to 0.10.3.
+Its Lima state and Docker CLI configuration are both separate from normal
+devbox state. See [the POC document](isolation-poc.md) for its required
+operator-supplied DNS/deny targets and the current strict failure caused by
+Colima's generated `user-v2` network.
+
 ## SSH
 
 Colima generates the raw connection details and dedicated identity path. The launcher normalizes these into `Host devbox`, inserts `ForwardAgent no`, atomically writes `~/.ssh/config.d/devbox`, and mirrors that entry in a marked block in `~/.ssh/config`. The direct block supports IDE SSH parsers that do not follow `Include` directives and is refreshed whenever Colima changes the port. `destroy` removes both managed representations without touching unrelated SSH hosts.

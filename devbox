@@ -24,6 +24,7 @@ source "$DEVBOX_DIR/lib/colima.sh"
 source "$DEVBOX_DIR/lib/guest.sh"
 source "$DEVBOX_DIR/lib/containers.sh"
 source "$DEVBOX_DIR/lib/doctor.sh"
+source "$DEVBOX_DIR/lib/isolation-poc.sh"
 
 usage() {
     cat <<'EOF'
@@ -59,6 +60,7 @@ Lifecycle:
     uninstall                      Remove this checkout's devbox symlink
 
 Other:
+    isolation-poc [check]          Run or verify the experimental isolation POC
     help                           Show this help message
 
 Typical workflow:
@@ -194,6 +196,10 @@ case "$cmd" in
         ;;
     containers)
         run_containers "$@"
+        ;;
+    isolation-poc)
+        [ $# -le 1 ] || die "Usage: devbox isolation-poc [check]"
+        run_isolation_poc "${1:-start}"
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""
