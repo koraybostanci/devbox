@@ -190,6 +190,7 @@ validate_env_file() {
 }
 
 load_env() {
+    local mode="${1:-legacy}"
     local key line value_expression
     validate_env_file
     for key in "${ENV_KEYS[@]}"; do
@@ -217,8 +218,10 @@ load_env() {
     DEVBOX_CPU="${DEVBOX_CPU:-4}"
     DEVBOX_MEMORY="${DEVBOX_MEMORY:-4}"
     DEVBOX_DISK="${DEVBOX_DISK:-60}"
-    DEVBOX_PROJECTS_DIR="${DEVBOX_PROJECTS_DIR:-$(dirname "$DEVBOX_DIR")/projects}"
-    DEVBOX_DATA_DIR="${DEVBOX_DATA_DIR:-$(dirname "$DEVBOX_DIR")/data}"
+    if [ "$mode" = legacy ]; then
+        DEVBOX_PROJECTS_DIR="${DEVBOX_PROJECTS_DIR:-$(dirname "$DEVBOX_DIR")/projects}"
+        DEVBOX_DATA_DIR="${DEVBOX_DATA_DIR:-$(dirname "$DEVBOX_DIR")/data}"
+    fi
     POSTGRES_USER="${POSTGRES_USER:-dev}"
     POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-devpass}"
     POSTGRES_DB="${POSTGRES_DB:-dev}"
@@ -228,8 +231,10 @@ load_env() {
     validate_integer_range DEVBOX_MEMORY "$DEVBOX_MEMORY" 2 32
     validate_integer_range DEVBOX_DISK "$DEVBOX_DISK" 20 512
     validate_integer_range POSTGRES_PORT "$POSTGRES_PORT" 1024 65535
-    validate_local_path DEVBOX_PROJECTS_DIR "$DEVBOX_PROJECTS_DIR"
-    validate_local_path DEVBOX_DATA_DIR "$DEVBOX_DATA_DIR"
+    if [ "$mode" = legacy ]; then
+        validate_local_path DEVBOX_PROJECTS_DIR "$DEVBOX_PROJECTS_DIR"
+        validate_local_path DEVBOX_DATA_DIR "$DEVBOX_DATA_DIR"
+    fi
 }
 
 validate_integer_range() {

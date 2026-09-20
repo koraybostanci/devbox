@@ -32,6 +32,28 @@ user-mode network. Do not treat successful guest reachability checks as proof
 that an external firewall/VLAN exists; configure and validate that policy
 outside devbox.
 
+## Experimental v2 no-mount profile
+
+`devbox v2` is independent of legacy lifecycle commands and of
+`devbox isolation-poc`. It requires a mode-0600 `.env` with Git identity values,
+but it does not create or validate the legacy host projects/data paths. Use its
+own status command when diagnosing it:
+
+```sh
+devbox v2 status
+devbox v2 start
+devbox v2 provision
+```
+
+If bundle installation or provisioning fails, the guest remains available for
+inspection through `devbox v2 connect`. A subsequent `devbox v2 provision`
+re-streams the bundle and retries the guest stages. Do not use `/provision` in
+v2: its installed bundle is under `~/.local/share/devbox-v2/bundles/`.
+
+No-mount means no host filesystem mounts; it does not mean network isolation.
+The unresolved Colima 0.10.3 `user-v2` limitation reported by the isolation POC
+also remains unresolved for v2.
+
 ## Environment Rejected
 
 `.env` must contain only supported uppercase assignments with JSON-compatible double-quoted string values and have mode 0600:

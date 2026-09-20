@@ -107,6 +107,30 @@ devbox stop
 
 `start` waits for SSH and mounts, refreshes the dynamic IDE connection, streams the allowlisted guest environment over stdin, and provisions only when repository inputs changed. It never opens a shell, browser, or authentication prompt.
 
+## Experimental v2: no host mounts
+
+`devbox v2` is an explicitly opt-in, separate `devbox-v2` profile. It has no
+host filesystem mounts: the launcher hashes the current checkout's
+`provision/` tree, streams that bundle over its Colima SSH connection, and
+installs it atomically in the guest before provisioning.
+
+```sh
+devbox v2 start
+devbox v2 connect
+devbox v2 stop
+```
+
+Supported v2 actions are `start`, `provision`, `connect`, `exec`, `status`,
+`stop`, and `destroy`. v2 does not create an SSH host alias, alter host Docker
+configuration, or use the legacy projects/data directories. It currently uses
+the configured guest's normal user only; a dedicated v2 identity, workspace,
+and authentication workflow are future phases.
+
+> [!IMPORTANT]
+> No-mount v2 is not a network-isolation claim. Phase 1 found that stock
+> Colima 0.10.3 retains Lima's `user-v2` network even for the separate isolation
+> POC. v2 is independent of that unresolved limitation.
+
 ## IDEs
 
 Always run `devbox start` first. Both editors connect through the managed OpenSSH host named `devbox`.
@@ -245,6 +269,7 @@ PostgreSQL binds only to `127.0.0.1:${POSTGRES_PORT}` and stores data in the `de
 | `devbox destroy` | Remove VM and Docker runtime data |
 | `devbox uninstall` | Remove the CLI symlink |
 | `devbox isolation-poc [check]` | Run or verify the separate experimental isolation POC |
+| `devbox v2 <action>` | Run the separate experimental no-mount v2 profile |
 
 Run `devbox help` for subcommand details.
 
@@ -264,4 +289,4 @@ Validate repository changes with:
 scripts/check.sh
 ```
 
-For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental isolation POC](docs/isolation-poc.md), the [phased roadmap](docs/roadmap.md), and the [release checklist](docs/release-checklist.md).
+For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental no-mount v2 guide](docs/v2.md), the [experimental isolation POC](docs/isolation-poc.md), the [phased roadmap](docs/roadmap.md), and the [release checklist](docs/release-checklist.md).

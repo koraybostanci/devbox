@@ -19,12 +19,12 @@ source "$BOOTSTRAP_DIR/lib/common.sh"
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
 PROFILE="devbox"
 source "$DEVBOX_DIR/lib/config.sh"
-configure_paths
 source "$DEVBOX_DIR/lib/colima.sh"
 source "$DEVBOX_DIR/lib/guest.sh"
 source "$DEVBOX_DIR/lib/containers.sh"
 source "$DEVBOX_DIR/lib/doctor.sh"
 source "$DEVBOX_DIR/lib/isolation-poc.sh"
+source "$DEVBOX_DIR/lib/v2.sh"
 
 usage() {
     cat <<'EOF'
@@ -61,6 +61,8 @@ Lifecycle:
 
 Other:
     isolation-poc [check]          Run or verify the experimental isolation POC
+    v2 <start|provision|connect|exec|status|stop|destroy>
+                                   Run the experimental no-mount v2 profile
     help                           Show this help message
 
 Typical workflow:
@@ -76,6 +78,8 @@ EOF
 
 cmd="${1:-}"
 shift || true
+
+[ "$cmd" = v2 ] || configure_paths
 
 case "$cmd" in
     help | --help | -h)
@@ -200,6 +204,9 @@ case "$cmd" in
     isolation-poc)
         [ $# -le 1 ] || die "Usage: devbox isolation-poc [check]"
         run_isolation_poc "${1:-start}"
+        ;;
+    v2)
+        run_v2 "$@"
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""

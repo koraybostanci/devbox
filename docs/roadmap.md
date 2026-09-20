@@ -42,6 +42,10 @@ Every phase, including a follow-up after a merged phase, uses this process:
 **Purpose.** Deliver an opt-in v2 profile and distributable bundle that starts
 without host project or data mounts, building on the isolation POC.
 
+**Status.** Implementation is in progress and remains unmerged. The no-mount
+profile is independent of Phase 1's unresolved Colima `user-v2` network
+limitation; it makes no strict-isolation claim.
+
 **Compatibility guarantee.** The existing `devbox` profile, its mounts,
 `devbox` SSH alias, persisted data, and commands remain unchanged; the v2
 profile is separate and explicitly selected.

@@ -2,8 +2,11 @@
 
 set -Eeuo pipefail
 
+export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/provision}"
+export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
+
 set -a
-source /provision/versions.env
+source "$DEVBOX_PROVISION_ROOT/versions.env"
 set +a
 
 failures=0
@@ -25,13 +28,31 @@ has_mode() {
     [ -f "$path" ] && [ "$(stat -c '%a' "$path")" = "$expected" ]
 }
 
+has_verified_v2_bundle() {
+    local root="$1" digest actual
+
+    digest="$(cat "$root/.devbox-bundle.sha256" 2>/dev/null || true)"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+    actual="$(
+        cd "$root"
+        find . -type f ! -path './.devbox-bundle.sha256' -print | LC_ALL=C sort | while IFS= read -r path; do
+            printf '%s\t%s\n' "${path#./}" "$(sha256sum "$path" | cut -d ' ' -f1)"
+        done | sha256sum | cut -d ' ' -f1
+    )"
+    [ "$actual" = "$digest" ]
+}
+
 login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
-check "guest environment permissions" has_mode "$HOME/.config/devbox/env" 600
-check "projects mount is writable" test -w /mnt/devbox/projects
-check "data mount is writable" test -w /mnt/devbox/data
+check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
+if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
+    check "guest-local provisioning bundle" has_verified_v2_bundle "$DEVBOX_PROVISION_ROOT"
+else
+    check "projects mount is writable" test -w /mnt/devbox/projects
+    check "data mount is writable" test -w /mnt/devbox/data
+fi
 check "Docker daemon" docker info
 check "Docker Compose" docker compose version
 check "Git identity" test -n "$(git config --global user.name)"
