@@ -264,4 +264,4 @@ Validate repository changes with:
 scripts/check.sh
 ```
 
-For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental isolation POC](docs/isolation-poc.md), and the [release checklist](docs/release-checklist.md).
+For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental isolation POC](docs/isolation-poc.md), the [phased roadmap](docs/roadmap.md), and the [release checklist](docs/release-checklist.md).
