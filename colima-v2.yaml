@@ -1,0 +1,11 @@
+cpu: {{CPU}}
+memory: {{MEMORY}}
+disk: {{DISK}}
+arch: aarch64
+vmType: vz
+runtime: docker
+autoActivate: false
+sshPort: 0
+portForwarder: none
+forwardAgent: false
+sshConfig: false

@@ -39,6 +39,28 @@ devbox state. See [the POC document](isolation-poc.md) for its required
 operator-supplied DNS/deny targets and the current strict failure caused by
 Colima's generated `user-v2` network.
 
+## Experimental v2 no-mount profile
+
+`devbox v2` owns a second standard-home Colima profile, `devbox-v2`, with its
+own ownership schema, lock, host state root, and guest state root. Its VZ/Docker
+template intentionally omits the `mounts` key, disables auto activation, host
+SSH configuration, SSH-agent forwarding, and Colima port forwarding. It invokes
+Colima with `DOCKER_CONFIG` unset and does not use the normal profile wrapper,
+mount wait, Docker configuration, SSH alias, or Mac project/data paths.
+
+The v2 bundle digest is a sorted list of each `provision/` file and its SHA-256
+digest. On a stale digest, the launcher streams the sorted tree as a tar archive
+over the profile's dedicated SSH transport. The guest extracts to a temporary
+directory, verifies the required stage scripts, writes the digest marker, and
+atomically moves the `provision/` tree to
+`~/.local/share/devbox-v2/bundles/<digest>`. The system, tools, and verification
+stages run from that installed root; the guest environment is separately
+transferred to `~/.config/devbox-v2/env`.
+
+No-mount v2 does not assert strict network isolation. Phase 1 showed that stock
+Colima 0.10.3 retains a Lima `user-v2` network in the isolation POC. The v2
+profile neither depends on nor resolves that finding.
+
 ## SSH
 
 Colima generates the raw connection details and dedicated identity path. The launcher normalizes these into `Host devbox`, inserts `ForwardAgent no`, atomically writes `~/.ssh/config.d/devbox`, and mirrors that entry in a marked block in `~/.ssh/config`. The direct block supports IDE SSH parsers that do not follow `Include` directives and is refreshed whenever Colima changes the port. `destroy` removes both managed representations without touching unrelated SSH hosts.

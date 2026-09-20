@@ -17,6 +17,7 @@ ensure_managed_link() {
 }
 
 configure_mounts() {
+    [ "${DEVBOX_NO_MOUNTS:-false}" = true ] && return
     stage "Persistent mounts"
     [ -d /mnt/devbox/projects ] && [ -w /mnt/devbox/projects ]
     [ -d /mnt/devbox/data ] && [ -w /mnt/devbox/data ]
@@ -39,10 +40,10 @@ configure_opencode() {
     stage "OpenCode v2 configuration"
     mkdir -p "$config_directory/agents" "$config_directory/skills"
     command rm -f "$config_directory/opencode.json"
-    atomic_copy /provision/config/opencode/opencode.jsonc "$config_directory/opencode.jsonc"
-    cp -R /provision/config/opencode/agents/. "$config_directory/agents/"
-    cp -R /provision/config/skills/. "$config_directory/skills/"
-    atomic_copy /provision/config/opencode/AGENTS.md "$config_directory/AGENTS.md" 644
+    atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/opencode.jsonc" "$config_directory/opencode.jsonc"
+    cp -R "$DEVBOX_PROVISION_ROOT/config/opencode/agents/." "$config_directory/agents/"
+    cp -R "$DEVBOX_PROVISION_ROOT/config/skills/." "$config_directory/skills/"
+    atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/AGENTS.md" "$config_directory/AGENTS.md" 644
 
     if [ -f "$legacy_mcp" ] && jq -e '
         .mcpServers.filesystem |
@@ -62,15 +63,15 @@ configure_opencode() {
 
 configure_claude() {
     mkdir -p "$HOME/.claude/skills"
-    atomic_copy /provision/config/claude/CLAUDE.md "$HOME/.claude/CLAUDE.md"
-    atomic_copy /provision/config/claude/settings.json "$HOME/.claude/settings.json"
-    if [ -d /provision/config/skills ]; then
-        cp -R /provision/config/skills/. "$HOME/.claude/skills/"
+    atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+    atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/settings.json" "$HOME/.claude/settings.json"
+    if [ -d "$DEVBOX_PROVISION_ROOT/config/skills" ]; then
+        cp -R "$DEVBOX_PROVISION_ROOT/config/skills/." "$HOME/.claude/skills/"
     fi
 }
 
 configure_shell() {
-    atomic_copy /provision/config/zsh/zshrc "$HOME/.zshrc" 644
+    atomic_copy "$DEVBOX_PROVISION_ROOT/config/zsh/zshrc" "$HOME/.zshrc" 644
     zsh -n "$HOME/.zshrc"
     if [ "$(getent passwd "$USER" | cut -d: -f7)" != "$(command -v zsh)" ]; then
         sudo chsh -s "$(command -v zsh)" "$USER"

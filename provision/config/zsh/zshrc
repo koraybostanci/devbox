@@ -9,7 +9,11 @@ export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-arm64"
 export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
 export PATH="$JAVA_HOME/bin:$PATH"
 
-[[ -r "$HOME/.config/devbox/env" ]] && source "$HOME/.config/devbox/env"
+if [[ -r "$HOME/.config/devbox-v2/env" ]]; then
+    source "$HOME/.config/devbox-v2/env"
+else
+    [[ -r "$HOME/.config/devbox/env" ]] && source "$HOME/.config/devbox/env"
+fi
 [[ -r "$ZSH/oh-my-zsh.sh" ]] && source "$ZSH/oh-my-zsh.sh"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 [[ -r "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
