@@ -148,7 +148,7 @@ validate_isolation_poc_deny_targets() {
 check_isolation_poc_ownership() {
     local owner_version owner_checkout
 
-    [ -e "$ISOLATION_POC_COLIMA_PROFILE" ] || return
+    [ -e "$ISOLATION_POC_COLIMA_PROFILE" ] || return 0
     [ -f "$ISOLATION_POC_COLIMA_OWNER" ] ||
         die "Colima profile '$ISOLATION_POC_PROFILE' already exists but is not owned by this checkout"
     owner_version="$(sed -n '1p' "$ISOLATION_POC_COLIMA_OWNER")"
@@ -215,9 +215,11 @@ isolation_poc_guest() {
 }
 
 verify_isolation_poc_config() {
+    local actual_interface actual_dns
+
     [ -f "$ISOLATION_POC_COLIMA_CONFIG" ] ||
         die "Isolation POC profile has not been configured; run 'devbox isolation-poc'"
-    yq -e --arg interface "$DEVBOX_ISOLATION_POC_INTERFACE" --argjson dns "$(printf '%s\n' "$DEVBOX_ISOLATION_POC_DNS" | jq -Rc 'split(",")')" '
+    yq -e '
         .runtime == "docker" and
         .vmType == "vz" and
         .autoActivate == false and
@@ -227,11 +229,17 @@ verify_isolation_poc_config() {
         (.mounts == null) and
         .network.address == true and
         .network.mode == "bridged" and
-        .network.interface == $interface and
-        .network.preferredRoute == true and
-        .network.dns == $dns
+        .network.preferredRoute == true
     ' "$ISOLATION_POC_COLIMA_CONFIG" >/dev/null ||
         die "Isolation POC configuration no longer satisfies the strict profile requirements"
+    actual_interface="$(yq eval '.network.interface' "$ISOLATION_POC_COLIMA_CONFIG")" ||
+        die "Unable to read the isolation POC network interface"
+    [ "$actual_interface" = "$DEVBOX_ISOLATION_POC_INTERFACE" ] ||
+        die "Isolation POC configuration has an unexpected network interface"
+    actual_dns="$(yq eval '.network.dns | join(",")' "$ISOLATION_POC_COLIMA_CONFIG")" ||
+        die "Unable to read the isolation POC DNS configuration"
+    [ "$actual_dns" = "$DEVBOX_ISOLATION_POC_DNS" ] ||
+        die "Isolation POC configuration has unexpected DNS resolvers"
 }
 
 verify_isolation_poc_no_user_network() {
