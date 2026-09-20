@@ -26,6 +26,7 @@ devbox destroy    # remove VM/runtime data after strong confirmation
 devbox github [login|status|logout]
 devbox databricks [login|status|logout]
 devbox containers [service] [up|down|ps|logs]  # manage containers from the Mac
+devbox isolation-poc [check]  # experimental separate bridged-network isolation test
 ```
 
 `devbox install` creates a symlink in a writable user-local directory already on `PATH`; it never writes `/usr/local/bin` with `sudo`.
@@ -43,6 +44,8 @@ The host parses an allowlisted `.env` and streams guest values over stdin into m
 `colima.yaml` mounts `provision/` read-only at `/provision`, projects at `/mnt/devbox/projects`, and data at `/mnt/devbox/data`; safe guest-home symlinks expose the latter two as `~/projects` and `~/data`. Template values are rendered into the standard `devbox` Colima profile before start. A content digest of `colima.yaml` and `provision/` controls convergence.
 
 The launcher maintains a marked `Host devbox` block directly in `~/.ssh/config` because JetBrains may not follow `Include` directives. The block is refreshed after every start/rebuild with Colima's dynamic port and dedicated key. Host SSH-agent forwarding is disabled.
+
+`devbox isolation-poc` is an experimental, opt-in profile named `devbox-isolation-poc`. It is separate from the normal profile and deliberately does not provision or mount repository files. Its external firewall/VLAN prerequisites and the Colima 0.10.3 user-mode-network limitation are documented in `docs/isolation-poc.md`.
 
 ## Key files
 
