@@ -5,9 +5,10 @@ except the repository and your Colima installation on the guest.
 
 ## Host / guest boundary
 
-- The host owns the repository, `.env`, the Colima profile, and a marked
-  OpenSSH host alias for `devbox`. It needs only Colima and the OpenSSH
-  client.
+- The host owns the repository or the installed release, the host
+  configuration (`.env` in a checkout, `~/.config/devbox/env` for release
+  installs), the Colima profile, and a marked OpenSSH host alias for `devbox`.
+  It needs only Colima and the OpenSSH client.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
@@ -64,13 +65,33 @@ Provisioning installs a small guest-local `devbox` companion at
 
 ## Release distribution
 
-`scripts/release.sh` builds a deterministic, versioned archive with a per-file
-`MANIFEST` and `SHA256SUMS`, signs `SHA256SUMS`, and verifies checksums and
-signature before extracting with path-traversal protection. Installs go below
-`~/.local/share/devbox/releases/<version>` and are activated through
-`~/.local/share/devbox/current`. The `Release` workflow builds, signs with the
+`VERSION` is the source of truth for release builds; the `Release` workflow
+refuses a tag or dispatch version that does not match it. `scripts/release.sh`
+builds `dist/devbox-<version>/devbox-<version>.tar.gz` with a per-file
+`MANIFEST` and sibling `SHA256SUMS`, signs `SHA256SUMS`, and verifies
+fail-closed before extracting into the install root: checksum, signature
+(against the committed `release-signing-key.pub.pem`, overridable with
+`DEVBOX_RELEASE_PUBKEY`), exactly one `devbox-<version>` top-level directory,
+regular-file/directory entry types, and every MANIFEST path and hash. The
+staged tree is re-validated from the exact bytes that are installed. `VERSION`
+is optional inside the tree (legacy archives predate it) but must match the
+release directory name when present.
+
+Installs go below the canonical data root
+`${XDG_DATA_HOME:-$HOME/.local/share}/devbox`: releases at
+`releases/<version>`, activation through `current`. Upgrades install a new
+version alongside the old one and leave the other version directories in
+place; an existing version directory is replaced only when its tree no longer
+matches its `MANIFEST`, or when `install --force` is passed. A legacy in-tree
+`.env` is copied to the stable host configuration path before its release
+directory is replaced. Release installs keep host configuration at
+`~/.config/devbox/env` (mode 0600) instead of inside the
+versioned tree, and the Colima ownership marker records the install root (the
+data root for releases, the checkout directory for checkouts), so a release
+upgrade does not invalidate it. The `Release` workflow builds, signs with the
 `RELEASE_SIGNING_KEY` secret, verifies against the committed
-`release-signing-key.pub.pem`, and publishes the artifacts.
+`release-signing-key.pub.pem`, and publishes the archive, `SHA256SUMS`, and
+`SHA256SUMS.sig`.
 
 ## Lifecycle
 

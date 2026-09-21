@@ -1,13 +1,26 @@
 #!/bin/bash
 
 DEVBOX_PROFILE="devbox"
-DEVBOX_OWNER_VERSION="devbox-profile-v1"
+DEVBOX_OWNER_VERSION="devbox-profile-v2"
+DEVBOX_OWNER_LEGACY_VERSION="devbox-profile-v1"
 DEVBOX_GUEST_USER="devbox"
 DEVBOX_GUEST_HOME="/home/$DEVBOX_GUEST_USER"
 DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_HOME/.config/devbox"
 DEVBOX_GUEST_ROOT="/var/lib/devbox"
 DEVBOX_GUEST_PROVISIONING_ROOT="$DEVBOX_GUEST_ROOT/provisioning"
 DEVBOX_SSH_AUTHORIZED_KEYS_FILE='/etc/ssh/authorized_keys/%u'
+
+# A release tree records the data root as the install root; a checkout records
+# its own directory.
+devbox_install_root_for() {
+    local directory="$1" data_root
+
+    data_root="$(devbox_data_root)"
+    case "$directory" in
+        "$data_root"/releases/*) printf '%s\n' "$data_root" ;;
+        *) printf '%s\n' "$directory" ;;
+    esac
+}
 
 configure_devbox_paths() {
     local colima_home
@@ -22,7 +35,8 @@ configure_devbox_paths() {
         *) die "devbox requires LIMA_HOME to be unset or $DEVBOX_LIMA_HOME" ;;
     esac
     DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
-    DEVBOX_SHARED_LOCK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devbox/locks"
+    DEVBOX_INSTALL_ROOT="$(devbox_install_root_for "$DEVBOX_DIR")"
+    DEVBOX_SHARED_LOCK_DIR="$(devbox_data_root)/locks"
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
     DEVBOX_COLIMA_OWNER="$DEVBOX_COLIMA_PROFILE/.devbox-owner"
@@ -40,23 +54,37 @@ check_devbox_dependencies() {
     done
     [ "${#missing[@]}" -eq 0 ] ||
         die "Missing host dependencies for devbox: ${missing[*]}. Install Colima from https://colima.run."
-    colima_version="$(devbox_colima version | awk 'NR == 1 {print $3}')"
+    colima_version="$(devbox_colima_raw version | awk 'NR == 1 {print $3}')"
     version_at_least "$colima_version" "$MINIMUM_COLIMA_VERSION" ||
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
 }
 
 check_devbox_ownership() {
-    local owner_version owner_checkout
+    local owner_version owner_path owner_root
 
     [ -e "$DEVBOX_COLIMA_PROFILE" ] || return 0
     [ -f "$DEVBOX_COLIMA_OWNER" ] ||
-        die "Colima profile '$DEVBOX_PROFILE' already exists but is not owned by this devbox checkout"
+        die "Colima profile '$DEVBOX_PROFILE' already exists but is not owned by this devbox installation"
     owner_version="$(sed -n '1p' "$DEVBOX_COLIMA_OWNER")"
-    owner_checkout="$(sed -n '2p' "$DEVBOX_COLIMA_OWNER")"
-    [ "$owner_version" = "$DEVBOX_OWNER_VERSION" ] ||
-        die "Invalid ownership marker in $DEVBOX_COLIMA_OWNER"
-    [ "$owner_checkout" = "$DEVBOX_DIR" ] ||
-        die "Colima profile '$DEVBOX_PROFILE' is owned by another devbox checkout: $owner_checkout"
+    owner_path="$(sed -n '2p' "$DEVBOX_COLIMA_OWNER")"
+    case "$owner_version" in
+        "$DEVBOX_OWNER_VERSION")
+            [ "$owner_path" = "$DEVBOX_INSTALL_ROOT" ] ||
+                die "Colima profile '$DEVBOX_PROFILE' is owned by another devbox installation: $owner_path"
+            ;;
+        "$DEVBOX_OWNER_LEGACY_VERSION")
+            # Legacy markers recorded the exact versioned directory. They still
+            # match when both directories resolve to the same install root;
+            # rewrite the marker in place and continue.
+            owner_root="$(devbox_install_root_for "$owner_path")"
+            [ "$owner_root" = "$DEVBOX_INSTALL_ROOT" ] ||
+                die "Colima profile '$DEVBOX_PROFILE' was created by $owner_path; stop the VM and run 'devbox install --adopt' to claim it for $DEVBOX_INSTALL_ROOT"
+            mark_devbox_profile_owned
+            ;;
+        *)
+            die "Unsupported ownership marker in $DEVBOX_COLIMA_OWNER; stop the VM and run 'devbox install --adopt' to claim it for $DEVBOX_INSTALL_ROOT"
+            ;;
+    esac
 }
 
 devbox_profile_exists() {
@@ -67,7 +95,7 @@ mark_devbox_profile_owned() {
     local temporary
 
     temporary="$(mktemp "$DEVBOX_COLIMA_PROFILE/.devbox-owner.XXXXXX")"
-    printf '%s\n%s\n' "$DEVBOX_OWNER_VERSION" "$DEVBOX_DIR" >"$temporary"
+    printf '%s\n%s\n' "$DEVBOX_OWNER_VERSION" "$DEVBOX_INSTALL_ROOT" >"$temporary"
     chmod 600 "$temporary"
     mv "$temporary" "$DEVBOX_COLIMA_OWNER"
 }
@@ -77,10 +105,11 @@ prepare_devbox_docker_config() {
     chmod 700 "$DEVBOX_DOCKER_CONFIG"
 }
 
-devbox_colima() {
+# Run Colima without consulting the ownership marker, so an unclaimed profile
+# can still be inspected (and adopted).
+devbox_colima_raw() {
     local colima_bin
 
-    check_devbox_ownership
     prepare_devbox_docker_config
     colima_bin="$(command -v colima 2>/dev/null || true)"
     [ -n "$colima_bin" ] && [ -x "$colima_bin" ] ||
@@ -91,9 +120,51 @@ devbox_colima() {
         "$colima_bin" "$@"
 }
 
+devbox_colima() {
+    check_devbox_ownership
+    devbox_colima_raw "$@"
+}
+
+# Claim an existing Colima profile for the current install root. The VM must be
+# stopped so the marker never refers to a running profile.
+adopt_devbox_profile() {
+    local state
+
+    check_host_platform
+    check_devbox_dependencies
+    devbox_profile_exists ||
+        die "devbox VM profile does not exist yet; run 'devbox start' first"
+    state="$(devbox_state_raw)"
+    case "$state" in
+        Running) die "devbox VM is Running; run 'devbox stop' before adopting the profile" ;;
+        '' | Stopped) ;;
+        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
+    esac
+    mark_devbox_profile_owned
+    log "Adopted Colima profile '$DEVBOX_PROFILE' for $DEVBOX_INSTALL_ROOT"
+}
+
+# Ownership-gated state lookup for commands that must belong to this install.
 devbox_state() {
-    devbox_colima list 2>/dev/null |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }'
+    local state
+
+    state="$(devbox_colima list |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
+        die "could not determine the devbox VM state"
+    }
+    printf '%s\n' "$state"
+}
+
+# Ownership-free state lookup, for reporting and for stopping a profile whose
+# marker still names another install root (`devbox stop; devbox install --adopt`).
+devbox_state_raw() {
+    local state
+
+    state="$(devbox_colima_raw list |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
+        die "could not determine the devbox VM state"
+    }
+    printf '%s\n' "$state"
 }
 
 validate_devbox_colima_config() {
@@ -1384,14 +1455,16 @@ stop_devbox_vm() {
         log "devbox VM is already stopped."
         return
     fi
-    state="$(devbox_state)"
+    # Stopping is not destructive and must work for a profile claimed by
+    # another install root, so the adoption path is reachable.
+    state="$(devbox_state_raw)"
     case "$state" in
         '' | Stopped) log "devbox VM is already stopped." ;;
         Running)
             if [ "$force" = true ]; then
-                devbox_colima stop --force "$DEVBOX_PROFILE"
+                devbox_colima_raw stop --force "$DEVBOX_PROFILE"
             else
-                devbox_colima stop "$DEVBOX_PROFILE"
+                devbox_colima_raw stop "$DEVBOX_PROFILE"
             fi
             ;;
         *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
@@ -1405,7 +1478,10 @@ show_devbox_status() {
         log "devbox: Not created"
         return
     fi
-    record="$(devbox_colima list 2>/dev/null | awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }')"
+    record="$(devbox_colima_raw list |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }')" || {
+        die "could not determine the devbox VM state"
+    }
     if [ -z "$record" ]; then
         log "devbox: Not created"
         return

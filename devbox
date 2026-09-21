@@ -27,6 +27,7 @@ Usage: devbox <command> [options]
 Get started:
     init                           Initialize and validate local configuration
     install                        Install the user-local devbox command
+    install --adopt                Claim an existing VM profile (VM must be stopped)
 
 Daily workflow:
     start                          Start and converge the VM
@@ -68,8 +69,15 @@ case "$cmd" in
         exit 0
         ;;
     install)
-        [ $# -eq 0 ] || die "Usage: devbox install"
-        install_cli "$DEVBOX_SCRIPT"
+        case "$#" in
+            0) install_cli "$DEVBOX_SCRIPT" ;;
+            1)
+                [ "$1" = "--adopt" ] || die "Usage: devbox install [--adopt]"
+                configure_devbox_paths
+                adopt_devbox_profile
+                ;;
+            *) die "Usage: devbox install [--adopt]" ;;
+        esac
         ;;
     uninstall)
         [ $# -eq 0 ] || die "Usage: devbox uninstall"

@@ -62,6 +62,11 @@ shell_quote() {
     printf '%q' "$1"
 }
 
+# Canonical host data root shared by release installs and locks.
+devbox_data_root() {
+    printf '%s/devbox\n' "${XDG_DATA_HOME:-$HOME/.local/share}"
+}
+
 choose_install_bin() {
     local candidate
 
@@ -109,7 +114,7 @@ install_cli() {
 
 uninstall_cli() {
     local source_path="$1"
-    local installed target
+    local installed target data_root release_current accepted=false
 
     installed="$(command -v devbox 2>/dev/null || true)"
     [ -n "$installed" ] || {
@@ -119,10 +124,31 @@ uninstall_cli() {
     [ -L "$installed" ] || die "$installed is not a symlink; refusing to remove it"
 
     target="$(resolve_path "$installed")"
-    [ "$target" = "$source_path" ] || die "$installed belongs to another checkout: $target"
+    data_root="$(devbox_data_root)"
+    release_current="$data_root/current"
+    if [ "$target" = "$source_path" ]; then
+        accepted=true
+    else
+        case "$target" in
+            "$release_current" | "$release_current"/*) accepted=true ;;
+            "$data_root"/releases/*) accepted=true ;;
+        esac
+    fi
+    [ "$accepted" = true ] || die "$installed belongs to another checkout: $target"
 
     command rm "$installed"
     log "Removed: $installed"
+
+    # Running from a release tree also drops the activation symlink. This
+    # command never deletes installed release trees.
+    case "$source_path" in
+        "$data_root"/releases/*)
+            if [ -L "$release_current" ]; then
+                command rm "$release_current"
+                log "Removed: $release_current"
+            fi
+            ;;
+    esac
 }
 
 acquire_lock() {
