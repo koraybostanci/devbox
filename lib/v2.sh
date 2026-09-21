@@ -729,9 +729,18 @@ authorize_v2_host_key() {
         mv "$temporary" "$sshd_config"
         sshd -t
         for user in "$guest_user" "$admin_user"; do
-            sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" |
-                grep -Fqx "authorizedkeysfile /etc/ssh/authorized_keys/%u" || {
+            effective="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" 2>/dev/null)" || {
+                printf "ERROR: v2 SSH configuration test failed for %s\\n" "$user" >&2
+                sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" >&2 || true
+                exit 1
+            }
+            printf "%s\\n" "$effective" | grep -Fqx "authorizedkeysfile /etc/ssh/authorized_keys/%u" || {
                 printf "ERROR: v2 SSH authorized-keys policy is not effective for %s\\n" "$user" >&2
+                printf "  drop-in %s: %s\\n" "$sshd_config" "$(cat "$sshd_config" 2>&1 || true)" >&2
+                printf "  effective: %s\\n" "$(printf "%s\\n" "$effective" | grep -i authorizedkeysfile || true)" >&2
+                printf "  include: %s\\n" "$(grep -n "Include" /etc/ssh/sshd_config 2>&1 || true)" >&2
+                printf "  drop-ins: %s\\n" "$(ls -1 /etc/ssh/sshd_config.d 2>&1 | tr "\\n" " " || true)" >&2
+                printf "  run-sshd: %s\\n" "$([ -d /run/sshd ] && printf present || printf missing)" >&2
                 exit 1
             }
         done
