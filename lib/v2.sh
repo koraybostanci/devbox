@@ -694,12 +694,10 @@ authorize_v2_host_key() {
             exit 1
         }
         for user in "$guest_user" "$admin_user"; do
-            case "$user" in
-                ''|*[!A-Za-z0-9_.-]*)
-                    printf "ERROR: invalid v2 SSH user: %s\\n" "$user" >&2
-                    exit 1
-                    ;;
-            esac
+            [[ "$user" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+                printf "ERROR: invalid v2 SSH user: %s\\n" "$user" >&2
+                exit 1
+            }
         done
         [ -d /etc/ssh ] && [ ! -L /etc/ssh ] || {
             printf "ERROR: OpenSSH configuration directory is invalid\\n" >&2

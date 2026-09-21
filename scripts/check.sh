@@ -1065,6 +1065,48 @@ V2_GUEST_PRIVILEGES_REMOTE_SHELL="$v2_guest_privileges_remote_shell" /bin/bash -
     printf 'ERROR: v2 guest privilege parser accepted !authenticate Defaults\n' >&2
     exit 1
 }
+v2_remote_payloads_dir="$validation_root/v2-remote-payloads"
+mkdir -p "$v2_remote_payloads_dir"
+HOME="$v2_home" V2_REMOTE_PAYLOADS_DIR="$v2_remote_payloads_dir" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/v2.sh"
+    v2_host_ssh_user() { printf "admin\n"; }
+    v2_host_public_key() {
+        printf "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test\n"
+    }
+    capture_payloads() {
+        local i j target
+        for ((i = 1; i <= $#; i++)); do
+            if [ "${!i}" = "-c" ]; then
+                j=$((i + 1))
+                target="$(mktemp "$V2_REMOTE_PAYLOADS_DIR/payload.XXXXXX")"
+                printf "%s" "${!j}" >"$target"
+            fi
+        done
+        return 0
+    }
+    v2_admin_guest() { capture_payloads "$@"; }
+    v2_as_guest() { capture_payloads "$@"; }
+    authorize_v2_host_key || true
+    validate_v2_guest_identity || true
+    validate_v2_guest_privileges || true
+    remove_v2_managed_guest_ssh_authorization || true
+' || {
+    printf 'ERROR: v2 remote payload capture failed\n' >&2
+    exit 1
+}
+v2_remote_payload_count=0
+for v2_remote_payload in "$v2_remote_payloads_dir"/payload.*; do
+    [ -f "$v2_remote_payload" ] || continue
+    v2_remote_payload_count=$((v2_remote_payload_count + 1))
+    bash -n "$v2_remote_payload" || {
+        printf 'ERROR: a v2 guest remote payload is not valid Bash: %s\n' "$v2_remote_payload" >&2
+        exit 1
+    }
+done
+[ "$v2_remote_payload_count" -ge 4 ] || {
+    printf 'ERROR: expected to capture at least 4 v2 remote payloads, captured %s\n' "$v2_remote_payload_count" >&2
+    exit 1
+}
 v2_guest_privileges_docker_write_capture="$validation_root/v2-guest-privileges-docker-write"
 HOME="$v2_home" V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE="$v2_guest_privileges_docker_write_capture" \
     ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
