@@ -53,16 +53,16 @@ weaken any later phase's exit criteria.
 The phases form this sequence; each later phase builds on the accepted
 identity, workspace, and configuration established earlier.
 
-1. Phase 5 — root-managed PostgreSQL and Valkey.
-2. Phase 6 — signed release distribution.
-3. Phase 7 — remove v2 host runtime dependencies.
-4. Phase 8 — explicit migration and default promotion.
+1. Phase 6 — signed release distribution.
+2. Phase 7 — remove v2 host runtime dependencies.
+3. Phase 8 — explicit migration and default promotion.
 
 Phase 3 (guest `devbox` identity and workspace) is complete and merged as
-PR #10, and Phase 4a (guest-local configuration and secret generation) is
-complete and merged as PR #14. Phase 4b (optional provider authentication)
-depends only on Phase 3 and is deliberately off the critical path: no later
-phase requires provider authentication, so it may be deferred or skipped.
+PR #10, Phase 4a (guest-local configuration and secret generation) as PR #14,
+and Phase 5 (root-managed PostgreSQL and Valkey) as PR #16. Phase 4b (optional
+provider authentication) depends only on Phase 3 and is deliberately off the
+critical path: no later phase requires provider authentication, so it may be
+deferred or skipped.
 
 ## Completed phases
 
@@ -116,6 +116,19 @@ phase requires provider authentication, so it may be deferred or skipped.
   unchanged.
 - Verified on macOS/Colima with `scripts/accept-phase4a.sh` (12/12 checks).
 
+### Phase 5: root-managed PostgreSQL and Valkey — complete (PR #16)
+
+- Pinned `postgres:18.3` and `valkey/valkey:8.1` run as a root-owned Compose
+  project (`devbox-v2`) under `/var/lib/devbox-v2/services/`, with persistent
+  data in `services/data/`.
+- Both services publish to `127.0.0.1` only; the `devbox` user reaches them over
+  loopback using the guest-local credentials and cannot control Docker or read
+  the root-only service env file.
+- `VALKEY_PASSWORD` is generated in-guest alongside `POSTGRES_PASSWORD`; the
+  legacy `devbox` Compose project, volume, and ports are untouched.
+- `devbox v2 services status` reports container health.
+- Verified on macOS/Colima with `scripts/accept-phase5.sh` (6/6 checks).
+
 ## Phase 4b: optional provider authentication
 
 Optional and off the critical path. This phase may be deferred or skipped
@@ -138,29 +151,6 @@ Phase 3's stable guest identity and workspace.
 - Optional provider authentication is never required by another phase.
 - Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
   and unchanged.
-
-## Phase 5: root-managed PostgreSQL and Valkey
-
-### Prerequisite
-
-Phase 4a's guest-local configuration location and guest-side secret
-generation. Phase 4b is not required.
-
-### Scope
-
-- Provide PostgreSQL and Valkey as root-managed, guest-only services for v2.
-- Use pinned guest-side container images/Compose definitions or an equivalently
-  root-managed service layer; the `devbox` user must not control Docker.
-- Bind services to guest loopback, namespace persistent data by v2
-  installation/profile, and generate credentials in the guest.
-- Expose only constrained management commands; do not replace or mutate the
-  legacy PostgreSQL Compose project, volumes, or ports.
-
-### Exit criteria
-
-- Both services are healthy, isolated from host/LAN access, and inaccessible
-  through the v2 user's Docker privileges.
-- Their v2 data lifecycle is documented, including explicit export/import.
 
 ## Phase 6: signed release distribution
 

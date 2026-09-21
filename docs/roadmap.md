@@ -20,7 +20,7 @@ or skipped without blocking any later phase.
 | Phase 3: guest identity and workspace | Complete | Phase 2 | PR #10 |
 | Phase 4a: guest config and secrets | Complete | Phase 3 | PR #14 |
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
-| Phase 5: PostgreSQL and Valkey | Not started | Phase 4a | — |
+| Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
 | Phase 6: signed release distribution | Not started | Phase 5 | — |
 | Phase 7: v2 host dependencies removed | Not started | Phase 6 | — |
 | Phase 8: migration and default promotion | Not started | Phase 7 | — |
@@ -109,6 +109,9 @@ the v2 guest; authentication is never required for the other phases.
 
 **Purpose.** Provide PostgreSQL and Valkey as root-managed services for v2
 rather than relying on the legacy user-managed container workflow.
+
+**Status.** Complete (PR #16). Verified on macOS/Colima with
+`scripts/accept-phase5.sh` (6/6 checks).
 
 **Compatibility guarantee.** The existing PostgreSQL container service,
 legacy Docker volumes, ports, data, mounts, SSH alias, and commands keep their
