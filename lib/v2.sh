@@ -226,7 +226,7 @@ create_v2_bundle_snapshot() {
     V2_BUNDLE_DIGEST="$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")"
     (
         cd "$V2_BUNDLE_SNAPSHOT"
-        if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
+        if [ "$(uname -s)" = "Darwin" ]; then
             COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$V2_BUNDLE_ARCHIVE" provision
         else
             COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
@@ -510,7 +510,8 @@ run_v2_guest_provisioning() {
     if ! v2_admin_guest bash -c '
         set -Eeuo pipefail
         export DEVBOX_PROVISION_ROOT="/var/lib/devbox-v2/bundles/$1"
-        sudo env DEVBOX_NO_MOUNTS=true DEVBOX_V2_GUEST_USER=devbox \
+        sudo env DEVBOX_PROVISION_ROOT="$DEVBOX_PROVISION_ROOT" \
+            DEVBOX_NO_MOUNTS=true DEVBOX_V2_GUEST_USER=devbox \
             bash "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
     ' _ "$digest"; then
         validate_v2_guest_preflight || {
