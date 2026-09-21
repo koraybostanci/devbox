@@ -1,296 +1,97 @@
 # devbox
 
-**A disposable Linux workstation that feels local.**
+A disposable, isolated Ubuntu development VM on macOS, powered by Colima.
 
-Keep your editors and project files on macOS. Run shells, compilers, CLIs, credentials, Docker, and project processes inside an isolated Ubuntu VM powered by Colima.
-
-[Quick start](#quick-start) | [Daily workflow](#daily-workflow) | [IDEs](#ides) | [Authentication](#authentication) | [Persistence](#persistence) | [Command reference](#command-reference)
-
-## At a Glance
-
-| Concern | Where it lives |
-|---|---|
-| Editors | macOS |
-| Projects and durable data | Mac-backed virtiofs mounts |
-| Toolchains and processes | Ubuntu 24.04 guest |
-| VM identity | Standard Colima profile named `devbox` |
-| GitHub and Databricks credentials | Guest-local stores |
-| Containers and volumes | Docker inside the guest |
-| IDE transport | Managed OpenSSH host `devbox` |
-
-```mermaid
-flowchart LR
-    IDE[VS Code or IntelliJ on macOS] -->|SSH host devbox| VM[Colima VM]
-    FILES[Mac projects and data] <-->|virtiofs| VM
-    VM --> TOOLS[Toolchains and CLIs]
-    VM --> DOCKER[Docker services]
-    VM -->|HTTPS| CLOUD[GitHub and Databricks]
-```
-
-The VM uses Colima's standard profile home, so `colima list` shows it alongside other profiles. The `devbox` profile name is reserved for this repository. The host Docker context stays untouched, and host SSH agents and private keys never enter the VM. Rebuild the guest whenever you like; your projects remain on the Mac.
+Your editors and project files stay on macOS; shells, compilers, CLIs, Docker,
+and project processes run inside the VM. The guest is fully self-contained —
+there are no host filesystem mounts — so you can rebuild or destroy it without
+touching your Mac.
 
 ## Requirements
 
-- Apple Silicon
-- macOS 13 or newer
-- Colima 0.10.3 or newer
-- VZ, virtiofs, and Docker
+- macOS 13+ on Apple Silicon
+- [Colima](https://colima.run) 0.10.3 or newer
+- The OpenSSH client (built in)
 
-Intel Macs, QEMU, Kubernetes, and alternate container runtimes are intentionally outside the supported path.
+Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 
-## Quick Start
-
-### 1. Install Host Tools
+## Quick start
 
 ```sh
-brew install colima docker docker-compose jq yq
+./devbox init          # create .env, then edit it and run init again
+./devbox start         # create and provision the VM
+./devbox connect       # open a zsh shell in the guest
+./devbox stop
 ```
 
-### 2. Clone and Initialize
+`./devbox install` puts `devbox` on your `PATH` (a symlink to this checkout).
+
+### Configuration
+
+`.env` (mode 0600, gitignored) holds only non-secret defaults:
 
 ```sh
-git clone https://github.com/koraybostanci/devbox.git
-cd devbox
-./devbox init
+export GIT_NAME="Your Name"
+export GIT_EMAIL="you@personal.com"
+export POSTGRES_USER="dev"
+export POSTGRES_DB="dev"
+export POSTGRES_PORT="15432"
+export DEVBOX_CPU="4"
+export DEVBOX_MEMORY="4"
+export DEVBOX_DISK="60"
 ```
 
-The first `init` creates `.env` with mode `0600`. Fill in your Git identity, optional Databricks host, local-service credentials, VM resources, and storage paths. Authenticate Claude Code and OpenCode inside the guest only when you need them.
+Secrets are never taken from the host: the guest generates its own service
+credentials.
 
-### 3. Install and Start
+## Daily workflow
 
 ```sh
-./devbox install
-devbox start
-devbox github login
+devbox start                 # start and converge the VM
+devbox connect               # shell in the guest
+devbox exec <command>        # run one command in the guest
+devbox status                # VM state and resources
+devbox stop [--force]
 ```
 
-`install` adds a user-local symlink without `sudo`. GitHub authorization opens on macOS and stores the resulting credential only in the guest.
+Your code lives on the guest disk at `/home/devbox/workspace`; it survives
+stop/start and is removed only by `devbox destroy`.
 
-### 4. Check the Result
+## Services
+
+PostgreSQL and Valkey run as root-managed containers inside the guest, bound to
+`127.0.0.1` only. The unprivileged `devbox` user cannot control Docker; it
+reaches the services over loopback using credentials in
+`~/.config/devbox-v2/secrets`.
 
 ```sh
-devbox doctor
-devbox ide
-colima list
+devbox services status
 ```
 
-When the checks pass and `colima list` shows `devbox` with the Docker runtime, connect an editor or enter the guest with `devbox connect`.
-
-> [!NOTE]
-> Upgrading a profile from the old home-based mount layout? Run `devbox rebuild` once to move it to `/mnt/devbox/*`.
-
-> [!IMPORTANT]
-> Versions that used a private Colima home require a one-time data migration. The CLI stops with a link to the [migration procedure](docs/troubleshooting.md#legacy-private-colima-home) instead of touching either profile. Back up Docker data before deleting the legacy VM.
-
-## Daily Workflow
-
-The usual loop is deliberately short:
+## Maintenance
 
 ```sh
-devbox start
-devbox connect
-# work
-devbox stop
+devbox provision             # force non-destructive provisioning
+devbox destroy               # remove the VM and its container runtime data
+devbox uninstall             # remove the devbox symlink
 ```
 
-| I want to... | Command |
-|---|---|
-| Start or converge the environment | `devbox start` |
-| Open a guest shell | `devbox connect` |
-| Run one guest command | `devbox exec <command> [args...]` |
-| Check VM resources | `devbox status` |
-| Verify IDE connection details | `devbox ide` |
-| Diagnose the full environment | `devbox doctor` |
-| Apply `.env` credential changes | `devbox rotate` |
-| Force provisioning without rebuilding | `devbox provision` |
-| Stop gracefully | `devbox stop` |
+## Releases
 
-`start` waits for SSH and mounts, refreshes the dynamic IDE connection, streams the allowlisted guest environment over stdin, and provisions only when repository inputs changed. It never opens a shell, browser, or authentication prompt.
-
-## Experimental v2: no host mounts
-
-`devbox v2` is an explicitly opt-in, separate `devbox-v2` profile. It has no
-host filesystem mounts: the launcher hashes the current checkout's
-`provision/` tree, streams that bundle over its Colima SSH connection, and
-installs it atomically in the guest before provisioning.
+Signed releases install without a checkout:
 
 ```sh
-devbox v2 start
-devbox v2 connect
-devbox v2 stop
+scripts/release.sh build <version>     # dist/devbox-<version>.tar.gz
+scripts/release.sh verify <archive>    # checksum, manifest, signature
+scripts/release.sh install <archive>   # ~/.local/share/devbox/releases/<version>
 ```
 
-Supported v2 actions are `start`, `provision`, `connect`, `exec`, `status`,
-`services status`, `stop`, and `destroy`. v2 daily work runs as the unprivileged
-guest user `devbox`, with its workspace at `/home/devbox/workspace`; it never
-creates or uses legacy `~/projects` or `~/data` mounts. The generated Colima
-account is reserved for bundle deployment and root provisioning. v2 adds the
-separate `devbox-v2` SSH host alias for direct IDE access as `devbox`, without
-changing the legacy `devbox` alias or host Docker configuration. PostgreSQL and
-Valkey run as root-managed guest services, reachable from `devbox` over
-loopback; optional provider authentication remains Phase 4b.
+`install` activates `~/.local/share/devbox/current`.
 
-> [!IMPORTANT]
-> No-mount v2 is not a network-isolation claim. Phase 1 found that stock
-> Colima 0.10.3 retains Lima's `user-v2` network even for the separate isolation
-> POC. v2 is independent of that unresolved limitation.
+## Security
 
-## IDEs
-
-Always run `devbox start` first. Both editors connect through the managed OpenSSH host named `devbox`.
-
-### VS Code
-
-1. Open **Remote - SSH**.
-2. Select `devbox`.
-3. Open `~/projects`.
-
-### IntelliJ IDEA
-
-1. Open JetBrains Gateway and create a new SSH configuration.
-2. Set **Host** to `devbox`.
-3. Select **OpenSSH config and authentication agent**.
-4. Enable **Parse config file `~/.ssh/config`**.
-5. Do not override the resolved port or identity.
-6. Connect and open `~/projects`.
-
-Colima assigns a new localhost port when the VM is recreated. The launcher refreshes a marked `Host devbox` block directly in `~/.ssh/config`, including the current port and dedicated key.
-
-> [!IMPORTANT]
-> Never save a guessed port such as `2222`. If Gateway shows `localhost`, an old port, or `agent` authentication after rebuild, delete that saved profile and create it again from `devbox`. Restart Gateway once if it cached the old config.
-
-For verified manual fallback values, run:
-
-```sh
-devbox ide
-```
-
-## Authentication
-
-IDE access and service authentication are separate. The IDE uses Colima's dedicated SSH key; cloud services use guest-local HTTPS/OAuth credentials.
-
-### GitHub
-
-```sh
-devbox github login
-devbox github status
-devbox github logout
-```
-
-Login opens GitHub's device page in the macOS browser. Enter the one-time code printed in the terminal. A plaintext-storage warning is expected because the headless guest has no desktop keychain; the mode-`0600` credential file remains inside the VM.
-
-Clone with HTTPS inside the guest:
-
-```sh
-gh repo clone owner/repository
-git remote set-url origin https://github.com/owner/repository.git
-```
-
-### Databricks
-
-Set `DATABRICKS_HOST` in `.env`, then manage the `DEFAULT` OAuth profile explicitly:
-
-```sh
-devbox databricks login
-devbox databricks status
-devbox databricks logout
-```
-
-> [!IMPORTANT]
-> Authentication is intentionally outside provisioning. After `rebuild` or `destroy`, log in to GitHub and Databricks again. No GitHub or Databricks token belongs in `.env`.
-
-### AI Coding Tools
-
-Claude Code and OpenCode v2 are installed without provider credentials. Connect
-to the guest, then use OpenCode's native `/connect` and `/models` flows when
-you are ready to configure a model provider:
-
-```sh
-devbox connect
-opencode
-```
-
-No Anthropic API key belongs in `.env`.
-
-## Persistence
-
-Defaults can be overridden in `.env`.
-
-| Data | Guest location | Stop/start | Rebuild | Destroy |
-|---|---|---|---|---|
-| Projects | `/mnt/devbox/projects` and `~/projects` | Preserved | Preserved | Preserved |
-| General data | `/mnt/devbox/data` and `~/data` | Preserved | Preserved | Preserved |
-| Docker named volumes | Guest Docker | Preserved | Preserved | Removed |
-| Guest OS and tools | Guest filesystem | Preserved | Recreated | Removed |
-| GitHub and Databricks login | Guest credential stores | Preserved | Re-authenticate | Removed |
-
-Mac-backed projects and data live outside the VM lifecycle. Lima may use a home such as `/home/yourname.guest`; scripts always resolve `$HOME` instead of guessing it from the username.
-
-## Containers
-
-PostgreSQL 18.3 is included but never auto-started. The version is pinned in `provision/config/containers/postgres/docker-compose.yml`.
-
-```sh
-devbox containers postgres up
-devbox containers postgres ps
-devbox containers postgres logs
-devbox containers postgres down
-```
-
-PostgreSQL binds only to `127.0.0.1:${POSTGRES_PORT}` and stores data in the `devbox-postgres-data` named volume. `devbox containers up` targets every bundled service. Use `pg_dump` when you need a portable backup.
-
-## Lifecycle
-
-| Command | Effect |
-|---|---|
-| `devbox stop` | Graceful shutdown; everything is preserved |
-| `devbox stop --force` | Forced shutdown for recovery only |
-| `devbox rebuild` | One confirmation, then unattended guest recreation; Mac data and Docker volumes survive |
-| `devbox destroy` | Strong confirmation; VM and Docker runtime data are removed, Mac data survives |
-| `devbox uninstall` | Removes only the CLI symlink owned by this checkout |
-
-`devbox delete` deliberately deletes nothing and directs callers to `destroy`. A PID-checked lock prevents concurrent lifecycle mutations and safely recovers stale locks.
-
-## Command Reference
-
-| Command | Purpose |
-|---|---|
-| `devbox init` | Validate host prerequisites and initialize local configuration |
-| `devbox install` | Install the user-local CLI symlink |
-| `devbox start` | Start the VM and converge changed inputs |
-| `devbox provision` | Force non-destructive provisioning |
-| `devbox connect` | Open a guest zsh shell |
-| `devbox exec <command>` | Run a command in the guest |
-| `devbox status` | Show VM state and resources |
-| `devbox ide` | Verify and print IDE SSH settings |
-| `devbox rotate` | Apply `.env` credential changes without restarting |
-| `devbox github ...` | Manage guest-local GitHub authentication |
-| `devbox databricks ...` | Manage guest-local Databricks authentication |
-| `devbox containers ...` | Manage bundled Docker services |
-| `devbox doctor` | Run host and guest diagnostics |
-| `devbox stop [--force]` | Stop the VM |
-| `devbox rebuild` | Recreate guest OS and tools |
-| `devbox destroy` | Remove VM and Docker runtime data |
-| `devbox uninstall` | Remove the CLI symlink |
-| `devbox isolation-poc [check]` | Run or verify the separate experimental isolation POC |
-| `devbox v2 <action>` | Run the separate experimental no-mount v2 profile |
-
-Run `devbox help` for subcommand details.
-
-## Customize and Maintain
-
-- VM resources and Mac-backed paths: edit `.env`.
-- Guest tool versions: edit `provision/versions.env`. Note: the PostgreSQL version is pinned separately in `provision/config/containers/postgres/docker-compose.yml`.
-- OpenCode v2 agents and configuration: edit `provision/config/opencode/`.
-- Repository-owned skills: add files under `provision/config/skills/`; remote skill installers are intentionally unsupported.
-- Claude Code plugins: edit `provision/config/install-plugins.txt`.
-
-Provisioning is idempotent and content-digest driven. Optional plugins and skills warn on failure without invalidating core readiness.
-
-Validate repository changes with:
-
-```sh
-scripts/check.sh
-```
-
-For the details behind the pleasant path, see [architecture](docs/architecture.md), [troubleshooting](docs/troubleshooting.md), the [experimental no-mount v2 guide](docs/v2.md), the [experimental isolation POC](docs/isolation-poc.md), the [phased roadmap](docs/roadmap.md), and the [release checklist](docs/release-checklist.md).
+- The guest has no host filesystem mounts and does not reuse the host SSH agent.
+- The daily identity is the unprivileged `devbox` account (no sudo, no Docker
+  group, no Docker socket).
+- Service secrets are generated in the guest and never stored on the host.
+- Releases are signed; verification fails closed.

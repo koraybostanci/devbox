@@ -4,7 +4,7 @@
 # Run on the macOS host from the devbox repository root:
 #     bash scripts/accept-phase4a.sh
 #
-# `devbox v2 exec` sends its arguments through plain ssh, which joins argv and
+# `devbox exec` sends its arguments through plain ssh, which joins argv and
 # lets the guest shell re-parse it. Remote arguments are therefore kept simple
 # (single paths); all matching/parsing is done locally on captured output.
 
@@ -59,28 +59,28 @@ equal() {
     fi
 }
 
-guest_file() { ./devbox v2 exec cat "$1" 2>/dev/null; }
+guest_file() { ./devbox exec cat "$1" 2>/dev/null; }
 
 echo "== provisioning v2 =="
-if ! ./devbox v2 provision; then
-    echo "FATAL: './devbox v2 provision' failed; capture the output above." >&2
+if ! ./devbox provision; then
+    echo "FATAL: './devbox provision' failed; capture the output above." >&2
     exit 1
 fi
 
 # Positive control: without a working exec channel, negative checks pass
 # vacuously.
-if ! ./devbox v2 exec true >/dev/null 2>&1; then
+if ! ./devbox exec true >/dev/null 2>&1; then
     echo "FATAL: the v2 exec channel is unusable; cannot verify Phase 4a." >&2
     exit 1
 fi
 
 echo
 echo "== guest-local layout =="
-check "config exists" ./devbox v2 exec test -f "$V2_CONFIG"
-check "secrets exists" ./devbox v2 exec test -f "$V2_SECRETS"
-equal "config mode is 600" 600 ./devbox v2 exec stat -c %a "$V2_CONFIG"
-equal "secrets mode is 600" 600 ./devbox v2 exec stat -c %a "$V2_SECRETS"
-refute "superseded env file is gone" ./devbox v2 exec test -e /home/devbox/.config/devbox-v2/env
+check "config exists" ./devbox exec test -f "$V2_CONFIG"
+check "secrets exists" ./devbox exec test -f "$V2_SECRETS"
+equal "config mode is 600" 600 ./devbox exec stat -c %a "$V2_CONFIG"
+equal "secrets mode is 600" 600 ./devbox exec stat -c %a "$V2_SECRETS"
+refute "superseded env file is gone" ./devbox exec test -e /home/devbox/.config/devbox-v2/env
 
 echo
 echo "== generated secret =="
@@ -101,11 +101,11 @@ printf '%s\n' "$config_content" | grep -q 'POSTGRES_PASSWORD' &&
 
 echo
 echo "== configuration is seed-once and guest-authoritative =="
-config_before="$(./devbox v2 exec sha256sum "$V2_CONFIG" 2>/dev/null | cut -d' ' -f1)"
-secrets_before="$(./devbox v2 exec sha256sum "$V2_SECRETS" 2>/dev/null | cut -d' ' -f1)"
-if ./devbox v2 provision >/dev/null 2>&1; then
-    config_after="$(./devbox v2 exec sha256sum "$V2_CONFIG" 2>/dev/null | cut -d' ' -f1)"
-    secrets_after="$(./devbox v2 exec sha256sum "$V2_SECRETS" 2>/dev/null | cut -d' ' -f1)"
+config_before="$(./devbox exec sha256sum "$V2_CONFIG" 2>/dev/null | cut -d' ' -f1)"
+secrets_before="$(./devbox exec sha256sum "$V2_SECRETS" 2>/dev/null | cut -d' ' -f1)"
+if ./devbox provision >/dev/null 2>&1; then
+    config_after="$(./devbox exec sha256sum "$V2_CONFIG" 2>/dev/null | cut -d' ' -f1)"
+    secrets_after="$(./devbox exec sha256sum "$V2_SECRETS" 2>/dev/null | cut -d' ' -f1)"
     [ -n "$config_before" ] && [ "$config_before" = "$config_after" ] &&
         ok "config is preserved across re-provision" ||
         no "config changed across re-provision"
@@ -117,8 +117,8 @@ else
 fi
 
 # Guest edit: append a benign comment via stdin, re-provision, then remove it.
-printf '%s\n' "$MARKER" | ./devbox v2 exec tee -a "$V2_CONFIG" >/dev/null 2>&1
-if ./devbox v2 provision >/dev/null 2>&1; then
+printf '%s\n' "$MARKER" | ./devbox exec tee -a "$V2_CONFIG" >/dev/null 2>&1
+if ./devbox provision >/dev/null 2>&1; then
     if guest_file "$V2_CONFIG" | grep -qF "$MARKER"; then
         ok "guest edits to config survive re-provision"
     else
@@ -127,7 +127,7 @@ if ./devbox v2 provision >/dev/null 2>&1; then
 else
     no "third provision failed"
 fi
-guest_file "$V2_CONFIG" | grep -vF "$MARKER" | ./devbox v2 exec tee "$V2_CONFIG" >/dev/null 2>&1
+guest_file "$V2_CONFIG" | grep -vF "$MARKER" | ./devbox exec tee "$V2_CONFIG" >/dev/null 2>&1
 
 echo
 printf 'Phase 4a acceptance: %d passed, %d failed, %d warning(s)\n' "$pass" "$fail" "$warn"

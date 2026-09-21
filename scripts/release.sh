@@ -31,7 +31,7 @@ hash_of() {
 }
 
 release_paths() {
-    printf '%s\n' devbox README.md colima.yaml colima-v2.yaml
+    printf '%s\n' devbox README.md colima-v2.yaml
     find lib provision docs -type f | LC_ALL=C sort
 }
 

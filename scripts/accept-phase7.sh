@@ -35,9 +35,9 @@ check "Colima is the only declared external dependency" grep -q 'for command_nam
 
 echo
 echo "== lifecycle works without jq/yq =="
-check "devbox v2 status" ./devbox v2 status
-check "devbox v2 services status" ./devbox v2 services status
-check "devbox v2 exec works" ./devbox v2 exec true
+check "devbox status" ./devbox status
+check "devbox services status" ./devbox services status
+check "devbox exec works" ./devbox exec true
 
 printf 'Note: v2 needs only Colima, OpenSSH, and macOS built-ins; contributor\n' >&2
 printf 'tooling (scripts/check.sh) still uses brew/jq/yq/docker.\n' >&2
