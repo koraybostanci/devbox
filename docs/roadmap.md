@@ -17,7 +17,7 @@ or skipped without blocking any later phase.
 | OpenCode v2 | Complete | — | PR #5 |
 | Phase 1: isolation POC | Complete | — | PR #6 |
 | Phase 2: no-mount v2 profile | Complete | — | PR #8 |
-| Phase 3: guest identity and workspace | In progress | Phase 2 | PR #10 |
+| Phase 3: guest identity and workspace | Complete | Phase 2 | PR #10 |
 | Phase 4a: guest config and secrets | Not started | Phase 3 | — |
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
 | Phase 5: PostgreSQL and Valkey | Not started | Phase 4a | — |
@@ -49,7 +49,7 @@ Every phase, including a follow-up after a merged phase, uses this process:
 8. After merge, begin the next phase with a new, fresh agent and repeat this
    process.
 
-## Remaining phases
+## Phase details
 
 ### Phase 3: Guest devbox identity and workspace
 
@@ -61,9 +61,8 @@ the v2 profile, independent of the legacy mount-oriented home layout.
 
 **Prerequisites.** Phase 2's experimental no-mount v2 profile and bundle.
 
-**Status.** Implemented on branch `phase-3-guest-identity-workspace` and
-published as draft PR #10. Not yet accepted; the real v2 lifecycle checks in
-[`implementation-plan.md`](implementation-plan.md) must pass before merge.
+**Status.** Complete (PR #10). Verified on macOS/Colima with
+`scripts/accept-phase3.sh` (15/15 checks).
 
 **Exit criteria.** The v2 guest has a documented, repeatable identity and
 workspace that work without host mounts; the legacy profile remains usable
