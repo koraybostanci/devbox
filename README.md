@@ -99,7 +99,32 @@ devbox uninstall             # remove the devbox symlink
 
 ## Releases
 
-Signed releases install without a checkout:
+### Install a published release
+
+Releases are published on the [Releases page](https://github.com/koraybostanci/devbox/releases)
+as `devbox-<version>.tar.gz`, `SHA256SUMS`, and `SHA256SUMS.sig`. Download the
+latest with an authenticated `gh`:
+
+```sh
+gh release download --repo koraybostanci/devbox --pattern '*'  # tarball + checksums
+tar -xzf devbox-<version>.tar.gz
+./devbox-<version>/devbox install                              # symlink the launcher onto PATH
+```
+
+The launcher symlinks to the extracted directory, so keep it in place. Verify
+before installing — checksum, then signature against the committed key:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+gh api -H 'Accept: application/vnd.github.raw' \
+    repos/koraybostanci/devbox/contents/release-signing-key.pub.pem > release-signing-key.pub.pem
+openssl dgst -sha256 -verify release-signing-key.pub.pem \
+    -signature SHA256SUMS.sig SHA256SUMS
+```
+
+### Publish a release (maintainer)
+
+Building, signing, and installing archives from a checkout is maintainer-only:
 
 ```sh
 scripts/release.sh build <version>             # dist/devbox-<version>.tar.gz
@@ -111,6 +136,8 @@ scripts/release.sh list                        # installed releases
 
 `verify` checks the signature against the committed public key (override with
 `DEVBOX_RELEASE_PUBKEY`). `install` activates `~/.local/share/devbox/current`.
+Tagging `v<version>` (or dispatching the `Release` workflow) publishes the
+archive, `SHA256SUMS`, and `SHA256SUMS.sig`.
 
 ## Security
 
