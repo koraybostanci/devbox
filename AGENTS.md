@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for agents working in this repository.
 
@@ -41,5 +41,13 @@ VM is disposable; everything that matters lives in the guest.
 - The guest generates its own secrets; `.env` holds only non-secret defaults.
 - The `devbox` guest user is unprivileged (no sudo, no Docker socket).
 - Services run as a root-owned Compose project inside the guest, loopback only.
-- Work only within this repository. Confirm before force-pushing, rebasing,
-  hard-resetting, deleting branches, committing, pushing, or opening a PR.
+- Work only within this repository.
+
+## Publication
+
+- Never push directly to `main`; every change lands through a branch and a
+  pull request.
+- Open pull requests as drafts unless the user asks otherwise.
+- Do not merge a pull request without explicit approval.
+- Confirm before force-pushing, rebasing, hard-resetting, deleting branches,
+  or pushing tags.
