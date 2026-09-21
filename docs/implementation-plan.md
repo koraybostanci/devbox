@@ -53,16 +53,16 @@ weaken any later phase's exit criteria.
 The phases form this sequence; each later phase builds on the accepted
 identity, workspace, and configuration established earlier.
 
-1. Phase 6 — signed release distribution.
-2. Phase 7 — remove v2 host runtime dependencies.
-3. Phase 8 — explicit migration and default promotion.
+1. Phase 7 — remove v2 host runtime dependencies.
+2. Phase 8 — explicit migration and default promotion.
 
 Phase 3 (guest `devbox` identity and workspace) is complete and merged as
 PR #10, Phase 4a (guest-local configuration and secret generation) as PR #14,
-and Phase 5 (root-managed PostgreSQL and Valkey) as PR #16. Phase 4b (optional
-provider authentication) depends only on Phase 3 and is deliberately off the
-critical path: no later phase requires provider authentication, so it may be
-deferred or skipped.
+Phase 5 (root-managed PostgreSQL and Valkey) as PR #16, and Phase 6 (signed
+release distribution) as PR #18 and PR #19. Phase 4b (optional provider
+authentication) depends only on Phase 3 and is deliberately off the critical
+path: no later phase requires provider authentication, so it may be deferred or
+skipped.
 
 ## Completed phases
 
@@ -129,6 +129,20 @@ deferred or skipped.
 - `devbox v2 services status` reports container health.
 - Verified on macOS/Colima with `scripts/accept-phase5.sh` (6/6 checks).
 
+### Phase 6: signed release distribution — complete (PR #18, PR #19)
+
+- `scripts/release.sh` builds a deterministic, versioned archive with a
+  per-file `MANIFEST` and `SHA256SUMS`, signs `SHA256SUMS`, and verifies both
+  checksums and signature before installing.
+- Archives are extracted with path-traversal protection; `install` places a
+  release under `~/.local/share/devbox/releases/<version>` and activates
+  `~/.local/share/devbox/current` without a repository checkout.
+- The `Release` workflow builds, signs with the `RELEASE_SIGNING_KEY` secret,
+  verifies against the committed `release-signing-key.pub.pem`, and publishes
+  the archive, `SHA256SUMS`, and `SHA256SUMS.sig`.
+- Verified with `scripts/accept-phase6.sh` (11/11) and a published pre-release
+  whose signature verifies locally against the committed public key.
+
 ## Phase 4b: optional provider authentication
 
 Optional and off the critical path. This phase may be deferred or skipped
@@ -151,27 +165,6 @@ Phase 3's stable guest identity and workspace.
 - Optional provider authentication is never required by another phase.
 - Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
   and unchanged.
-
-## Phase 6: signed release distribution
-
-### Prerequisite
-
-Phase 2's provisioning bundle and the v2 guest capabilities completed through
-Phase 5. Phase 4b is not required.
-
-### Scope
-
-- Build deterministic, versioned GitHub Release archives with manifests,
-  checksums, safe extraction, installation, activation, and verification.
-- Install releases under `~/.local/share/devbox/releases/<version>` without a
-  repository checkout.
-- Reuse the verified provisioning-bundle protocol with release artifacts.
-
-### Hard prerequisite
-
-A release-signing public key must be committed and the matching private key
-must be configured as a GitHub Actions secret. Do not generate or retain a
-private release-signing key without an explicit user decision.
 
 ## Phase 7: remove v2 host runtime dependencies
 
