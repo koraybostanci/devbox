@@ -39,11 +39,11 @@ check_v2_dependencies() {
     local command_name colima_version
     local -a missing=()
 
-    for command_name in colima jq yq ssh; do
+    for command_name in colima ssh; do
         command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
     done
     [ "${#missing[@]}" -eq 0 ] ||
-        die "Missing host dependencies for v2. Review and run: brew install ${missing[*]}"
+        die "Missing host dependencies for v2: ${missing[*]}. Install Colima from https://colima.run."
     colima_version="$(v2_colima version | awk 'NR == 1 {print $3}')"
     version_at_least "$colima_version" "$MINIMUM_COLIMA_VERSION" ||
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
@@ -96,9 +96,20 @@ v2_colima() {
 }
 
 v2_state() {
-    v2_colima list --json 2>/dev/null |
-        jq -r --arg profile "$V2_PROFILE" 'select(.name == $profile) | .status' |
-        head -n 1
+    v2_colima list 2>/dev/null |
+        awk -v profile="$V2_PROFILE" '$1 == profile { print $2; exit }'
+}
+
+validate_v2_colima_config() {
+    local file="$1"
+
+    grep -qE '^runtime:[[:space:]]*docker$' "$file" &&
+        grep -qE '^vmType:[[:space:]]*vz$' "$file" &&
+        grep -qE '^autoActivate:[[:space:]]*false$' "$file" &&
+        grep -qE '^sshConfig:[[:space:]]*false$' "$file" &&
+        grep -qE '^forwardAgent:[[:space:]]*false$' "$file" &&
+        grep -qE '^portForwarder:[[:space:]]*none$' "$file" &&
+        ! grep -qE '^mounts:' "$file"
 }
 
 render_v2_colima_config() {
@@ -115,21 +126,9 @@ render_v2_colima_config() {
 
     temporary="$(mktemp "$DEVBOX_V2_COLIMA_PROFILE/.colima.yaml.XXXXXX")"
     printf '%s\n' "$content" >"$temporary"
-    if ! yq eval '.' "$temporary" >/dev/null; then
+    validate_v2_colima_config "$temporary" || {
         command rm -f "$temporary"
         die "Generated v2 Colima configuration is invalid"
-    fi
-    yq -e '
-        .runtime == "docker" and
-        .vmType == "vz" and
-        .autoActivate == false and
-        .sshConfig == false and
-        .forwardAgent == false and
-        .portForwarder == "none" and
-        (.mounts == null)
-    ' "$temporary" >/dev/null || {
-        command rm -f "$temporary"
-        die "Generated v2 Colima configuration must not contain mounts"
     }
     chmod 600 "$temporary"
     mv "$temporary" "$DEVBOX_V2_COLIMA_CONFIG"
@@ -1401,12 +1400,12 @@ show_v2_status() {
         log "devbox-v2: Not created"
         return
     fi
-    record="$(v2_colima list --json 2>/dev/null | jq -c --arg profile "$V2_PROFILE" 'select(.name == $profile)' | head -n 1)"
+    record="$(v2_colima list 2>/dev/null | awk -v profile="$V2_PROFILE" '$1 == profile { print; exit }')"
     if [ -z "$record" ]; then
         log "devbox-v2: Not created"
         return
     fi
-    jq -r '"devbox-v2: \(.status) | \(.arch) | \(.cpus) CPU | \(.memory / 1073741824) GiB memory | \(.disk / 1073741824) GiB disk"' <<<"$record"
+    printf 'devbox-v2: %s\n' "${record#* }"
 }
 
 run_v2() {
