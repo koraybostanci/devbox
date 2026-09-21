@@ -163,7 +163,7 @@ v2_as_guest() {
 }
 
 require_running_v2_vm() {
-    [ "$(v2_state)" = Running ] || die "v2 VM is not running; run 'devbox v2 start' first"
+    [ "$(v2_state)" = Running ] || die "v2 VM is not running; run 'devbox start' first"
 }
 
 wait_for_v2_ssh() {
@@ -221,7 +221,11 @@ create_v2_bundle_snapshot() {
     V2_BUNDLE_DIGEST="$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")"
     (
         cd "$V2_BUNDLE_SNAPSHOT"
-        COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
+        if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
+            COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$V2_BUNDLE_ARCHIVE" provision
+        else
+            COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
+        fi
     )
     chmod 400 "$V2_BUNDLE_ARCHIVE"
 }
@@ -487,35 +491,6 @@ show_v2_services_status() {
         docker compose --project-name devbox-v2 \
             --env-file "$services/env" -f "$services/compose.yaml" ps
     '
-}
-
-migrate_v2_projects() {
-    local force="${1:-false}" source_dir
-
-    load_env v2
-    DEVBOX_PROJECTS_DIR="${DEVBOX_PROJECTS_DIR:-$(dirname "$DEVBOX_DIR")/projects}"
-    source_dir="$DEVBOX_PROJECTS_DIR"
-    [ -d "$source_dir" ] && [ ! -L "$source_dir" ] ||
-        die "Legacy projects directory is unavailable: $source_dir"
-    require_running_v2_vm
-    log "Migrating projects from $source_dir into /home/devbox/workspace (legacy is left untouched)..."
-    tar -C "$source_dir" --exclude '.DS_Store' --exclude '._*' -cf - . |
-        v2_admin_guest sudo bash -c '
-        set -Eeuo pipefail
-        force="$1"
-        workspace=/home/devbox/workspace
-        [ -d "$workspace" ] && [ ! -L "$workspace" ] || {
-            printf "ERROR: v2 guest workspace is invalid\\n" >&2
-            exit 1
-        }
-        if [ "$force" != true ] && [ -n "$(ls -A "$workspace")" ]; then
-            printf "ERROR: v2 workspace is not empty; re-run with --force to merge\\n" >&2
-            exit 1
-        fi
-        tar -C "$workspace" -xf -
-        chown -R devbox:devbox "$workspace"
-    ' _ "$force"
-    log "Projects migrated. The legacy profile and its host mounts are unchanged."
 }
 
 v2_guest_provision_digest() {
@@ -1444,7 +1419,7 @@ run_v2() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox v2 <start|provision|connect|exec|status|services|migrate|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>"
             check_host_platform
             check_v2_dependencies
             acquire_lock lifecycle
@@ -1458,47 +1433,37 @@ run_v2() {
             fi
             ;;
         connect)
-            [ $# -eq 0 ] || die "Usage: devbox v2 connect"
+            [ $# -eq 0 ] || die "Usage: devbox connect"
             require_running_v2_vm
             v2_guest zsh -l
             ;;
         exec)
-            [ $# -gt 0 ] || die "Usage: devbox v2 exec <command> [args...]"
+            [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
             require_running_v2_vm
             v2_guest "$@"
             ;;
         status)
-            [ $# -eq 0 ] || die "Usage: devbox v2 status"
+            [ $# -eq 0 ] || die "Usage: devbox status"
             show_v2_status
             ;;
         services)
-            [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox v2 services status"
+            [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox services status"
             require_running_v2_vm
             show_v2_services_status
-            ;;
-        migrate)
-            [ "${1:-}" = projects ] || die "Usage: devbox v2 migrate projects [--force]"
-            case "${2:-}" in
-                '') force=false ;;
-                --force) force=true ;;
-                *) die "Usage: devbox v2 migrate projects [--force]" ;;
-            esac
-            [ $# -le 2 ] || die "Usage: devbox v2 migrate projects [--force]"
-            migrate_v2_projects "$force"
             ;;
         stop)
             case "${1:-}" in
                 '') ;;
                 --force) force=true; shift ;;
-                *) die "Usage: devbox v2 stop [--force]" ;;
+                *) die "Usage: devbox stop [--force]" ;;
             esac
-            [ $# -eq 0 ] || die "Usage: devbox v2 stop [--force]"
+            [ $# -eq 0 ] || die "Usage: devbox stop [--force]"
             acquire_lock lifecycle
             stop_v2_vm "$force"
             release_lock
             ;;
         destroy)
-            [ $# -eq 0 ] || die "Usage: devbox v2 destroy"
+            [ $# -eq 0 ] || die "Usage: devbox destroy"
             acquire_lock lifecycle
             if ! v2_profile_exists; then
                 remove_v2_ssh_config
@@ -1526,6 +1491,6 @@ run_v2() {
             release_lock
             log "Destroyed v2 VM runtime data. No host project or data directories were used."
             ;;
-        *) die "Usage: devbox v2 <start|provision|connect|exec|status|services|migrate|stop|destroy>" ;;
+        *) die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>" ;;
     esac
 }

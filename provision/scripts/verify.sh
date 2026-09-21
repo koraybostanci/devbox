@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/provision}"
-export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
+export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox-v2}"
 
 set -a
 source "$DEVBOX_PROVISION_ROOT/versions.env"
@@ -46,8 +46,7 @@ login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
-if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
-    check "v2 guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
+check "v2 guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
     check "v2 guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
     check "guest-local provisioning bundle" has_verified_v2_bundle "$DEVBOX_PROVISION_ROOT"
     check "v2 root bundle state is inaccessible" bash -c '
@@ -83,13 +82,6 @@ if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
     check "v2 PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
     check "v2 Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
     check "v2 Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
-else
-    check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
-    check "projects mount is writable" test -w /mnt/devbox/projects
-    check "data mount is writable" test -w /mnt/devbox/data
-    check "Docker daemon" docker info
-    check "Docker Compose" docker compose version
-fi
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
@@ -143,12 +135,6 @@ if [ -n "${SSH_AUTH_SOCK:-}" ]; then
     failures=$((failures + 1))
 else
     printf 'PASS: host SSH agent is not exposed\n'
-fi
-
-if gh api user --silent >/dev/null 2>&1; then
-    printf 'PASS: GitHub CLI is authenticated\n'
-else
-    printf "WARN: GitHub CLI is not authenticated; run 'devbox github login'\n"
 fi
 
 ((failures == 0)) || exit "$failures"

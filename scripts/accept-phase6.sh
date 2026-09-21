@@ -88,7 +88,11 @@ check "signature verifies" env DEVBOX_RELEASE_PUBKEY="$work/signing-key.pub.pem"
 printf 'tampered\n' >dist/SHA256SUMS.sig
 refute "tampered signature is rejected" env DEVBOX_RELEASE_PUBKEY="$work/signing-key.pub.pem" \
     ./scripts/release.sh verify "$archive"
-note "real releases require the committed release-signing public key and the RELEASE_SIGNING_KEY secret"
+if [ -f release-signing-key.pub.pem ]; then
+    ok "release-signing public key is committed"
+else
+    note "real releases require the committed release-signing public key and the RELEASE_SIGNING_KEY secret"
+fi
 
 echo
 printf 'Phase 6 acceptance: %d passed, %d failed, %d warning(s)\n' "$pass" "$fail" "$warn"

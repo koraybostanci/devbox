@@ -43,23 +43,23 @@ refute() {
 }
 
 echo "== provisioning v2 =="
-if ! ./devbox v2 provision; then
-    echo "FATAL: './devbox v2 provision' failed; capture the output above." >&2
+if ! ./devbox provision; then
+    echo "FATAL: './devbox provision' failed; capture the output above." >&2
     exit 1
 fi
 
-if ! ./devbox v2 exec true >/dev/null 2>&1; then
+if ! ./devbox exec true >/dev/null 2>&1; then
     echo "FATAL: the v2 exec channel is unusable; cannot verify Phase 5." >&2
     exit 1
 fi
 
 echo
 echo "== root-managed services =="
-services_status="$(./devbox v2 services status 2>&1)"
+services_status="$(./devbox services status 2>&1)"
 if [ -n "$services_status" ]; then
     printf '%s\n' "$services_status"
 else
-    no "devbox v2 services status produced no output"
+    no "devbox services status produced no output"
 fi
 
 printf '%s\n' "$services_status" | grep -qi 'postgres' &&
@@ -80,9 +80,9 @@ printf '%s\n' "$services_status" | grep -q '127.0.0.1' &&
 
 echo
 echo "== isolation =="
-refute "devbox cannot control Docker" ./devbox v2 exec docker ps
+refute "devbox cannot control Docker" ./devbox exec docker ps
 refute "devbox cannot read the service credentials file" \
-    ./devbox v2 exec test -r /var/lib/devbox-v2/services/env
+    ./devbox exec test -r /var/lib/devbox-v2/services/env
 
 echo
 printf 'Phase 5 acceptance: %d passed, %d failed, %d warning(s)\n' "$pass" "$fail" "$warn"

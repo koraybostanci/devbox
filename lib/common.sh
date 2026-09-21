@@ -58,6 +58,10 @@ resolve_path() {
     printf '%s/%s\n' "$directory" "$(basename "$path")"
 }
 
+shell_quote() {
+    printf '%q' "$1"
+}
+
 choose_install_bin() {
     local candidate
 

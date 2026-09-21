@@ -1,10 +1,8 @@
 # Phased Roadmap
 
-This document is the source of truth for the phased implementation of the
-next-generation devbox experience. Each phase is separately deliverable and
-must preserve the legacy `devbox` profile, its mounts, the `devbox` SSH alias,
-existing data, and all existing commands until explicit migration and default
-promotion.
+This document records the phased implementation of the v2 devbox experience.
+The phases were delivered incrementally; the final rework removed the legacy
+mounted profile entirely, so v2 is now the only path and the default.
 
 ## Phase sequence
 
@@ -23,7 +21,7 @@ or skipped without blocking any later phase.
 | Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
 | Phase 6: signed release distribution | Complete | Phase 5 | PR #18, #19 |
 | Phase 7: v2 host dependencies removed | Complete | Phase 6 | PR #21 |
-| Phase 8: migration and default promotion | In progress | Phase 7 | PR #23 |
+| Phase 8: v2 is the default | Complete | Phase 7 | PR #25 |
 
 Phase 1 established the isolated-profile proof of concept. It is not a change
 to the legacy profile or its default behavior.
@@ -165,23 +163,16 @@ authentication (Phase 4b) is not required.
 host requirements and no removed host dependency; regression checks confirm
 the legacy workflow is unchanged.
 
-### Phase 8: Explicit migration and default promotion
+### Phase 8: v2 is the default
 
-**Purpose.** Offer a deliberate, reversible migration path and promote v2 to
-the default only when the migration criteria are satisfied.
+**Purpose.** Make v2 the devbox experience and retire the legacy mounted
+profile.
 
-**Status.** In progress. The explicit, opt-in migration command is complete
-(PR #23). Default promotion is outstanding and requires separate explicit
-approval.
+**Status.** Complete (PR #25). The legacy mounted profile and its legacy-only
+code were removed, v2 is the default and only path, and the interim migration
+tooling was removed with legacy support. This rework supersedes the earlier
+opt-in migration PR (#23).
 
-**Compatibility guarantee.** Migration is explicit and opt-in until default
-promotion is separately approved. Legacy profiles, mounts, SSH alias, data,
-and commands remain available and recoverable throughout migration.
-
-**Prerequisites.** Phase 7 completion, signed distribution, documented data
-and credential handling, and successful compatibility validation for legacy
-users.
-
-**Exit criteria.** Migration, rollback, and support procedures are documented
-and tested; default promotion has explicit approval; and users can retain or
-recover the legacy profile without data loss or command breakage.
+**Exit criteria.** A clean macOS account can install and operate devbox with
+only Colima, OpenSSH, and macOS built-ins; there is a single code path with no
+legacy mounts, commands, or host tooling.

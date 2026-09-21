@@ -161,6 +161,4 @@ for package in "${packages[@]}"; do
     }
 done
 
-if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
-    configure_v2_guest_identity
-fi
+configure_v2_guest_identity

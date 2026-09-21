@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'printf "ERROR: guest provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/provision}"
-export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
+export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox-v2}"
 
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/runtimes.sh"
@@ -13,12 +13,8 @@ source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/addons.sh"
 
 set -a
-if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
-    source "$DEVBOX_GUEST_CONFIG_ROOT/config"
-    source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
-else
-    source "$DEVBOX_GUEST_CONFIG_ROOT/env"
-fi
+source "$DEVBOX_GUEST_CONFIG_ROOT/config"
+source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
 source "$DEVBOX_PROVISION_ROOT/versions.env"
 set +a
 
