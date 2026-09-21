@@ -1704,3 +1704,27 @@ cp "$release_archive" "$release_test_root/first.tar.gz"
 "$ROOT/scripts/release.sh" build 0.0.0 >/dev/null
 cmp "$release_test_root/first.tar.gz" "$release_archive" ||
     printf 'WARN: release archives are not byte-identical across rebuilds\n' >&2
+
+# Signing: a test key signs SHA256SUMS; verification must reject tampering.
+release_key="$release_test_root/signing-key.pem"
+openssl ecparam -name prime256v1 -genkey -noout -out "$release_key" || {
+    printf 'ERROR: could not generate a test signing key\n' >&2
+    exit 1
+}
+openssl ec -in "$release_key" -pubout -out "$release_test_root/signing-key.pub.pem" 2>/dev/null
+"$ROOT/scripts/release.sh" sign "$release_archive" --key "$release_key" >/dev/null || {
+    printf 'ERROR: release signing failed\n' >&2
+    exit 1
+}
+DEVBOX_RELEASE_PUBKEY="$release_test_root/signing-key.pub.pem" \
+    "$ROOT/scripts/release.sh" verify "$release_archive" >/dev/null || {
+    printf 'ERROR: signed release verification failed\n' >&2
+    exit 1
+}
+printf 'tampered\n' >"$ROOT/dist/SHA256SUMS.sig"
+if DEVBOX_RELEASE_PUBKEY="$release_test_root/signing-key.pub.pem" \
+    "$ROOT/scripts/release.sh" verify "$release_archive" >/dev/null 2>&1; then
+    printf 'ERROR: tampered release signature was accepted\n' >&2
+    exit 1
+fi
+rm -f "$ROOT/dist/SHA256SUMS.sig"

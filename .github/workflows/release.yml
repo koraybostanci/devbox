@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (MAJOR.MINOR.PATCH)
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+
+      - name: Build release
+        run: scripts/release.sh build "${{ steps.version.outputs.version }}"
+
+      - name: Sign release
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            printf 'ERROR: RELEASE_SIGNING_KEY secret is not configured\n' >&2
+            exit 1
+          fi
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY" >"$key"
+          scripts/release.sh sign "dist/devbox-${{ steps.version.outputs.version }}.tar.gz" --key "$key"
+
+      - name: Verify release
+        run: scripts/release.sh verify "dist/devbox-${{ steps.version.outputs.version }}.tar.gz"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            "dist/devbox-${{ steps.version.outputs.version }}.tar.gz" \
+            dist/SHA256SUMS dist/SHA256SUMS.sig \
+            --title "devbox v${{ steps.version.outputs.version }}" \
+            --notes "devbox v${{ steps.version.outputs.version }}"
