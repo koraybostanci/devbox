@@ -52,6 +52,103 @@ if "$ROOT/devbox" bogus >/dev/null 2>&1; then
     fail "unknown command was accepted"
 fi
 
+# `devbox version` reports the trimmed VERSION file and needs no host checks.
+launcher_version="$("$ROOT/devbox" version)" || fail "devbox version failed"
+[ "$launcher_version" = "$(cat "$ROOT/VERSION")" ] ||
+    fail "devbox version printed '$launcher_version' instead of the VERSION contents"
+
+# --- release workflows ------------------------------------------------------
+grep -q 'workflow_call:' .github/workflows/check.yml ||
+    fail "check.yml must be reusable via workflow_call"
+# The VERSION trigger must be an item of on.push.paths. Scoping the search to
+# that block keeps a "- VERSION" entry under any other key from satisfying it.
+push_paths="$(
+    awk '
+        function indent_of(line) {
+            match(line, /^ */)
+            return RLENGTH
+        }
+        {
+            line = $0
+            stripped = line
+            sub(/^[[:space:]]+/, "", stripped)
+            ind = indent_of(line)
+            if (in_paths) {
+                if (line ~ /^[[:space:]]*$/) next
+                if (ind > paths_indent) {
+                    print stripped
+                    next
+                }
+                in_paths = 0
+            }
+            if (in_push) {
+                if (line ~ /^[[:space:]]*$/) next
+                if (ind <= push_indent) {
+                    in_push = 0
+                } else if (stripped ~ /^paths:[[:space:]]*$/) {
+                    in_paths = 1
+                    paths_indent = ind
+                    next
+                }
+            }
+            if (in_on) {
+                if (line ~ /^[[:space:]]*$/) next
+                if (ind <= on_indent) {
+                    in_on = 0
+                } else if (stripped ~ /^push:[[:space:]]*$/) {
+                    in_push = 1
+                    push_indent = ind
+                    next
+                }
+            }
+            if (stripped ~ /^on:[[:space:]]*$/) {
+                in_on = 1
+                on_indent = ind
+            }
+        }
+    ' .github/workflows/release.yml
+)"
+printf '%s\n' "$push_paths" | grep -qx -- '- VERSION' ||
+    fail "release.yml must trigger on the VERSION path under on.push.paths"
+if grep -n '\${{ steps\.' .github/workflows/release.yml; then
+    fail "release.yml must not reference step outputs"
+fi
+# The approval gate is a draft release a maintainer publishes manually:
+# release.yml must create drafts and must inspect isDraft before recovering or
+# failing on an existing release.
+grep -q -- '--draft' .github/workflows/release.yml ||
+    fail "release.yml must create draft releases for manual publishing"
+grep -q 'isDraft' .github/workflows/release.yml ||
+    fail "release.yml must inspect isDraft before acting on an existing release"
+# Workflow context expressions belong in env: blocks, never in run: scripts.
+# Both inline run: values and block-scalar run: bodies are scanned.
+run_context_usage="$(
+    awk '
+        function indent_of(line) {
+            match(line, /^ */)
+            return RLENGTH
+        }
+        {
+            line = $0
+            stripped = line
+            sub(/^[[:space:]]+/, "", stripped)
+            if (in_run && line ~ /^[[:space:]]*$/) next
+            if (in_run && indent_of(line) <= run_indent) in_run = 0
+            if (in_run) {
+                if (index(line, "${{") > 0) printf "%s:%d: %s\n", FILENAME, FNR, line
+                next
+            }
+            if (stripped ~ /^run:([[:space:]]|$)/) {
+                run_indent = indent_of(line)
+                in_run = 1
+                if (index(line, "${{") > 0) printf "%s:%d: %s\n", FILENAME, FNR, line
+            }
+        }
+    ' .github/workflows/release.yml
+)"
+[ -z "$run_context_usage" ] ||
+    fail "release.yml interpolates workflow context inside run scripts: $run_context_usage"
+
 # --- guest companion --------------------------------------------------------
 [ -f provision/config/guest/devbox ]
 bash -n provision/config/guest/devbox
@@ -647,6 +744,70 @@ if HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="$instal
     "$ROOT/scripts/release.sh" use 9.9.9 >/dev/null 2>&1; then
     fail "release use accepted a release that is not installed"
 fi
+
+# `prune` keeps the active release, keeps the N most recently modified
+# non-active releases, and removes staging directories older than 24 hours.
+prune_root="$release_root/prune"
+prune_home="$prune_root/home"
+prune_data="$prune_home/.local/share/devbox"
+prune_path="$prune_root/path:/usr/bin:/bin"
+mkdir -p "$prune_home"
+DEVBOX_ALLOW_UNSIGNED=1 HOME="$prune_home" XDG_DATA_HOME="$prune_home/.local/share" \
+    PATH="$prune_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
+    fail "release installation for the prune test failed"
+prune_releases="$prune_data/releases"
+prune_active="$prune_releases/$release_version"
+prune_decoy_one="$prune_releases/9.9.8"
+cp -R "$prune_active" "$prune_decoy_one" || fail "could not stage the first prune decoy"
+prune_output="$(HOME="$prune_home" XDG_DATA_HOME="$prune_home/.local/share" PATH="$prune_path" \
+    "$ROOT/scripts/release.sh" prune --keep 0)" || fail "release prune --keep 0 failed"
+[ ! -e "$prune_decoy_one" ] || fail "prune --keep 0 kept a non-active release"
+[ -d "$prune_active" ] || fail "prune --keep 0 removed the active release"
+[ "$(readlink "$prune_data/current")" = "$(physical_path "$prune_active")" ] ||
+    fail "prune --keep 0 changed the active release"
+printf '%s\n' "$prune_output" | grep -q 'Removed release' ||
+    fail "prune did not report the release it removed"
+
+prune_decoy_two="$prune_releases/9.9.7"
+cp -R "$prune_active" "$prune_decoy_two" || fail "could not stage the second prune decoy"
+prune_stale="$prune_releases/.install.stale"
+mkdir -p "$prune_stale"
+touch -t 202001010000 "$prune_stale" || fail "could not age the stale staging directory"
+prune_output="$(HOME="$prune_home" XDG_DATA_HOME="$prune_home/.local/share" PATH="$prune_path" \
+    "$ROOT/scripts/release.sh" prune --keep 1)" || fail "release prune --keep 1 failed"
+[ -d "$prune_decoy_two" ] || fail "prune --keep 1 removed the most recent non-active release"
+[ ! -e "$prune_stale" ] || fail "prune kept a stale staging directory"
+[ -d "$prune_active" ] || fail "prune --keep 1 removed the active release"
+printf '%s\n' "$prune_output" | grep -q 'Removed stale staging directory' ||
+    fail "prune did not report the stale staging directory it removed"
+
+# A version-named symlink under releases/ is not a release directory: prune
+# skips it instead of deleting the entries of its target.
+prune_link="$prune_releases/9.9.6"
+prune_link_target="$prune_root/link-target"
+mkdir -p "$prune_link_target"
+printf 'payload\n' >"$prune_link_target/file"
+ln -s "$prune_link_target" "$prune_link"
+HOME="$prune_home" XDG_DATA_HOME="$prune_home/.local/share" PATH="$prune_path" \
+    "$ROOT/scripts/release.sh" prune --keep 0 >/dev/null ||
+    fail "release prune with a version-named symlink failed"
+[ -L "$prune_link" ] || fail "prune removed a version-named symlink"
+[ -f "$prune_link_target/file" ] ||
+    fail "prune followed a version-named symlink into its target"
+command rm -f "$prune_link"
+
+# A releases directory that is itself a symlink is refused before pruning.
+link_p_host="$release_root/prune-symlink"
+link_p_home="$link_p_host/home"
+link_p_path="$link_p_host/path:/usr/bin:/bin"
+mkdir -p "$link_p_home/.local/share/devbox" "$link_p_host/real-releases"
+ln -s "$link_p_host/real-releases" "$link_p_home/.local/share/devbox/releases"
+if HOME="$link_p_home" XDG_DATA_HOME="$link_p_home/.local/share" PATH="$link_p_path" \
+    "$ROOT/scripts/release.sh" prune >/dev/null 2>"$link_p_host/prune.err"; then
+    fail "prune accepted a symlinked releases directory"
+fi
+grep -q 'invalid release directory' "$link_p_host/prune.err" ||
+    fail "symlinked releases directory rejection did not explain the failure"
 
 # `devbox uninstall` from a release install removes the CLI symlink and the
 # activation symlink while leaving the release tree in place. The ownership and

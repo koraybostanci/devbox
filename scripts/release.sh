@@ -7,6 +7,7 @@
 #   scripts/release.sh install <archive.tar.gz> [--force]
 #   scripts/release.sh use <version>
 #   scripts/release.sh list
+#   scripts/release.sh prune [--keep N]
 #
 # `build` with no argument uses the VERSION file, which is the source of
 # truth; an explicit version must match it. Build output lands in
@@ -33,6 +34,13 @@
 # through <data root>/current, where <data root> is
 # ${XDG_DATA_HOME:-$HOME/.local/share}/devbox. Release installs keep host
 # configuration at $HOME/.config/devbox/env so upgrades preserve it.
+#
+# `prune` bounds the releases tree: it removes version-named release
+# directories that are not active, keeping the active release plus the N most
+# recently modified non-active releases (default 0, selected by directory
+# mtime), and removes stale staging directories (releases/.install.*,
+# releases/.replace.*, <data root>/.activate.*) older than 24 hours. The
+# active release is never removed.
 
 set -Eeuo pipefail
 
@@ -533,6 +541,69 @@ list_releases() {
     done
 }
 
+# Remove non-active installed releases, keeping the active release plus the N
+# most recently modified non-active releases (N defaults to 0), and remove
+# staging directories older than 24 hours. Candidates are selected by
+# directory mtime with portable tools; the active release is never removed.
+# Version-named symlinks are never candidates, and a releases directory that is
+# itself a symlink is refused before anything is removed.
+prune_releases() {
+    local keep="$1" root releases active entry name
+    local removed=0 non_active_kept=0 stale_removed=0
+
+    root="$(devbox_data_root)"
+    releases="$root/releases"
+    active=""
+    if [ -L "$root/current" ]; then
+        active="$(canonicalize_path "$root/current" 2>/dev/null || true)"
+    fi
+
+    # Never prune through a symlinked releases directory: the removal loop
+    # would delete the entries of its target. Install rejects the same layout.
+    if [ -e "$releases" ] || [ -L "$releases" ]; then
+        [ -d "$releases" ] && [ ! -L "$releases" ] ||
+            die "invalid release directory: $releases"
+    fi
+
+    if [ -d "$releases" ]; then
+        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            [ -d "$entry" ] || continue
+            # `-d` follows symlinks; a version-named symlink is not a release
+            # directory and removing it would follow it to its target.
+            [ -L "$entry" ] && continue
+            name="$(basename "$entry")"
+            case "$name" in
+                .*) continue ;;
+            esac
+            # Only well-formed release directories are candidates.
+            [[ "$name" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || continue
+            if [ -n "$active" ] && [ "$(canonicalize_path "$entry")" = "$active" ]; then
+                continue
+            fi
+            if [ "$non_active_kept" -lt "$keep" ]; then
+                non_active_kept=$((non_active_kept + 1))
+                printf 'Kept %s\n' "$entry"
+                continue
+            fi
+            command rm -rf "$entry"
+            printf 'Removed release %s\n' "$entry"
+            removed=$((removed + 1))
+        done < <(command ls -td "$releases"/* 2>/dev/null || true)
+    fi
+
+    for entry in "$releases"/.install.* "$releases"/.replace.* "$root"/.activate.*; do
+        [ -e "$entry" ] || continue
+        [ -n "$(find "$entry" -maxdepth 0 -mmin +1440 -print 2>/dev/null)" ] || continue
+        command rm -rf "$entry"
+        printf 'Removed stale staging directory %s\n' "$entry"
+        stale_removed=$((stale_removed + 1))
+    done
+
+    printf 'Prune complete: removed %d release(s) and %d stale staging dir(s); kept the active release plus %d non-active release(s).\n' \
+        "$removed" "$stale_removed" "$non_active_kept"
+}
+
 case "${1:-}" in
     build)
         [ $# -le 2 ] || die "Usage: scripts/release.sh build [version]"
@@ -567,7 +638,23 @@ case "${1:-}" in
         [ $# -eq 1 ] || die "Usage: scripts/release.sh list"
         list_releases
         ;;
+    prune)
+        keep=0
+        case "$#" in
+            1) ;;
+            3)
+                [ "$2" = "--keep" ] ||
+                    die "Usage: scripts/release.sh prune [--keep N]"
+                keep="$3"
+                ;;
+            *) die "Usage: scripts/release.sh prune [--keep N]" ;;
+        esac
+        case "$keep" in
+            '' | *[!0-9]*) die "invalid --keep value: $keep (expected a non-negative integer)" ;;
+        esac
+        prune_releases "$keep"
+        ;;
     *)
-        die "Usage: scripts/release.sh <build|sign|verify|install|use|list> ..."
+        die "Usage: scripts/release.sh <build|sign|verify|install|use|list|prune> ..."
         ;;
 esac

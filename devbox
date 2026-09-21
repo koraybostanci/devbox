@@ -50,6 +50,7 @@ Maintenance:
     uninstall                      Remove the devbox command symlink
 
 Other:
+    version                        Show the devbox version
     help                           Show this help message
 
 Typical workflow:
@@ -82,6 +83,19 @@ case "$cmd" in
     uninstall)
         [ $# -eq 0 ] || die "Usage: devbox uninstall"
         uninstall_cli "$DEVBOX_SCRIPT"
+        ;;
+    version)
+        [ $# -eq 0 ] || die "Usage: devbox version"
+        version_file="$DEVBOX_DIR/VERSION"
+        if [ -f "$version_file" ]; then
+            version="$(cat "$version_file")"
+            version="${version#"${version%%[![:space:]]*}"}"
+            version="${version%"${version##*[![:space:]]}"}"
+            printf '%s\n' "$version"
+        else
+            version="$(git -C "$DEVBOX_DIR" describe --tags --always --dirty 2>/dev/null || true)"
+            printf '%s\n' "${version:-unknown}"
+        fi
         ;;
     init)
         [ $# -eq 0 ] || die "Usage: devbox init"
