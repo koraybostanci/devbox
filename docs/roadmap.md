@@ -18,7 +18,7 @@ or skipped without blocking any later phase.
 | Phase 1: isolation POC | Complete | — | PR #6 |
 | Phase 2: no-mount v2 profile | Complete | — | PR #8 |
 | Phase 3: guest identity and workspace | Complete | Phase 2 | PR #10 |
-| Phase 4a: guest config and secrets | In progress | Phase 3 | PR #14 |
+| Phase 4a: guest config and secrets | Complete | Phase 3 | PR #14 |
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
 | Phase 5: PostgreSQL and Valkey | Not started | Phase 4a | — |
 | Phase 6: signed release distribution | Not started | Phase 5 | — |
@@ -73,6 +73,9 @@ without migration.
 **Purpose.** Define the guest-local v2 configuration location and generate
 guest-local secrets so later phases have a stable place for settings and
 credentials.
+
+**Status.** Complete (PR #14). Verified on macOS/Colima with
+`scripts/accept-phase4a.sh` (12/12 checks).
 
 **Compatibility guarantee.** Existing legacy configuration, guest-local
 credentials, mounts, SSH alias, data, and authentication commands remain valid

@@ -53,17 +53,16 @@ weaken any later phase's exit criteria.
 The phases form this sequence; each later phase builds on the accepted
 identity, workspace, and configuration established earlier.
 
-1. Phase 4a — guest-local configuration location and guest-side secret
-   generation.
-2. Phase 5 — root-managed PostgreSQL and Valkey.
-3. Phase 6 — signed release distribution.
-4. Phase 7 — remove v2 host runtime dependencies.
-5. Phase 8 — explicit migration and default promotion.
+1. Phase 5 — root-managed PostgreSQL and Valkey.
+2. Phase 6 — signed release distribution.
+3. Phase 7 — remove v2 host runtime dependencies.
+4. Phase 8 — explicit migration and default promotion.
 
 Phase 3 (guest `devbox` identity and workspace) is complete and merged as
-PR #10. Phase 4b (optional provider authentication) depends only on Phase 3 and
-is deliberately off the critical path: no later phase requires provider
-authentication, so it may be deferred or skipped.
+PR #10, and Phase 4a (guest-local configuration and secret generation) is
+complete and merged as PR #14. Phase 4b (optional provider authentication)
+depends only on Phase 3 and is deliberately off the critical path: no later
+phase requires provider authentication, so it may be deferred or skipped.
 
 ## Completed phases
 
@@ -106,27 +105,16 @@ authentication, so it may be deferred or skipped.
   written unreadable by the target user.
 - Verified on macOS/Colima with `scripts/accept-phase3.sh` (15/15 checks).
 
-## Phase 4a: guest-local configuration and secret generation
+### Phase 4a: guest-local config and secrets — complete (PR #14)
 
-### Prerequisite
-
-Phase 3's stable guest identity and workspace.
-
-### Scope
-
-- Define the guest-local v2 configuration location for settings, secrets, and
-  service configuration.
-- Move v2 Git identity and non-secret defaults into guest-local v2
-  configuration.
-- Generate v2 service secrets inside the guest only, and never on the host, in
-  logs, command arguments, or release artifacts.
-
-### Exit criteria
-
-- v2 configuration and generated secrets live only in the v2 guest, survive
-  stop/start, and are removed by rebuild/destroy.
-- Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
-  and unchanged.
+- Guest-local configuration lives under `/home/devbox/.config/devbox-v2/`
+  (directory 0700, files 0600): a seed-once `config` for non-secret defaults and
+  guest-generated `secrets`.
+- `POSTGRES_PASSWORD` is generated inside the guest and is never read from or
+  written to the host; the superseded host-seeded `env` file is removed.
+- Legacy `.env`, `service.env`, `rotate`, and host authentication commands are
+  unchanged.
+- Verified on macOS/Colima with `scripts/accept-phase4a.sh` (12/12 checks).
 
 ## Phase 4b: optional provider authentication
 
