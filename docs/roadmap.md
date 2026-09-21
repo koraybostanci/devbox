@@ -22,7 +22,7 @@ or skipped without blocking any later phase.
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
 | Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
 | Phase 6: signed release distribution | Complete | Phase 5 | PR #18, #19 |
-| Phase 7: v2 host dependencies removed | Not started | Phase 6 | — |
+| Phase 7: v2 host dependencies removed | Complete | Phase 6 | PR #21 |
 | Phase 8: migration and default promotion | Not started | Phase 7 | — |
 
 Phase 1 established the isolated-profile proof of concept. It is not a change
@@ -149,6 +149,9 @@ without affecting a legacy installation.
 **Purpose.** Eliminate host-side dependencies from v2 so the supported v2
 workflow is self-contained apart from its explicit virtualization/runtime
 requirements.
+
+**Status.** Complete (PR #21). Verified with `scripts/accept-phase7.sh`
+(5/5 checks).
 
 **Compatibility guarantee.** This applies only to v2. The legacy `devbox`
 profile retains its existing host integration, mounts, `devbox` SSH alias,
