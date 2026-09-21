@@ -99,11 +99,13 @@ jobs:
             # "not a draft". Treating it as empty would classify a complete
             # published release as an incomplete draft and clobber it during
             # recovery.
-            if ! release_view="$(gh release view "v$version" --json isDraft,assets --jq '.isDraft, (.assets[].name)')"; then
+            if ! release_view="$(gh release view "v$version" --json isDraft,assets,targetCommitish --jq '.isDraft, .targetCommitish, (.assets[].name)')"; then
               printf 'ERROR: release v%s exists but its state could not be queried; retry once the GitHub API is available.\n' \
                 "$version" >&2
               exit 1
             fi
+            # The jq output line order is fixed: isDraft, targetCommitish, then
+            # one asset name per line.
             is_draft="$(printf '%s\n' "$release_view" | sed -n '1p')"
             case "$is_draft" in
               true|false) ;;
@@ -113,7 +115,15 @@ jobs:
                 exit 1
                 ;;
             esac
-            assets="$(printf '%s\n' "$release_view" | sed -n '2,$p')"
+            target_commitish="$(printf '%s\n' "$release_view" | sed -n '2p')"
+            case "$target_commitish" in
+              ""|null)
+                printf 'ERROR: release v%s did not report a usable target commit; refusing to continue.\n' \
+                  "$version" >&2
+                exit 1
+                ;;
+            esac
+            assets="$(printf '%s\n' "$release_view" | sed -n '3,$p')"
             missing=""
             for expected in "devbox-$version.tar.gz" SHA256SUMS SHA256SUMS.sig; do
               if ! printf '%s\n' "$assets" | grep -qx "$expected"; then
@@ -128,13 +138,28 @@ jobs:
                 state=ready
                 printf 'Draft release v%s already has all assets; the publish step only points at the GitHub UI.\n' \
                   "$version"
-              elif [ -z "$tag_commit" ] || [ "$tag_commit" != "$version_commit" ]; then
-                printf 'ERROR: draft release v%s is missing:%s but tag v%s is not at the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
-                  "$version" "$missing" "$version" "$version_commit" >&2
-                exit 1
-              else
+              elif [ -n "$tag_commit" ]; then
+                # The tag already points at the release commit; the release
+                # can be completed from this checkout.
+                if [ "$tag_commit" != "$version_commit" ]; then
+                  printf 'ERROR: draft release v%s is missing:%s but tag v%s is at %s, not at the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
+                    "$version" "$missing" "$version" "$tag_commit" "$version_commit" >&2
+                  exit 1
+                fi
                 state=recover
-                printf 'Recovering draft release v%s (missing:%s)\n' "$version" "$missing"
+                printf 'Recovering draft release v%s (missing:%s; tag v%s is at the release commit)\n' \
+                  "$version" "$missing" "$version"
+              elif [ "$target_commitish" = "$version_commit" ]; then
+                # Draft releases do not create the git tag until they are
+                # published, so an untagged draft is recoverable when its
+                # target commit is the release commit.
+                state=recover
+                printf 'Recovering untagged draft release v%s (missing:%s; target commit %s is the release commit)\n' \
+                  "$version" "$missing" "$target_commitish"
+              else
+                printf 'ERROR: draft release v%s is missing:%s but tag v%s does not exist and its target commit %s is not the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
+                  "$version" "$missing" "$version" "$target_commitish" "$version_commit" >&2
+                exit 1
               fi
             elif [ -z "$missing" ]; then
               printf 'ERROR: release v%s is already published with all assets; bump VERSION to release again.\n' \

@@ -119,11 +119,13 @@ A `Release` workflow that creates a draft with missing assets is recovered by
 dispatching it again from `main` with the version already in `VERSION` (the
 input must match); recovery rebuilds the commit that last changed `VERSION` and
 uploads the missing assets into the draft, which a maintainer still publishes
-from the GitHub UI. Recovery requires the draft's tag to be at the release
-commit: a draft whose tag is not at the release commit cannot be recovered.
-A published release is never overwritten, so bump `VERSION` to release again.
-Once `VERSION` has moved on, an older incomplete draft can no longer be
-recovered by dispatch.
+from the GitHub UI. The `v<version>` tag is created when the draft is published,
+so an untagged draft is recovered when its target commit matches the release
+commit; a tagged draft is recovered when its tag is at that commit. A draft
+whose tag is at another commit, or whose target commit does not match, cannot
+be recovered. A published release is never overwritten, so bump `VERSION` to
+release again. Once `VERSION` has moved on, an older incomplete draft can no
+longer be recovered by dispatch.
 
 ## Checkout moved or renamed
 
