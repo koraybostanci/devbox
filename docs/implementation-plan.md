@@ -92,30 +92,37 @@ identity.
 - v2 and legacy lifecycle/SSH configuration changes use a shared lifecycle
   lock.
 
-### Current status (uncommitted branch)
+### Current status (branch published as draft PR #10)
 
 - Branch: `phase-3-guest-identity-workspace`
 - Base: `7b99d43` (merged Phase 2)
-- The worktree contains uncommitted Phase 3 changes in the launcher,
-  provisioning scripts, checks, and documentation.
+- The Phase 3 changes in the launcher, provisioning scripts, checks, and
+  documentation are committed on the branch and published as **draft PR #10**;
+  they are no longer an uncommitted worktree.
 - Static checks and several independent reviews have run, but **Phase 3 is not
-  accepted or publishable**.
-- The real `./devbox v2 provision` lifecycle still fails before direct SSH is
-  authorized. The failing area is the guest-side privilege preflight embedded
-  in `lib/v2.sh`; its nested quoted shell/AWK implementation has produced a
-  runtime syntax error despite outer shell syntax checks.
+  accepted or publishable**, so the draft PR must not be merged.
+- The guest-side privilege preflight in `lib/v2.sh` originally used a nested
+  double-quoted `bash -c`/AWK implementation. That parser was found to be valid
+  when executed directly in a Linux/mawk sandbox, so the earlier
+  `./devbox v2 provision` runtime syntax error could not be reproduced from the
+  committed source; the failure most likely originated in the SSH transport's
+  quoting rather than in the parser body.
+- The preflight has since been rewritten on the PR #10 branch as a
+  single-quoted guest script with no nested quoting, and it now rejects any
+  sudo privilege, not only passwordless sudo, to match the no-sudo contract.
+- The real `./devbox v2 provision` lifecycle has still not been re-run against
+  the rewritten preflight.
 
 ### Required next step
 
-Replace the fragile nested `bash -c` privilege parser with a heredoc-fed
-guest-side script (or another representation that is executed exactly as
-tested). It must safely distinguish the actual no-sudo guest output:
+Re-run the real `./devbox v2 provision` lifecycle against the rewritten
+preflight and confirm that the exact no-sudo guest output:
 
 ```text
 User devbox is not allowed to run sudo on <host>.
 ```
 
-from unsafe or unparseable sudo state. Then rerun real v2 provisioning and
+is the only accepted state, while unsafe or unparseable sudo state fails. Then
 verify all of the following before accepting Phase 3:
 
 ```sh
@@ -127,7 +134,7 @@ ssh devbox-v2 pwd                    # /home/devbox
 ./devbox v2 exec test -w /home/devbox/workspace
 ```
 
-Also verify that `devbox` has no passwordless sudo or Docker socket write
+Also verify that `devbox` has no sudo privileges or Docker socket write
 access, root bundle state is unreadable, no legacy mount exists in v2, and the
 legacy profile is unchanged.
 
