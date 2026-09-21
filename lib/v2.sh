@@ -616,98 +616,26 @@ validate_v2_guest_privileges() {
         user="$1"
         sudo_status=0
         sudo_listing="$(LC_ALL=C sudo -n -l -U "$user" 2>&1)" || sudo_status=$?
-        no_sudo_privileges=false
-        if { [ "$sudo_status" -eq 0 ] || [ "$sudo_status" -eq 1 ]; } &&
-            printf "%s\n" "$sudo_listing" | awk -v expected_user="$user" "
-                BEGIN { expected = \"User \" expected_user \" is not allowed to run sudo on \" }
-                NR != 1 { invalid = 1; next }
-                index(\$0, expected) != 1 { invalid = 1; next }
-                {
-                    host = substr(\$0, length(expected) + 1)
-                    if (host !~ /^[^[:space:]]+[.]\$/) invalid = 1
-                }
-                END { exit !(NR == 1 && !invalid) }
-            "; then
-            no_sudo_privileges=true
-        elif [ "$sudo_status" -ne 0 ]; then
+        { [ "$sudo_status" -eq 0 ] || [ "$sudo_status" -eq 1 ]; } || {
             printf "ERROR: failed to inspect v2 guest sudo privileges\n" >&2
             exit 1
-        fi
-        if [ "$no_sudo_privileges" = false ] && printf "%s\n" "$sudo_listing" | grep -Fq "NOPASSWD:"; then
-            printf "ERROR: v2 guest user has direct passwordless sudo access\n" >&2
+        }
+        expected="User $user is not allowed to run sudo on "
+        no_sudo_privileges=false
+        case "$sudo_listing" in
+            "$expected"*.)
+                sudo_host="${sudo_listing#"$expected"}"
+                sudo_host="${sudo_host%.}"
+                case "$sudo_host" in
+                    "" | *[![:alnum:]._-]*) ;;
+                    *) no_sudo_privileges=true ;;
+                esac
+                ;;
+        esac
+        [ "$no_sudo_privileges" = true ] || {
+            printf "ERROR: v2 guest user has sudo privileges\n" >&2
             exit 1
-        fi
-        if [ "$no_sudo_privileges" = false ]; then
-            if ! printf "%s\n" "$sudo_listing" | awk -v expected_user="$user" "
-            function record_options(scope, text, option_count, option_index, option) {
-                option_count = split(text, options, \",\")
-                for (option_index = 1; option_index <= option_count; option_index++) {
-                    option = options[option_index]
-                    gsub(/^[[:space:]]+|[[:space:]]+\$/, \"\", option)
-                    if (option == \"!authenticate\") {
-                        authenticate[scope] = 0
-                        found_authenticate[scope] = 1
-                    } else if (option == \"authenticate\") {
-                        authenticate[scope] = 1
-                        found_authenticate[scope] = 1
-                    }
-                }
-            }
-            /^Matching Defaults entries for / {
-                defaults_section = \"matching\"
-                next
-            }
-            /^Runas and Command-specific defaults for / {
-                defaults_section = \"scoped\"
-                next
-            }
-            /^User / {
-                line = \$0
-                if (index(line, \"User \" expected_user \" may run the following commands\") != 1) {
-                    parse_error = 1
-                    next
-                }
-                user_section = 1
-                defaults_section = \"commands\"
-                next
-            }
-            /^[[:space:]]*\$/ { next }
-            defaults_section == \"matching\" {
-                line = \$0
-                sub(/^[[:space:]]+/, \"\", line)
-                record_options(defaults_section, line)
-                next
-            }
-            defaults_section == \"scoped\" {
-                line = \$0
-                sub(/^[[:space:]]+/, \"\", line)
-                if (line !~ /^Defaults[^[:space:]]*[[:space:]]+/) {
-                    parse_error = 1
-                    next
-                }
-                scope = line
-                sub(/[[:space:]].*\$/, \"\", scope)
-                sub(/^Defaults[^[:space:]]*[[:space:]]+/, \"\", line)
-                record_options(defaults_section SUBSEP scope, line)
-                next
-            }
-            defaults_section == \"commands\" {
-                if (\$0 !~ /^[[:space:]]/) parse_error = 1
-                next
-            }
-            { parse_error = 1 }
-            END {
-                if (parse_error) exit 1
-                for (scope in found_authenticate) {
-                    if (!authenticate[scope]) exit 1
-                }
-                exit !user_section
-            }
-            "; then
-                printf "ERROR: v2 guest sudo privileges could not be safely parsed\n" >&2
-                exit 1
-            fi
-        fi
+        }
         if sudo -u "$user" -- sudo -n true >/dev/null 2>&1; then
             printf "ERROR: v2 guest user can execute passwordless sudo\n" >&2
             exit 1

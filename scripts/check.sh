@@ -1017,10 +1017,13 @@ bash -c '
 }
 v2_current_digest_access_capture="$validation_root/v2-current-digest-access"
 grep -Fq 'sudo -n -l -U "$user"' lib/v2.sh
-grep -Fq 'grep -Fq "NOPASSWD:"' lib/v2.sh
-grep -Fq 'Matching Defaults entries for ' lib/v2.sh
+grep -Fq 'is not allowed to run sudo on' lib/v2.sh
 grep -Fq 'sudo -u "$user" -- sudo -n true' lib/v2.sh
 grep -Fq 'sudo -u "$user" -- test -w /var/run/docker.sock' lib/v2.sh
+! grep -Fq 'NOPASSWD' lib/v2.sh || {
+    printf 'ERROR: v2 guest privilege parser must not rely on NOPASSWD parsing\n' >&2
+    exit 1
+}
 v2_guest_privileges_remote_shell="$validation_root/v2-guest-privileges-remote-shell"
 HOME="$v2_home" V2_GUEST_PRIVILEGES_REMOTE_SHELL="$v2_guest_privileges_remote_shell" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/v2.sh"
@@ -1095,9 +1098,9 @@ HOME="$v2_home" V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE="$v2_guest_privileges_d
                         printf "Matching Defaults entries for devbox on guest:\\n    env_reset\\nUser devbox may run the following commands:\\n    (root) /usr/bin/printf !authenticate\\n"
                         ;;
                     docker-write)
-                        printf "Matching Defaults entries for devbox on guest:\\n    authenticate, env_reset\\nUser devbox may run the following commands:\\n    (root) /usr/bin/id\\n"
+                        printf "User devbox is not allowed to run sudo on colima-devbox-v2.\\n"
                         ;;
-                    safe)
+                    passworded-sudo)
                         printf "Matching Defaults entries for devbox on guest:\\n    authenticate, env_reset\\nUser devbox may run the following commands:\\n    (root) /usr/bin/id\\n"
                         ;;
                     no-privileges)
@@ -1117,7 +1120,7 @@ HOME="$v2_home" V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE="$v2_guest_privileges_d
                         printf "Matching Defaults entries for devbox on guest:\\n    authenticate, env_reset\\nUser devbox may run the following commands:\\n    (root) /usr/bin/id\\nunrecognized trailing content\\n"
                         ;;
                     probe-success)
-                        printf "Matching Defaults entries for devbox on guest:\\n    authenticate, env_reset\\nUser devbox may run the following commands:\\n    (root) /usr/bin/id\\n"
+                        printf "User devbox is not allowed to run sudo on colima-devbox-v2.\\n"
                         ;;
                     *) return 1 ;;
                 esac
@@ -1153,15 +1156,15 @@ HOME="$v2_home" V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE="$v2_guest_privileges_d
     fi
     grep -Fxq "ERROR: v2 guest user can write the Docker socket" "$V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE" || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=overridden
-    validate_v2_guest_privileges || exit 1
+    ! validate_v2_guest_privileges || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=command-specific
     ! validate_v2_guest_privileges || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=command-specific-overridden
-    validate_v2_guest_privileges || exit 1
+    ! validate_v2_guest_privileges || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=command-text
-    validate_v2_guest_privileges || exit 1
-    V2_GUEST_PRIVILEGE_FIXTURE=safe
-    validate_v2_guest_privileges || exit 1
+    ! validate_v2_guest_privileges || exit 1
+    V2_GUEST_PRIVILEGE_FIXTURE=passworded-sudo
+    ! validate_v2_guest_privileges || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=no-privileges
     validate_v2_guest_privileges || exit 1
     V2_GUEST_PRIVILEGE_FIXTURE=canonical-no-privileges
@@ -1177,7 +1180,7 @@ HOME="$v2_home" V2_GUEST_PRIVILEGES_DOCKER_WRITE_CAPTURE="$v2_guest_privileges_d
     V2_GUEST_PRIVILEGE_FIXTURE=uninspectable
     ! validate_v2_guest_privileges || exit 1
 ' || {
-    printf 'ERROR: v2 guest privilege preflight accepted unsafe sudo Defaults, sudo, or Docker socket access\n' >&2
+    printf 'ERROR: v2 guest privilege preflight accepted unsafe sudo privileges or Docker socket access\n' >&2
     exit 1
 }
 v2_sudo_probe_revocation_capture="$validation_root/v2-sudo-probe-revocation"
@@ -1208,7 +1211,7 @@ HOME="$v2_home" V2_SUDO_PROBE_REVOCATION_CAPTURE="$v2_sudo_probe_revocation_capt
                 ;;
             -n)
                 [ "$2" = -l ] && [ "$3" = -U ] && [ "$4" = devbox ] || return 1
-                printf "Matching Defaults entries for devbox on guest:\n    authenticate, env_reset\nUser devbox may run the following commands:\n    (root) /usr/bin/id\n"
+                printf "User devbox is not allowed to run sudo on colima-devbox-v2.\n"
                 ;;
             -u)
                 [ "$2" = devbox ] && [ "$3" = -- ] && [ "$4" = sudo ] && [ "$5" = -n ] && [ "$6" = true ]
