@@ -35,6 +35,13 @@ For each phase:
 5. Commit, publish, merge, and only then begin the next phase from updated
    `main`, subject to the active repository approval policy.
 
+When a phase is already committed on a dedicated branch and published as a
+draft PR, resume it instead of starting over: do not branch from `main` for
+that phase. Fetch `origin`, check out the phase branch, fast-forward it from
+the current `origin/main`, and continue there. Keep the PR in draft, and do not
+promote the phase until the real acceptance checks pass. Each phase's "Current
+status" section below records the exact branch, base, and next step.
+
 ## Completed phases
 
 ### OpenCode v2 migration — complete (PR #5)
