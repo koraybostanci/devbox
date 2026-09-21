@@ -38,6 +38,11 @@ Daily workflow:
 Services:
     services status                Show the managed PostgreSQL and Valkey services
 
+Authentication and helpers (optional, guest-local):
+    auth status                    Show per-provider authentication state
+    auth login <provider>          Authenticate github, claude, opencode, databricks
+    db info                        Show PostgreSQL connection settings
+
 Maintenance:
     provision                      Force non-destructive provisioning
     destroy                        Remove the VM and its container runtime data
@@ -73,7 +78,7 @@ case "$cmd" in
         [ $# -eq 0 ] || die "Usage: devbox init"
         initialize_local_config
         ;;
-    start | provision | connect | exec | status | services | stop | destroy)
+    start | provision | connect | exec | status | services | auth | db | stop | destroy)
         run_v2 "$cmd" "$@"
         ;;
     *)

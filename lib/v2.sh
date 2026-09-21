@@ -143,6 +143,11 @@ v2_guest() {
     ssh -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
 }
 
+# Interactive variant for prompts (provider login, portable shell).
+v2_guest_interactive() {
+    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
+}
+
 v2_as_guest() {
     v2_admin_guest sudo -u "$V2_GUEST_USER" -- env \
         HOME="$V2_GUEST_HOME" \
@@ -221,7 +226,7 @@ create_v2_bundle_snapshot() {
     V2_BUNDLE_DIGEST="$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")"
     (
         cd "$V2_BUNDLE_SNAPSHOT"
-        if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
+        if [ "$(uname -s)" = "Darwin" ]; then
             COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$V2_BUNDLE_ARCHIVE" provision
         else
             COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
@@ -261,7 +266,7 @@ stream_v2_bundle() {
         chmod 700 "$root"
         temporary="$(mktemp -d "$root/.bundle.XXXXXX")"
         trap "rm -rf \"$temporary\"" EXIT
-        tar -xf - -C "$temporary"
+        tar --warning=no-unknown-keyword -xf - -C "$temporary"
         [ ! -L "$temporary/provision" ] &&
             ! find "$temporary/provision" -type l -print -quit | grep -q . || {
             printf "ERROR: transferred v2 bundle contains a symlink\n" >&2
@@ -505,7 +510,8 @@ run_v2_guest_provisioning() {
     if ! v2_admin_guest bash -c '
         set -Eeuo pipefail
         export DEVBOX_PROVISION_ROOT="/var/lib/devbox-v2/bundles/$1"
-        sudo env DEVBOX_NO_MOUNTS=true DEVBOX_V2_GUEST_USER=devbox \
+        sudo env DEVBOX_PROVISION_ROOT="$DEVBOX_PROVISION_ROOT" \
+            DEVBOX_NO_MOUNTS=true DEVBOX_V2_GUEST_USER=devbox \
             bash "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
     ' _ "$digest"; then
         validate_v2_guest_preflight || {
@@ -1419,7 +1425,7 @@ run_v2() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>"
             check_host_platform
             check_v2_dependencies
             acquire_lock lifecycle
@@ -1450,6 +1456,14 @@ run_v2() {
             [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox services status"
             require_running_v2_vm
             show_v2_services_status
+            ;;
+        auth)
+            require_running_v2_vm
+            v2_guest_interactive devbox auth "$@"
+            ;;
+        db)
+            require_running_v2_vm
+            v2_guest devbox db "$@"
             ;;
         stop)
             case "${1:-}" in
@@ -1491,6 +1505,6 @@ run_v2() {
             release_lock
             log "Destroyed v2 VM runtime data. No host project or data directories were used."
             ;;
-        *) die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>" ;;
+        *) die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>" ;;
     esac
 }
