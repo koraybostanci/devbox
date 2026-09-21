@@ -53,18 +53,17 @@ weaken any later phase's exit criteria.
 The phases form this sequence; each later phase builds on the accepted
 identity, workspace, and configuration established earlier.
 
-1. Phase 3 — guest `devbox` identity and workspace (in progress, draft PR #10).
-2. Phase 4a — guest-local configuration location and guest-side secret
+1. Phase 4a — guest-local configuration location and guest-side secret
    generation.
-3. Phase 5 — root-managed PostgreSQL and Valkey.
-4. Phase 6 — signed release distribution.
-5. Phase 7 — remove v2 host runtime dependencies.
-6. Phase 8 — explicit migration and default promotion.
+2. Phase 5 — root-managed PostgreSQL and Valkey.
+3. Phase 6 — signed release distribution.
+4. Phase 7 — remove v2 host runtime dependencies.
+5. Phase 8 — explicit migration and default promotion.
 
-Phase 4b (optional provider authentication) depends only on Phase 3 and is
-deliberately off the critical path: no later phase requires provider
-authentication, so it may be deferred or skipped. Phase 3 is the gate for every
-later phase and must be accepted first.
+Phase 3 (guest `devbox` identity and workspace) is complete and merged as
+PR #10. Phase 4b (optional provider authentication) depends only on Phase 3 and
+is deliberately off the critical path: no later phase requires provider
+authentication, so it may be deferred or skipped.
 
 ## Completed phases
 
@@ -92,84 +91,20 @@ later phase and must be accepted first.
 - Phase 2 intentionally retained the generated Colima account as the
   bootstrap transport; guest identity and direct user access belong to Phase 3.
 
-## Phase 3: guest devbox identity and workspace — in progress
+### Phase 3: guest devbox identity and workspace — complete (PR #10)
 
-### Goal
-
-For v2 only, establish an unprivileged `devbox` account with:
-
-- Home: `/home/devbox`
-- Workspace: `/home/devbox/workspace`
-- No sudo, Docker group membership, Docker-socket access, root-bundle access,
-  or bootstrap-admin identity access
-- Direct IDE/CLI access through a separate `devbox-v2` SSH alias
-
-The generated Colima account remains a restricted bootstrap/admin transport
-for bundle transfer and root provisioning. It is not the daily development
-identity.
-
-### Intended implementation decisions
-
-- Root-managed bundle state lives below `/var/lib/devbox-v2`; user-readable
-  staged provisioning input is root-owned and not user-writable.
-- The host key is authorized through root-managed guest SSH material. Direct
-  v2 access must not reuse Colima's bootstrap SSH control socket.
-- The v2 SSH configuration is separate from the legacy alias, does not forward
-  the host agent, uses the dedicated identity, and must validate its effective
-  OpenSSH configuration against inherited host settings.
-- Root-to-`devbox` dispatch must explicitly set `HOME` and the initial working
-  directory to `/home/devbox`, preserve required v2 environment variables,
-  and avoid granting sudo.
-- v2 and legacy lifecycle/SSH configuration changes use a shared lifecycle
-  lock.
-
-### Current status (branch published as draft PR #10)
-
-- Branch: `phase-3-guest-identity-workspace`
-- Base: `7b99d43` (merged Phase 2)
-- The Phase 3 changes in the launcher, provisioning scripts, checks, and
-  documentation are committed on the branch and published as **draft PR #10**;
-  they are no longer an uncommitted worktree.
-- Static checks and several independent reviews have run, but **Phase 3 is not
-  accepted or publishable**, so the draft PR must not be merged.
-- The guest-side privilege preflight in `lib/v2.sh` originally used a nested
-  double-quoted `bash -c`/AWK implementation. That parser was found to be valid
-  when executed directly in a Linux/mawk sandbox, so the earlier
-  `./devbox v2 provision` runtime syntax error could not be reproduced from the
-  committed source; the failure most likely originated in the SSH transport's
-  quoting rather than in the parser body.
-- The preflight has since been rewritten on the PR #10 branch as a
-  single-quoted guest script with no nested quoting, and it now rejects any
-  sudo privilege, not only passwordless sudo, to match the no-sudo contract.
-- The real `./devbox v2 provision` lifecycle has still not been re-run against
-  the rewritten preflight.
-- Phase 3 is the gate for every later phase; do not begin Phase 4a or later
-  work until Phase 3 is accepted.
-
-### Required next step
-
-Re-run the real `./devbox v2 provision` lifecycle against the rewritten
-preflight and confirm that the exact no-sudo guest output:
-
-```text
-User devbox is not allowed to run sudo on <host>.
-```
-
-is the only accepted state, while unsafe or unparseable sudo state fails. Then
-verify all of the following before accepting Phase 3:
-
-```sh
-./devbox v2 provision
-./devbox v2 exec id -un              # devbox
-./devbox v2 exec pwd                 # /home/devbox
-ssh devbox-v2 id -un                 # devbox
-ssh devbox-v2 pwd                    # /home/devbox
-./devbox v2 exec test -w /home/devbox/workspace
-```
-
-Also verify that `devbox` has no sudo privileges or Docker socket write
-access, root bundle state is unreadable, no legacy mount exists in v2, and the
-legacy profile is unchanged.
+- Added the unprivileged `devbox` account at `/home/devbox` with a writable
+  `/home/devbox/workspace`, and a separate `devbox-v2` SSH alias authorized
+  through root-managed guest SSH material rather than the bootstrap socket.
+- Root-managed bundle state lives below `/var/lib/devbox-v2`; the guest
+  privilege preflight rejects any sudo privilege, Docker-socket access is
+  denied, and no legacy mounts exist in v2.
+- The real `./devbox v2 provision` lifecycle exposed and fixed several
+  provisioning defects: a literal `''` inside a host single-quoted remote
+  payload, an exact-match SSH `IdentityFile` check that broke on `Host *`, a
+  validator querying Colima's prefixed source host name, and authorized-keys
+  written unreadable by the target user.
+- Verified on macOS/Colima with `scripts/accept-phase3.sh` (15/15 checks).
 
 ## Phase 4a: guest-local configuration and secret generation
 
