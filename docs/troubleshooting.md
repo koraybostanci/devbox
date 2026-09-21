@@ -31,19 +31,19 @@ and is never read from the host.
 ```sh
 devbox status
 colima list
-ssh devbox-v2 true
+ssh devbox true
 ```
 
-The IDE/CLI host is `devbox-v2`; Colima assigns its localhost port dynamically.
+The IDE/CLI host is `devbox`; Colima assigns its localhost port dynamically.
 `devbox start` refreshes the managed SSH configuration. Agent forwarding is
 disabled by design:
 
 ```sh
-ssh -G devbox-v2 | grep -i forwardagent
+ssh -G devbox | grep -i forwardagent
 ```
 
 If provisioning fails before direct SSH is authorized, `devbox connect` is
-unavailable; inspect the VM with `colima ssh -p devbox-v2`, which uses Colima's
+unavailable; inspect the VM with `colima ssh -p devbox`, which uses Colima's
 generated administrative account.
 
 ## Provisioning failure
@@ -63,7 +63,7 @@ increasing `DEVBOX_DISK`.
 
 PostgreSQL and Valkey are root-managed and bound to `127.0.0.1` only. Check
 them with `devbox services status`. Credentials live in
-`~/.config/devbox-v2/secrets` inside the guest. To change the PostgreSQL port,
+`~/.config/devbox/secrets` inside the guest. To change the PostgreSQL port,
 update `POSTGRES_PORT` in `.env` and run `devbox provision`.
 
 ## Release installation
@@ -80,7 +80,7 @@ deliberately from the new path:
 
 ```sh
 devbox stop
-cat "$HOME/.colima/devbox-v2/.devbox-owner"
+cat "$HOME/.colima/devbox/.devbox-owner"
 ```
 
 Do not rewrite the marker to claim a profile created by another checkout.

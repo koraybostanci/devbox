@@ -1,17 +1,17 @@
 # Architecture
 
-devbox runs a single Colima VM (the `devbox-v2` profile) and keeps everything
+devbox runs a single Colima VM (the `devbox` profile) and keeps everything
 except the repository and your Colima installation on the guest.
 
 ## Host / guest boundary
 
 - The host owns the repository, `.env`, the Colima profile, and a marked
-  OpenSSH host alias for `devbox-v2`. It needs only Colima and the OpenSSH
+  OpenSSH host alias for `devbox`. It needs only Colima and the OpenSSH
   client.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
-  `~/.colima/_lima`. The v2 profile disables Docker auto-activation, automatic
+  `~/.colima/_lima`. The devbox profile disables Docker auto-activation, automatic
   SSH config edits, and agent forwarding, and sets `sshConfig: false`.
 
 ## Identity
@@ -21,7 +21,7 @@ Provisioning creates an unprivileged `devbox` account:
 - Home `/home/devbox`, writable workspace `/home/devbox/workspace`.
 - No sudo, no Docker group membership, no Docker-socket access, no access to
   root-managed bundle state.
-- Direct IDE/CLI access uses the separate `devbox-v2` SSH alias, authorized
+- Direct IDE/CLI access uses the separate `devbox` SSH alias, authorized
   through root-managed guest SSH material rather than the bootstrap account.
 
 A root-owned privilege preflight rejects unsafe identity or privilege state
@@ -31,10 +31,10 @@ before direct SSH access is authorized.
 
 The host computes a SHA-256 digest over the sorted `provision/` tree and streams
 it over Colima SSH when stale. The bundle is installed root-owned below
-`/var/lib/devbox-v2`, and the system, tools, and verify scripts run against a
+`/var/lib/devbox`, and the system, tools, and verify scripts run against a
 root-owned, read-only provisioning input.
 
-Guest-local configuration lives under `/home/devbox/.config/devbox-v2/`
+Guest-local configuration lives under `/home/devbox/.config/devbox/`
 (directory 0700, files 0600):
 
 - `config` — non-secret defaults (Git identity, PostgreSQL user/database/port),
@@ -45,9 +45,9 @@ Guest-local configuration lives under `/home/devbox/.config/devbox-v2/`
 ## Services
 
 PostgreSQL (`postgres:18.3`) and Valkey (`valkey/valkey:8.1`) run as a
-root-owned Compose project (`devbox-v2`) defined by
+root-owned Compose project (`devbox`) defined by
 `provision/config/services/compose.yaml`, with persistent data below
-`/var/lib/devbox-v2/services/data/`. Both publish to `127.0.0.1` only; the
+`/var/lib/devbox/services/data/`. Both publish to `127.0.0.1` only; the
 `devbox` user reaches them over loopback using the guest-local credentials.
 
 ## Guest companion

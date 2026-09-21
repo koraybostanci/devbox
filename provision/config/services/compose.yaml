@@ -9,7 +9,7 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:?POSTGRES_PORT is required}:5432"
     volumes:
-      - /var/lib/devbox-v2/services/data/postgres:/var/lib/postgresql
+      - /var/lib/devbox/services/data/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -32,7 +32,7 @@ services:
     ports:
       - "127.0.0.1:${VALKEY_PORT:?VALKEY_PORT is required}:6379"
     volumes:
-      - /var/lib/devbox-v2/services/data/valkey:/data
+      - /var/lib/devbox/services/data/valkey:/data
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli --no-auth-warning -a \"$$VALKEY_PASSWORD\" ping | grep -q PONG"]
       interval: 5s

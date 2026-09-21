@@ -7,7 +7,7 @@
 
 set -Eeuo pipefail
 
-CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox-v2}"
+CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
 PROVIDERS=(github claude opencode databricks)
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

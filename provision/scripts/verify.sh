@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/provision}"
-export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox-v2}"
+export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
 
 set -a
 source "$DEVBOX_PROVISION_ROOT/versions.env"
@@ -28,7 +28,7 @@ has_mode() {
     [ -f "$path" ] && [ "$(stat -c '%a' "$path")" = "$expected" ]
 }
 
-has_verified_v2_bundle() {
+has_verified_devbox_bundle() {
     local root="$1" digest actual
 
     digest="$(cat "$root/.devbox-bundle.sha256" 2>/dev/null || true)"
@@ -46,42 +46,42 @@ login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
-check "v2 guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
-    check "v2 guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
-    check "guest-local provisioning bundle" has_verified_v2_bundle "$DEVBOX_PROVISION_ROOT"
-    check "v2 root bundle state is inaccessible" bash -c '
-        [ ! -r /var/lib/devbox-v2/bundles ] &&
-            [ ! -w /var/lib/devbox-v2/bundles ]
+check "devbox guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
+    check "devbox guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
+    check "guest-local provisioning bundle" has_verified_devbox_bundle "$DEVBOX_PROVISION_ROOT"
+    check "devbox root bundle state is inaccessible" bash -c '
+        [ ! -r /var/lib/devbox/bundles ] &&
+            [ ! -w /var/lib/devbox/bundles ]
     '
-    check "v2 staged provisioning input is root-owned, readable, and read-only" bash -c '
+    check "devbox staged provisioning input is root-owned, readable, and read-only" bash -c '
         [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] &&
             [ "$(stat -c "%U" "$DEVBOX_PROVISION_ROOT")" = root ] &&
             [ -r "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ] &&
             [ ! -w "$DEVBOX_PROVISION_ROOT" ] &&
             [ ! -w "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ]
     '
-    check "v2 active user" test "$(id -un)" = devbox
-    check "v2 guest home" test "$HOME" = /home/devbox
-    check "v2 workspace is writable and real" bash -c '
+    check "devbox active user" test "$(id -un)" = devbox
+    check "devbox guest home" test "$HOME" = /home/devbox
+    check "devbox workspace is writable and real" bash -c '
         [ -d /home/devbox/workspace ] && [ ! -L /home/devbox/workspace ] &&
             [ -w /home/devbox/workspace ]
     '
-    check "v2 guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
-    check "v2 guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
-    check "v2 guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
-    check "v2 has no legacy mounts" bash -c '
+    check "devbox guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
+    check "devbox guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
+    check "devbox guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
+    check "devbox has no legacy mounts" bash -c '
         [ ! -e /mnt/devbox/projects ] && [ ! -e /mnt/devbox/data ]
     '
     source "$DEVBOX_GUEST_CONFIG_ROOT/config"
     source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
-    check "v2 services root is root-owned and closed" bash -c '
-        [ -d /var/lib/devbox-v2/services ] &&
-            [ "$(stat -c "%U" /var/lib/devbox-v2/services)" = root ] &&
-            [ ! -w /var/lib/devbox-v2/services ]
+    check "devbox services root is root-owned and closed" bash -c '
+        [ -d /var/lib/devbox/services ] &&
+            [ "$(stat -c "%U" /var/lib/devbox/services)" = root ] &&
+            [ ! -w /var/lib/devbox/services ]
     '
-    check "v2 PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
-    check "v2 Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
-    check "v2 Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
+    check "devbox PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
+    check "devbox Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
+    check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
