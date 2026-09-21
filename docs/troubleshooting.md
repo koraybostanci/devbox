@@ -45,10 +45,16 @@ devbox v2 start
 devbox v2 provision
 ```
 
-If bundle installation or provisioning fails, the guest remains available for
-inspection through `devbox v2 connect`. A subsequent `devbox v2 provision`
-re-streams the bundle and retries the guest stages. Do not use `/provision` in
-v2: its installed bundle is under `~/.local/share/devbox-v2/bundles/`.
+If bundle installation or provisioning fails after alias authorization, the
+guest remains available for inspection through `devbox v2 connect`. On a fresh
+v2 VM that fails before alias authorization, `devbox v2 connect` is unavailable;
+inspect it with `colima ssh -p devbox-v2`, which uses Colima's generated
+administrative account. A subsequent `devbox v2 provision` re-streams the
+bundle and retries the guest stages. Do not use `/provision` in v2: its root
+provisioning bundle is stored below `/var/lib/devbox-v2`. Daily v2 access is the
+unprivileged `devbox` user with workspace `/home/devbox/workspace`; use the
+separate `devbox-v2` SSH alias for IDE access. The legacy `devbox` alias and
+`~/projects` layout are not v2 recovery paths.
 
 No-mount means no host filesystem mounts; it does not mean network isolation.
 The unresolved Colima 0.10.3 `user-v2` limitation reported by the isolation POC
