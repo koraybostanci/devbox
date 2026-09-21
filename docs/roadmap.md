@@ -7,8 +7,8 @@ mounted profile entirely, so v2 is now the only path and the default.
 ## Phase sequence
 
 This is the planned order. Every phase after Phase 3 depends on the accepted
-Phase 3 guest identity and workspace. Phase 4b is optional and may be deferred
-or skipped without blocking any later phase.
+Phase 3 guest identity and workspace. Phase 4b (guest-local provider
+authentication) is optional and off the critical path; it is now complete.
 
 | Phase | Status | Depends on | Delivery |
 |---|---|---|---|
@@ -17,7 +17,7 @@ or skipped without blocking any later phase.
 | Phase 2: no-mount v2 profile | Complete | — | PR #8 |
 | Phase 3: guest identity and workspace | Complete | Phase 2 | PR #10 |
 | Phase 4a: guest config and secrets | Complete | Phase 3 | PR #14 |
-| Phase 4b: optional provider auth | Optional | Phase 3 | — |
+| Phase 4b: guest-local provider auth | Complete | Phase 3 | PR #26 |
 | Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
 | Phase 6: signed release distribution | Complete | Phase 5 | PR #18, #19 |
 | Phase 7: v2 host dependencies removed | Complete | Phase 6 | PR #21 |
@@ -85,20 +85,15 @@ and untouched.
 guest, survive stop/start, and are removed by rebuild/destroy, without copying
 host secrets or changing legacy flows.
 
-### Phase 4b: Optional provider authentication
+### Phase 4b: Guest-local provider authentication
 
 **Purpose.** Provide optional guest-local authentication for external providers
 and a guest-local companion for authentication status and service client
 helpers.
 
-**Compatibility guarantee.** Existing legacy configuration, mounts, SSH alias,
-data, and authentication commands remain valid and untouched.
-
-**Prerequisites.** Phase 3's stable guest identity and workspace.
-
-**Status.** Optional and deferrable. No later phase requires provider
-authentication, so this phase may be skipped without blocking Phase 5 or any
-other phase.
+**Status.** Complete (PR #26). Provider authentication is optional and
+performed entirely inside the guest; the companion also reports status and
+PostgreSQL connection settings.
 
 **Exit criteria.** A user can authenticate optional providers entirely inside
 the v2 guest; authentication is never required for the other phases.

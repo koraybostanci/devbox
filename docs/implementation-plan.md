@@ -54,15 +54,12 @@ identity, workspace, and configuration established earlier.
 
 1. Phase 8 — explicit migration and default promotion.
 
-Phase 3 (guest `devbox` identity and workspace) is complete and merged as
-PR #10, Phase 4a (guest-local configuration and secret generation) as PR #14,
-Phase 5 (root-managed PostgreSQL and Valkey) as PR #16, Phase 6 (signed release
-distribution) as PR #18 and PR #19, and Phase 7 (remove v2 host runtime
-dependencies) as PR #21. Phase 8's explicit migration tooling is complete as
-PR #23; its default promotion remains outstanding and requires separate
-explicit approval. Phase 4b (optional provider authentication) depends only on
-Phase 3 and is deliberately off the critical path: no later phase requires
-provider authentication, so it may be deferred or skipped.
+Phase 3 (guest `devbox` identity and workspace) is complete (PR #10), Phase 4a
+(guest-local configuration and secret generation) as PR #14, Phase 4b
+(guest-local provider authentication) as PR #26, Phase 5 (root-managed
+PostgreSQL and Valkey) as PR #16, Phase 6 (signed release distribution) as
+PR #18 and PR #19, Phase 7 (remove v2 host runtime dependencies) as PR #21, and
+Phase 8 (v2 is the default) as PR #25.
 
 ## Completed phases
 
@@ -154,10 +151,13 @@ provider authentication, so it may be deferred or skipped.
   remains separate and continues to use `brew`, `jq`, `yq`, and `docker`.
 - Verified with `scripts/accept-phase7.sh` (5/5 checks).
 
-## Phase 4b: optional provider authentication
+## Phase 4b: guest-local provider authentication
 
-Optional and off the critical path. This phase may be deferred or skipped
-without blocking Phase 5 or any later phase.
+### Status
+
+Complete (PR #26). Optional provider authentication and a guest-local
+companion (`auth status`, `auth login <provider>`, `db info`) are implemented;
+nothing depends on this phase.
 
 ### Prerequisite
 
