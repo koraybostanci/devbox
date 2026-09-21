@@ -49,12 +49,36 @@ login_shell_is_clean() {
 check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
 if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
     check "guest-local provisioning bundle" has_verified_v2_bundle "$DEVBOX_PROVISION_ROOT"
+    check "v2 root bundle state is inaccessible" bash -c '
+        [ ! -r /var/lib/devbox-v2/bundles ] &&
+            [ ! -w /var/lib/devbox-v2/bundles ]
+    '
+    check "v2 staged provisioning input is root-owned, readable, and read-only" bash -c '
+        [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] &&
+            [ "$(stat -c "%U" "$DEVBOX_PROVISION_ROOT")" = root ] &&
+            [ -r "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ] &&
+            [ ! -w "$DEVBOX_PROVISION_ROOT" ] &&
+            [ ! -w "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ]
+    '
+    check "v2 active user" test "$(id -un)" = devbox
+    check "v2 guest home" test "$HOME" = /home/devbox
+    check "v2 workspace is writable and real" bash -c '
+        [ -d /home/devbox/workspace ] && [ ! -L /home/devbox/workspace ] &&
+            [ -w /home/devbox/workspace ]
+    '
+    check "v2 guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
+    check "v2 guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
+    check "v2 guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
+    check "v2 has no legacy mounts" bash -c '
+        [ ! -e /mnt/devbox/projects ] && [ ! -e /mnt/devbox/data ]
+    '
+    check "v2 Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
 else
     check "projects mount is writable" test -w /mnt/devbox/projects
     check "data mount is writable" test -w /mnt/devbox/data
+    check "Docker daemon" docker info
+    check "Docker Compose" docker compose version
 fi
-check "Docker daemon" docker info
-check "Docker Compose" docker compose version
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
