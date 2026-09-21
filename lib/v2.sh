@@ -266,7 +266,7 @@ stream_v2_bundle() {
         chmod 700 "$root"
         temporary="$(mktemp -d "$root/.bundle.XXXXXX")"
         trap "rm -rf \"$temporary\"" EXIT
-        tar -xf - -C "$temporary"
+        tar --warning=no-unknown-keyword -xf - -C "$temporary"
         [ ! -L "$temporary/provision" ] &&
             ! find "$temporary/provision" -type l -print -quit | grep -q . || {
             printf "ERROR: transferred v2 bundle contains a symlink\n" >&2
