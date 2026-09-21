@@ -6,13 +6,24 @@ must preserve the legacy `devbox` profile, its mounts, the `devbox` SSH alias,
 existing data, and all existing commands until explicit migration and default
 promotion.
 
-## Completed work
+## Phase sequence
 
-| Phase | Status | Delivery |
-|---|---|---|
-| OpenCode v2 | Complete | PR #5 |
-| Phase 1: isolation POC | Complete | PR #6 |
-| Phase 2: Experimental no-mount v2 profile and bundle | Complete | PR #8 |
+This is the planned order. Every phase after Phase 3 depends on the accepted
+Phase 3 guest identity and workspace. Phase 4b is optional and may be deferred
+or skipped without blocking any later phase.
+
+| Phase | Status | Depends on | Delivery |
+|---|---|---|---|
+| OpenCode v2 | Complete | — | PR #5 |
+| Phase 1: isolation POC | Complete | — | PR #6 |
+| Phase 2: no-mount v2 profile | Complete | — | PR #8 |
+| Phase 3: guest identity and workspace | In progress | Phase 2 | PR #10 |
+| Phase 4a: guest config and secrets | Not started | Phase 3 | — |
+| Phase 4b: optional provider auth | Optional | Phase 3 | — |
+| Phase 5: PostgreSQL and Valkey | Not started | Phase 4a | — |
+| Phase 6: signed release distribution | Not started | Phase 5 | — |
+| Phase 7: v2 host dependencies removed | Not started | Phase 6 | — |
+| Phase 8: migration and default promotion | Not started | Phase 7 | — |
 
 Phase 1 established the isolated-profile proof of concept. It is not a change
 to the legacy profile or its default behavior.
@@ -23,7 +34,9 @@ Every phase, including a follow-up after a merged phase, uses this process:
 
 1. Start with a new, fresh agent.
 2. Fetch and prune `origin`, then fast-forward local `main` from `origin/main`.
-3. Create a dedicated branch for that phase from the updated `main`.
+3. For a new phase, create a dedicated branch from the updated `main`. To
+   resume an in-progress phase, continue its existing branch instead; see
+   [`implementation-plan.md`](implementation-plan.md).
 4. Use the `implement-review-loop` skill for the implementation and independent
    review.
 5. Preserve the phase's approved scope; do not change legacy behavior outside
@@ -48,24 +61,47 @@ the v2 profile, independent of the legacy mount-oriented home layout.
 
 **Prerequisites.** Phase 2's experimental no-mount v2 profile and bundle.
 
+**Status.** Implemented on branch `phase-3-guest-identity-workspace` and
+published as draft PR #10. Not yet accepted; the real v2 lifecycle checks in
+[`implementation-plan.md`](implementation-plan.md) must pass before merge.
+
 **Exit criteria.** The v2 guest has a documented, repeatable identity and
 workspace that work without host mounts; the legacy profile remains usable
 without migration.
 
-### Phase 4: Guest-local configuration and authentication
+### Phase 4a: Guest-local configuration and secret generation
 
-**Purpose.** Make v2 configuration and service authentication guest-local,
-with lifecycle and recovery behavior defined for the isolated workspace.
+**Purpose.** Define the guest-local v2 configuration location and generate
+guest-local secrets so later phases have a stable place for settings and
+credentials.
 
 **Compatibility guarantee.** Existing legacy configuration, guest-local
-credentials, mounts, SSH alias, data, and authentication commands remain
-valid and untouched.
+credentials, mounts, SSH alias, data, and authentication commands remain valid
+and untouched.
 
 **Prerequisites.** Phase 3's stable guest identity and workspace.
 
-**Exit criteria.** v2 configuration and authentication can be initialized,
-used, and recovered entirely within the v2 guest, without copying host secrets
-or changing legacy authentication flows.
+**Exit criteria.** v2 configuration and generated secrets live only in the v2
+guest, survive stop/start, and are removed by rebuild/destroy, without copying
+host secrets or changing legacy flows.
+
+### Phase 4b: Optional provider authentication
+
+**Purpose.** Provide optional guest-local authentication for external providers
+and a guest-local companion for authentication status and service client
+helpers.
+
+**Compatibility guarantee.** Existing legacy configuration, mounts, SSH alias,
+data, and authentication commands remain valid and untouched.
+
+**Prerequisites.** Phase 3's stable guest identity and workspace.
+
+**Status.** Optional and deferrable. No later phase requires provider
+authentication, so this phase may be skipped without blocking Phase 5 or any
+other phase.
+
+**Exit criteria.** A user can authenticate optional providers entirely inside
+the v2 guest; authentication is never required for the other phases.
 
 ### Phase 5: Root-managed PostgreSQL and Valkey
 
@@ -76,8 +112,8 @@ rather than relying on the legacy user-managed container workflow.
 legacy Docker volumes, ports, data, mounts, SSH alias, and commands keep their
 current behavior; no service is silently replaced or started for legacy users.
 
-**Prerequisites.** Phase 4's guest-local configuration and authentication,
-including a defined v2 configuration location for service settings.
+**Prerequisites.** Phase 4a's guest-local configuration location and
+guest-side secret generation. Phase 4b is not required.
 
 **Exit criteria.** The v2 profile can manage PostgreSQL and Valkey as
 documented root-managed services with persistent, isolated v2 data, while the
@@ -93,7 +129,7 @@ legacy profile behavior remain supported; release distribution adds an option
 and does not change mounts, SSH alias, data, or commands.
 
 **Prerequisites.** Phase 2's bundle and the v2 guest capabilities completed
-through Phase 5.
+through Phase 5. Phase 4b is not required.
 
 **Exit criteria.** A v2 release artifact is signed, its verification procedure
 is documented and tested, and users can install the experimental v2 path
@@ -110,7 +146,8 @@ profile retains its existing host integration, mounts, `devbox` SSH alias,
 data, and commands.
 
 **Prerequisites.** Phase 6's signed release distribution and a v2 workflow
-that covers identity, workspace, configuration, authentication, and services.
+that covers identity, workspace, configuration, and services. Optional provider
+authentication (Phase 4b) is not required.
 
 **Exit criteria.** The documented v2 workflow runs with its declared minimal
 host requirements and no removed host dependency; regression checks confirm
