@@ -143,6 +143,11 @@ v2_guest() {
     ssh -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
 }
 
+# Interactive variant for prompts (provider login, portable shell).
+v2_guest_interactive() {
+    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
+}
+
 v2_as_guest() {
     v2_admin_guest sudo -u "$V2_GUEST_USER" -- env \
         HOME="$V2_GUEST_HOME" \
@@ -1419,7 +1424,7 @@ run_v2() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>"
             check_host_platform
             check_v2_dependencies
             acquire_lock lifecycle
@@ -1450,6 +1455,14 @@ run_v2() {
             [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox services status"
             require_running_v2_vm
             show_v2_services_status
+            ;;
+        auth)
+            require_running_v2_vm
+            v2_guest_interactive devbox auth "$@"
+            ;;
+        db)
+            require_running_v2_vm
+            v2_guest devbox db "$@"
             ;;
         stop)
             case "${1:-}" in
@@ -1491,6 +1504,6 @@ run_v2() {
             release_lock
             log "Destroyed v2 VM runtime data. No host project or data directories were used."
             ;;
-        *) die "Usage: devbox <start|provision|connect|exec|status|services|stop|destroy>" ;;
+        *) die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>" ;;
     esac
 }

@@ -162,3 +162,5 @@ for package in "${packages[@]}"; do
 done
 
 configure_v2_guest_identity
+
+install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox

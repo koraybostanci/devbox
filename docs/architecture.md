@@ -50,6 +50,14 @@ root-owned Compose project (`devbox-v2`) defined by
 `/var/lib/devbox-v2/services/data/`. Both publish to `127.0.0.1` only; the
 `devbox` user reaches them over loopback using the guest-local credentials.
 
+## Guest companion
+
+Provisioning installs a small guest-local `devbox` companion at
+`/usr/local/bin/devbox`. It reports optional provider authentication state
+(`devbox auth status`), starts provider logins inside the guest
+(`devbox auth login <provider>`), and prints PostgreSQL connection settings
+(`devbox db info`). It never reads host credentials.
+
 ## Release distribution
 
 `scripts/release.sh` builds a deterministic, versioned archive with a per-file
