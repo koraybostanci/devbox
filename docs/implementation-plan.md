@@ -21,6 +21,9 @@ planning session. The authoritative high-level roadmap remains
 - Authentication is optional. Tools are installed by default, but provider
   credentials must be guest-local and never persisted in host configuration,
   logs, command arguments, or release artifacts.
+- Phases are ordered by dependency. Optional phases are off the critical path
+  and may be deferred or skipped without weakening any later phase's exit
+  criteria.
 
 ## Delivery protocol
 
@@ -41,6 +44,27 @@ that phase. Fetch `origin`, check out the phase branch, fast-forward it from
 the current `origin/main`, and continue there. Keep the PR in draft, and do not
 promote the phase until the real acceptance checks pass. Each phase's "Current
 status" section below records the exact branch, base, and next step.
+
+Optional phases may be deferred or skipped. Skipping an optional phase must not
+weaken any later phase's exit criteria.
+
+## Phase order
+
+The phases form this sequence; each later phase builds on the accepted
+identity, workspace, and configuration established earlier.
+
+1. Phase 3 — guest `devbox` identity and workspace (in progress, draft PR #10).
+2. Phase 4a — guest-local configuration location and guest-side secret
+   generation.
+3. Phase 5 — root-managed PostgreSQL and Valkey.
+4. Phase 6 — signed release distribution.
+5. Phase 7 — remove v2 host runtime dependencies.
+6. Phase 8 — explicit migration and default promotion.
+
+Phase 4b (optional provider authentication) depends only on Phase 3 and is
+deliberately off the critical path: no later phase requires provider
+authentication, so it may be deferred or skipped. Phase 3 is the gate for every
+later phase and must be accepted first.
 
 ## Completed phases
 
@@ -119,6 +143,8 @@ identity.
   sudo privilege, not only passwordless sudo, to match the no-sudo contract.
 - The real `./devbox v2 provision` lifecycle has still not been re-run against
   the rewritten preflight.
+- Phase 3 is the gate for every later phase; do not begin Phase 4a or later
+  work until Phase 3 is accepted.
 
 ### Required next step
 
@@ -145,26 +171,57 @@ Also verify that `devbox` has no sudo privileges or Docker socket write
 access, root bundle state is unreadable, no legacy mount exists in v2, and the
 legacy profile is unchanged.
 
-## Phase 4: guest-local configuration and authentication
+## Phase 4a: guest-local configuration and secret generation
+
+### Prerequisite
+
+Phase 3's stable guest identity and workspace.
+
+### Scope
+
+- Define the guest-local v2 configuration location for settings, secrets, and
+  service configuration.
+- Move v2 Git identity and non-secret defaults into guest-local v2
+  configuration.
+- Generate v2 service secrets inside the guest only, and never on the host, in
+  logs, command arguments, or release artifacts.
+
+### Exit criteria
+
+- v2 configuration and generated secrets live only in the v2 guest, survive
+  stop/start, and are removed by rebuild/destroy.
+- Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
+  and unchanged.
+
+## Phase 4b: optional provider authentication
+
+Optional and off the critical path. This phase may be deferred or skipped
+without blocking Phase 5 or any later phase.
+
+### Prerequisite
+
+Phase 3's stable guest identity and workspace.
 
 ### Scope
 
 - Add a guest-local `devbox` companion for authentication status and service
   client helpers.
-- Move v2 Git identity and non-secret defaults into guest-local v2
-  configuration.
 - Keep GitHub, Claude Code, OpenCode, and Databricks authentication optional
   and performed inside the guest.
-- Generate service secrets inside the guest only.
 
 ### Exit criteria
 
-- v2 needs no host-stored provider credentials.
-- Guest credentials survive stop/start and are removed by rebuild/destroy.
+- v2 needs no host-stored provider credentials when a provider is configured.
+- Optional provider authentication is never required by another phase.
 - Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
   and unchanged.
 
 ## Phase 5: root-managed PostgreSQL and Valkey
+
+### Prerequisite
+
+Phase 4a's guest-local configuration location and guest-side secret
+generation. Phase 4b is not required.
 
 ### Scope
 
@@ -184,6 +241,11 @@ legacy profile is unchanged.
 
 ## Phase 6: signed release distribution
 
+### Prerequisite
+
+Phase 2's provisioning bundle and the v2 guest capabilities completed through
+Phase 5. Phase 4b is not required.
+
 ### Scope
 
 - Build deterministic, versioned GitHub Release archives with manifests,
@@ -200,6 +262,12 @@ private release-signing key without an explicit user decision.
 
 ## Phase 7: remove v2 host runtime dependencies
 
+### Prerequisite
+
+Phase 6's signed release distribution and a v2 workflow that covers identity,
+workspace, configuration, and services. Optional provider authentication
+(Phase 4b) is not required.
+
 ### Scope
 
 - Remove v2 requirements for host Docker, Compose, jq, yq, Homebrew, and
@@ -214,6 +282,11 @@ A clean account can install and operate v2 without host developer tooling;
 legacy prerequisites remain supported for legacy users.
 
 ## Phase 8: explicit migration and default promotion
+
+### Prerequisite
+
+Phase 7 completion, signed distribution, documented data and credential
+handling, and successful compatibility validation for legacy users.
 
 ### Scope
 
