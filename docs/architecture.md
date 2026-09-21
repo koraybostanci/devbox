@@ -11,14 +11,18 @@ except the repository and your Colima installation on the guest.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
-  `~/.colima/_lima`. The devbox profile disables Docker auto-activation, automatic
-  SSH config edits, and agent forwarding, and sets `sshConfig: false`.
+  `~/.colima/_lima`. The devbox profile disables Docker auto-activation,
+  automatic SSH config edits, and agent forwarding, and sets `sshConfig: false`.
 
 ## Identity
 
 Provisioning creates an unprivileged `devbox` account:
 
-- Home `/home/devbox`, writable workspace `/home/devbox/workspace`.
+- Home `/home/devbox`, writable workspace `/home/devbox/workspace`. The home is
+  bind-mounted onto the Colima data disk (`/mnt/lima-*`) so the toolchain and
+  caches do not fill the small fixed-size guest root disk. On an existing VM the
+  first converge moves the current home contents onto the data disk before
+  switching the mount, so nothing is hidden and the root-disk space is freed.
 - No sudo, no Docker group membership, no Docker-socket access, no access to
   root-managed bundle state.
 - Direct IDE/CLI access uses the separate `devbox` SSH alias, authorized

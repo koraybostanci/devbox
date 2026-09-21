@@ -26,6 +26,52 @@ devbox_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
+# Move an existing root-disk home onto the data-disk target before it is
+# bind-mounted, so converging a pre-existing VM neither hides user data nor
+# leaves the old copy consuming root-disk space. Does nothing once the target
+# already holds data or when there is nothing to move.
+migrate_guest_home_contents() {
+    local source="$1"
+    local target="$2"
+
+    [ -n "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] && return 0
+    [ -n "$(find "$source" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] || return 0
+    printf 'Moving existing guest home onto the data disk...\n'
+    cp -a "$source/." "$target/"
+    find "$source" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
+# Keep the guest user's toolchain and caches on the large Lima data disk
+# (mounted under /mnt/lima-*), not the fixed-size root disk.
+relocate_guest_home() {
+    local guest_user="$1"
+    local guest_home="/home/$1"
+    local data_root target
+
+    [ "$guest_user" = devbox ] || return 1
+    data_root="$(findmnt -rno TARGET -t ext4 2>/dev/null | grep -E '^/mnt/lima-' | head -n 1 || true)"
+    [ -n "$data_root" ] && mountpoint -q "$data_root" || {
+        printf 'WARNING: Lima data disk not found; guest home stays on the root disk\n' >&2
+        return 0
+    }
+    target="$data_root/devbox-home"
+    mkdir -p "$target"
+    chmod 700 "$target"
+    if ! mountpoint -q "$guest_home"; then
+        # A symlinked home is unsafe; leave it for the caller's validation to
+        # reject rather than following it during the move.
+        [ ! -L "$guest_home" ] || return 0
+        mkdir -p "$guest_home"
+        migrate_guest_home_contents "$guest_home" "$target"
+        mount --bind "$target" "$guest_home"
+    fi
+    grep -qE "^[^#]*[[:space:]]$guest_home[[:space:]]" /etc/fstab 2>/dev/null ||
+        printf '%s %s none bind,nofail,x-systemd.requires-mounts-for=%s 0 0\n' \
+            "$target" "$guest_home" "$data_root" >>/etc/fstab
+    chown "$guest_user":"$guest_user" "$guest_home"
+    chmod 700 "$guest_home"
+}
+
 configure_devbox_guest_identity() {
     local guest_user="${DEVBOX_GUEST_USER:-devbox}"
     local guest_home="/home/$guest_user"
@@ -84,6 +130,7 @@ configure_devbox_guest_identity() {
         usermod --shell "$zsh_path" "$guest_user"
     fi
 
+    relocate_guest_home "$guest_user" || return 1
     [ ! -L "$guest_home" ] && [ -d "$guest_home" ] || {
         printf 'ERROR: devbox guest home must be a real directory: %s\n' "$guest_home" >&2
         return 1

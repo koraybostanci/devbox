@@ -1440,7 +1440,7 @@ run_devbox() {
         connect)
             [ $# -eq 0 ] || die "Usage: devbox connect"
             require_running_devbox_vm
-            devbox_guest zsh -l
+            devbox_guest_interactive zsh -l
             ;;
         exec)
             [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
