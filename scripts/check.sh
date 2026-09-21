@@ -120,6 +120,12 @@ grep -q -- '--draft' .github/workflows/release.yml ||
     fail "release.yml must create draft releases for manual publishing"
 grep -q 'isDraft' .github/workflows/release.yml ||
     fail "release.yml must inspect isDraft before acting on an existing release"
+# Draft releases do not create the git tag until they are published, so
+# recovery must also fetch and match the release's target commit.
+grep -q 'targetCommitish' .github/workflows/release.yml ||
+    fail "release.yml must fetch targetCommitish to recover untagged drafts"
+grep -q 'target_commitish' .github/workflows/release.yml ||
+    fail "release.yml must evaluate the draft's target commit before recovering it"
 # Workflow context expressions belong in env: blocks, never in run: scripts.
 # Both inline run: values and block-scalar run: bodies are scanned.
 run_context_usage="$(

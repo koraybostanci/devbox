@@ -161,9 +161,9 @@ commit that last changed `VERSION`, builds the archive from it, signs it with
 the `RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
 public key, and creates a **draft** release titled `devbox v<version>`. The
 draft carries the archive, `SHA256SUMS`, and `SHA256SUMS.sig` with
-automatically generated release notes, and the `v<version>` tag targets that
-commit; do not push tags by hand. Suffixed versions such as `0.1.0-rc1` are
-drafted as prereleases.
+automatically generated release notes and targets that commit; the `v<version>`
+tag is created when the draft is published, so do not push tags by hand.
+Suffixed versions such as `0.1.0-rc1` are drafted as prereleases.
 
 The draft is the approval gate: nothing is public until a maintainer opens the
 [Releases page](https://github.com/koraybostanci/devbox/releases), reviews the
@@ -176,9 +176,11 @@ already in `VERSION` (the input must match it). Recovery resolves the current
 `VERSION` to the commit that last changed it, rebuilds that commit, and
 re-uploads the missing assets into the existing draft with `--clobber`; the
 release stays a draft until a maintainer publishes it. Recovery requires the
-draft's tag to be at the release commit, so a draft whose tag is not at the
-release commit cannot be recovered, and a published release is never
-overwritten. Because recovery always rebuilds the commit that last changed
+draft to target the release commit: a tagged draft needs its tag at that commit,
+and an untagged draft (the normal state while it is still a draft) needs its
+target commit to match it. A draft whose tag is at another commit, or whose
+target commit does not match, cannot be recovered, and a published release is
+never overwritten. Because recovery always rebuilds the commit that last changed
 `VERSION`, an older incomplete draft cannot be recovered after `VERSION` moves
 on; bump `VERSION` for a new release instead.
 
