@@ -243,8 +243,15 @@ else
 fi
 
 # --- release tooling --------------------------------------------------------
-release_root="$validation_root/release"
-mkdir -p "$release_root"
+# Route release sandboxes through a symlinked directory so logical paths
+# (HOME, XDG_DATA_HOME, DEVBOX_DIR) and physical paths differ exactly as they
+# do on macOS CI, where the sandbox HOME lives below /var/folders and is
+# reached through the /var -> /private/var symlink. Release path identity
+# checks must canonicalize before comparing.
+release_real_root="$validation_root/release-real"
+release_root="$validation_root/release-link"
+mkdir -p "$release_real_root"
+ln -s "$release_real_root" "$release_root"
 
 sha256_of() {
     if command -v shasum >/dev/null 2>&1; then
@@ -261,6 +268,93 @@ file_mode_of() {
         stat -c '%a' "$1"
     fi
 }
+
+# Resolve a path physically the way devbox_data_root does: walk up to the
+# nearest existing ancestor, resolve it with cd -P, and re-append the remaining
+# components. Assertions that compare readlink output or marker contents use
+# this so they expect the same physical paths the implementation stores.
+physical_path() {
+    local path="$1" suffix="" base parent target directory
+
+    case "$path" in
+        /*) ;;
+        *) path="$PWD/$path" ;;
+    esac
+    while [ "${path%/}" != "$path" ] && [ -n "${path#/}" ]; do
+        path="${path%/}"
+    done
+
+    while [ ! -e "$path" ] && [ ! -L "$path" ]; do
+        base="${path##*/}"
+        parent="${path%/*}"
+        [ -n "$parent" ] || parent="/"
+        [ "$base" != "$path" ] || break
+        suffix="/$base$suffix"
+        path="${parent%/}"
+        [ -n "$path" ] || path="/"
+    done
+
+    if [ -L "$path" ]; then
+        target="$(readlink "$path")"
+        case "$target" in
+            /*) ;;
+            *) target="$(dirname "$path")/$target" ;;
+        esac
+        path="$(physical_path "$target")"
+    else
+        directory="$(dirname "$path")"
+        if [ "$directory" != "$path" ]; then
+            directory="$(cd -P "$directory" && pwd)"
+            if [ "$directory" = "/" ]; then
+                path="/$(basename "$path")"
+            else
+                path="$directory/$(basename "$path")"
+            fi
+        fi
+    fi
+
+    if [ "$path" = "/" ]; then
+        printf '/%s\n' "${suffix#/}"
+    else
+        printf '%s%s\n' "$path" "$suffix"
+    fi
+}
+
+# devbox_data_root must not create anything and must resolve the data root
+# itself when it is a symlink.
+data_root_real="$release_root/data-root-real"
+data_root_link="$release_root/data-root-link"
+mkdir -p "$data_root_real/devbox"
+ln -s "$data_root_real" "$data_root_link"
+data_root_output="$(
+    HOME="$release_root/data-root-home" XDG_DATA_HOME="$data_root_link" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        devbox_data_root
+    '
+)" || fail "devbox_data_root failed for an existing symlinked data root"
+[ "$data_root_output" = "$(physical_path "$data_root_real/devbox")" ] ||
+    fail "devbox_data_root did not resolve the symlinked data root: $data_root_output"
+command rm -rf "$data_root_real/devbox"
+ln -s "$data_root_real/elsewhere" "$data_root_real/devbox"
+data_root_output="$(
+    HOME="$release_root/data-root-home" XDG_DATA_HOME="$data_root_link" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        devbox_data_root
+    '
+)" || fail "devbox_data_root failed for a data root that is itself a symlink"
+[ "$data_root_output" = "$(physical_path "$data_root_real/elsewhere")" ] ||
+    fail "devbox_data_root did not resolve a data-root symlink: $data_root_output"
+command rm -f "$data_root_real/devbox"
+data_root_output="$(
+    HOME="$release_root/data-root-home" XDG_DATA_HOME="$data_root_link/nested" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        devbox_data_root
+    '
+)" || fail "devbox_data_root failed for a missing data root"
+[ "$data_root_output" = "$(physical_path "$data_root_real/nested/devbox")" ] ||
+    fail "devbox_data_root did not canonicalize a missing data root: $data_root_output"
+[ ! -e "$data_root_real/nested" ] ||
+    fail "devbox_data_root created a missing data root"
 
 release_version="$(cat "$ROOT/VERSION")"
 release_archive="$ROOT/dist/devbox-$release_version/devbox-$release_version.tar.gz"
@@ -330,7 +424,7 @@ cp "$release_root/signing-key.pub.pem" "$relative_root/release-signing-key.pub.p
 ) >/dev/null || fail "relative-path release installation failed"
 [ -x "$relative_data/releases/$release_version/devbox" ] ||
     fail "relative-path installation did not install the release"
-[ "$(readlink "$relative_data/current")" = "$relative_data/releases/$release_version" ] ||
+[ "$(readlink "$relative_data/current")" = "$(physical_path "$relative_data/releases/$release_version")" ] ||
     fail "relative-path installation did not activate the release"
 
 printf 'tampered\n' >"$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
@@ -482,16 +576,18 @@ DEVBOX_ALLOW_UNSIGNED=1 HOME="$install_home" XDG_DATA_HOME="$install_home/.local
     fail "release launcher was not installed"
 [ -f "$install_data/releases/$release_version/.env.example" ] ||
     fail "installed release is missing .env.example"
-[ "$(readlink "$install_data/current")" = "$install_data/releases/$release_version" ] ||
+install_data_physical="$(physical_path "$install_data")"
+install_release_physical="$(physical_path "$install_data/releases/$release_version")"
+[ "$(readlink "$install_data/current")" = "$install_release_physical" ] ||
     fail "release was not activated"
-[ "$(readlink "$install_home/.local/bin/devbox")" = "$install_data/current/devbox" ] ||
+[ "$(readlink "$install_home/.local/bin/devbox")" = "$install_data_physical/current/devbox" ] ||
     fail "PATH symlink does not target the active release"
 
 # Repeating the same install is idempotent.
 DEVBOX_ALLOW_UNSIGNED=1 HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" \
     PATH="$install_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "repeat release installation failed"
-[ "$(readlink "$install_data/current")" = "$install_data/releases/$release_version" ] ||
+[ "$(readlink "$install_data/current")" = "$install_release_physical" ] ||
     fail "repeat installation changed the active release"
 [ ! -e "$install_data/releases/$release_version/current" ] ||
     fail "activation symlink leaked into the release tree"
@@ -504,7 +600,7 @@ DEVBOX_ALLOW_UNSIGNED=1 HOME="$install_home" XDG_DATA_HOME="$install_home/.local
 if grep -q '^corrupt$' "$install_data/releases/$release_version/README.md"; then
     fail "corrupted release contents survived replacement"
 fi
-[ "$(readlink "$install_data/current")" = "$install_data/releases/$release_version" ] ||
+[ "$(readlink "$install_data/current")" = "$install_release_physical" ] ||
     fail "replacement installation changed the active release"
 
 # Replacing an invalid target must preserve a legacy in-tree .env: the copy
@@ -538,7 +634,7 @@ cmp -s "$replace_home/.config/devbox/env" "$legacy_env" ||
 DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" --force \
     >/dev/null || fail "--force release installation failed"
-[ "$(readlink "$replace_data/current")" = "$replace_data/releases/$release_version" ] ||
+[ "$(readlink "$replace_data/current")" = "$(physical_path "$replace_data/releases/$release_version")" ] ||
     fail "--force installation changed the active release"
 
 release_list="$(HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" \
@@ -551,6 +647,28 @@ if HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="$instal
     "$ROOT/scripts/release.sh" use 9.9.9 >/dev/null 2>&1; then
     fail "release use accepted a release that is not installed"
 fi
+
+# `devbox uninstall` from a release install removes the CLI symlink and the
+# activation symlink while leaving the release tree in place. The ownership and
+# activation identity checks run through the symlinked HOME.
+uninstall_home="$release_root/uninstall/home"
+uninstall_data="$uninstall_home/.local/share/devbox"
+uninstall_path="$uninstall_home/.local/bin:/usr/bin:/bin"
+mkdir -p "$uninstall_home"
+DEVBOX_ALLOW_UNSIGNED=1 HOME="$uninstall_home" XDG_DATA_HOME="$uninstall_home/.local/share" \
+    PATH="$uninstall_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
+    fail "release installation for the uninstall test failed"
+[ -L "$uninstall_home/.local/bin/devbox" ] ||
+    fail "uninstall test did not install the CLI symlink"
+HOME="$uninstall_home" XDG_DATA_HOME="$uninstall_home/.local/share" PATH="$uninstall_path" \
+    "$uninstall_data/current/devbox" uninstall >/dev/null ||
+    fail "devbox uninstall failed for a release install"
+[ ! -e "$uninstall_home/.local/bin/devbox" ] && [ ! -L "$uninstall_home/.local/bin/devbox" ] ||
+    fail "devbox uninstall kept the CLI symlink"
+[ ! -e "$uninstall_data/current" ] && [ ! -L "$uninstall_data/current" ] ||
+    fail "devbox uninstall kept the activation symlink"
+[ -x "$uninstall_data/releases/$release_version/devbox" ] ||
+    fail "devbox uninstall removed the installed release tree"
 
 # Upgrading from a release whose .env lived in the versioned tree keeps the
 # host configuration at the stable path.
@@ -578,7 +696,10 @@ printf '%s\n' "$upgrade_list" | grep -qx '0.0.1-rc1' ||
 printf '%s\n' "$upgrade_list" | grep -qx "$release_version (active)" ||
     fail "release list did not mark the upgraded release active"
 
-# devbox_env_file resolves release trees outside the versioned directory.
+# devbox_env_file resolves release trees outside the versioned directory. The
+# launcher reports DEVBOX_DIR physically (cd -P) while HOME can stay logical, so
+# both spellings of the release directory must select the stable host
+# configuration.
 env_unit_home="$release_root/env-unit/home"
 env_unit_release="$env_unit_home/.local/share/devbox/releases/$release_version"
 mkdir -p "$env_unit_release"
@@ -590,7 +711,7 @@ env_output="$(
         devbox_env_file
     '
 )" || fail "devbox_env_file failed for a checkout"
-[ "$env_output" = "$ROOT/.env" ] ||
+[ "$env_output" = "$(physical_path "$ROOT")/.env" ] ||
     fail "devbox_env_file did not return the checkout .env"
 env_output="$(
     HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
@@ -602,6 +723,16 @@ env_output="$(
 )" || fail "devbox_env_file failed for a release tree"
 [ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
     fail "devbox_env_file did not return the stable release configuration"
+env_output="$(
+    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+        DEVBOX_DIR="$(physical_path "$env_unit_release")" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        devbox_env_file
+    '
+)" || fail "devbox_env_file failed for a physically resolved release tree"
+[ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
+    fail "devbox_env_file did not return the stable release configuration for a physical DEVBOX_DIR"
 env_output="$(
     HOME="$env_unit_home" DEVBOX_ENV_FILE="$release_root/override.env" \
         XDG_DATA_HOME="$env_unit_home/.local/share" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
@@ -620,9 +751,13 @@ owner_release="$owner_data/releases/$release_version"
 owner_sibling="$owner_data/releases/0.0.1-rc1"
 owner_marker="$owner_home/.colima/devbox/.devbox-owner"
 mkdir -p "$owner_home/.colima/devbox" "$owner_release" "$owner_sibling"
+owner_data_physical="$(physical_path "$owner_data")"
+owner_release_physical="$(physical_path "$owner_release")"
+# The marker holds the logical data root and the launcher reports the release
+# directory physically; the comparison must canonicalize both.
 printf 'devbox-profile-v2\n%s\n' "$owner_data" >"$owner_marker"
 HOME="$owner_home" XDG_DATA_HOME="$owner_home/.local/share" COLIMA_HOME= LIMA_HOME= \
-    DEVBOX_DIR="$owner_release" ROOT="$ROOT" /bin/bash -c '
+    DEVBOX_DIR="$owner_release_physical" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
     source "$ROOT/lib/devbox.sh"
@@ -642,14 +777,14 @@ HOME="$owner_home" XDG_DATA_HOME="$owner_home/.local/share" COLIMA_HOME= LIMA_HO
 ' || fail "legacy checkout ownership marker was rejected"
 [ "$(sed -n '1p' "$owner_marker")" = "devbox-profile-v2" ] ||
     fail "legacy checkout marker was not rewritten"
-[ "$(sed -n '2p' "$owner_marker")" = "$ROOT" ] ||
+[ "$(sed -n '2p' "$owner_marker")" = "$(physical_path "$ROOT")" ] ||
     fail "rewritten legacy marker recorded the wrong install root"
 
 # A new release under the same data root is accepted after a legacy marker that
 # recorded a sibling release.
 printf 'devbox-profile-v1\n%s\n' "$owner_sibling" >"$owner_marker"
 HOME="$owner_home" XDG_DATA_HOME="$owner_home/.local/share" COLIMA_HOME= LIMA_HOME= \
-    DEVBOX_DIR="$owner_release" ROOT="$ROOT" /bin/bash -c '
+    DEVBOX_DIR="$owner_release_physical" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
     source "$ROOT/lib/devbox.sh"
@@ -658,13 +793,13 @@ HOME="$owner_home" XDG_DATA_HOME="$owner_home/.local/share" COLIMA_HOME= LIMA_HO
 ' || fail "upgrade from a sibling release was rejected"
 [ "$(sed -n '1p' "$owner_marker")" = "devbox-profile-v2" ] ||
     fail "sibling release marker was not rewritten"
-[ "$(sed -n '2p' "$owner_marker")" = "$owner_data" ] ||
+[ "$(sed -n '2p' "$owner_marker")" = "$owner_data_physical" ] ||
     fail "sibling release marker recorded the wrong install root"
 
 # An unrelated marker is rejected with adoption guidance.
 printf 'devbox-profile-v1\n%s\n' "$release_root/elsewhere" >"$owner_marker"
 if HOME="$owner_home" XDG_DATA_HOME="$owner_home/.local/share" COLIMA_HOME= LIMA_HOME= \
-    DEVBOX_DIR="$owner_release" ROOT="$ROOT" /bin/bash -c '
+    DEVBOX_DIR="$owner_release_physical" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
     source "$ROOT/lib/devbox.sh"

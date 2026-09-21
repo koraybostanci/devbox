@@ -11,10 +11,13 @@ DEVBOX_GUEST_PROVISIONING_ROOT="$DEVBOX_GUEST_ROOT/provisioning"
 DEVBOX_SSH_AUTHORIZED_KEYS_FILE='/etc/ssh/authorized_keys/%u'
 
 # A release tree records the data root as the install root; a checkout records
-# its own directory.
+# its own directory. Both the candidate and the data root are canonicalized so
+# the comparison is physical on both sides (macOS $HOME below /var versus the
+# launcher's /private/var).
 devbox_install_root_for() {
-    local directory="$1" data_root
+    local directory data_root
 
+    directory="$(canonicalize_path "$1")"
     data_root="$(devbox_data_root)"
     case "$directory" in
         "$data_root"/releases/*) printf '%s\n' "$data_root" ;;
@@ -69,7 +72,9 @@ check_devbox_ownership() {
     owner_path="$(sed -n '2p' "$DEVBOX_COLIMA_OWNER")"
     case "$owner_version" in
         "$DEVBOX_OWNER_VERSION")
-            [ "$owner_path" = "$DEVBOX_INSTALL_ROOT" ] ||
+            # Markers written before the data root was canonicalized can hold a
+            # logical path; compare physically on the side of the marker too.
+            [ "$(canonicalize_path "$owner_path")" = "$DEVBOX_INSTALL_ROOT" ] ||
                 die "Colima profile '$DEVBOX_PROFILE' is owned by another devbox installation: $owner_path"
             ;;
         "$DEVBOX_OWNER_LEGACY_VERSION")

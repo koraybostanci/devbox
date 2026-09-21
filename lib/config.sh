@@ -48,35 +48,39 @@ env_value() {
 # Resolve the host configuration file. An explicit DEVBOX_ENV_FILE wins.
 # Release installs live under the data root's releases/ tree, so their
 # configuration must stay outside the versioned directory; checkouts keep the
-# repository-local .env.
+# repository-local .env. The release-tree detection compares canonical
+# directories because the launcher reports DEVBOX_DIR physically while the
+# data root may be reached through a symlinked $HOME.
 devbox_env_file() {
-    local data_root
+    local directory data_root
 
     if [ -n "${DEVBOX_ENV_FILE:-}" ]; then
         printf '%s\n' "$DEVBOX_ENV_FILE"
         return
     fi
+    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
     data_root="$(devbox_data_root)"
-    case "${DEVBOX_DIR:-}" in
+    case "$directory" in
         "$data_root"/releases/*) printf '%s\n' "$HOME/.config/devbox/env" ;;
-        *) printf '%s\n' "$DEVBOX_DIR/.env" ;;
+        *) printf '%s\n' "$directory/.env" ;;
     esac
 }
 
 # Warn once when a release install still carries the superseded in-tree .env.
 devbox_warn_legacy_env_file() {
-    local data_root release_env
+    local directory data_root release_env
 
     [ "${DEVBOX_ENV_FILE_WARNED:-}" = true ] && return 0
+    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
     data_root="$(devbox_data_root)"
-    case "${DEVBOX_DIR:-}" in
+    case "$directory" in
         "$data_root"/releases/*) ;;
         *) return 0 ;;
     esac
     release_env="$HOME/.config/devbox/env"
-    if [ -f "$release_env" ] && [ -f "$DEVBOX_DIR/.env" ]; then
+    if [ -f "$release_env" ] && [ -f "$directory/.env" ]; then
         DEVBOX_ENV_FILE_WARNED=true
-        warn "ignoring legacy $DEVBOX_DIR/.env; release configurations live at $release_env"
+        warn "ignoring legacy $directory/.env; release configurations live at $release_env"
     fi
 }
 

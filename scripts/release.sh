@@ -467,7 +467,7 @@ install_release() {
         migrate_release_env "$target"
     fi
     if [ -L "$current" ]; then
-        previous="$(resolve_path "$current" 2>/dev/null || true)"
+        previous="$(canonicalize_path "$current" 2>/dev/null || true)"
         [ -n "$previous" ] && migrate_release_env "$previous"
     fi
 
@@ -516,14 +516,17 @@ list_releases() {
     [ -d "$releases" ] || return 0
     active=""
     if [ -L "$root/current" ]; then
-        active="$(resolve_path "$root/current" 2>/dev/null || true)"
+        # The activation target and the release entries must be compared
+        # canonically; a logical $HOME on macOS would otherwise never match the
+        # physically resolved target.
+        active="$(canonicalize_path "$root/current" 2>/dev/null || true)"
     fi
     for entry in "$releases"/*; do
         [ -d "$entry" ] || continue
         name="$(basename "$entry")"
         case "$name" in .*) continue ;; esac
         suffix=""
-        if [ -n "$active" ] && [ "$entry" = "$active" ]; then
+        if [ -n "$active" ] && [ "$(canonicalize_path "$entry")" = "$active" ]; then
             suffix=" (active)"
         fi
         printf '%s%s\n' "$name" "$suffix"

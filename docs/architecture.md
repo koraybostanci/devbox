@@ -79,7 +79,10 @@ release directory name when present.
 
 Installs go below the canonical data root
 `${XDG_DATA_HOME:-$HOME/.local/share}/devbox`: releases at
-`releases/<version>`, activation through `current`. Upgrades install a new
+`releases/<version>`, activation through `current`. The data root is
+canonicalized physically (without creating anything) before it is compared with
+launcher-reported paths, so a symlinked `$HOME` such as a macOS sandbox below
+`/var` still detects release trees and ownership markers. Upgrades install a new
 version alongside the old one and leave the other version directories in
 place; an existing version directory is replaced only when its tree no longer
 matches its `MANIFEST`, or when `install --force` is passed. A legacy in-tree

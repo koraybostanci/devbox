@@ -62,9 +62,69 @@ shell_quote() {
     printf '%q' "$1"
 }
 
-# Canonical host data root shared by release installs and locks.
+# Canonicalize a path without creating anything: walk up to the nearest
+# existing ancestor, resolve it physically with cd -P, and re-append the
+# remaining components. The final component is resolved too when it already
+# exists, including when it is itself a symlink. Canonicalization keeps
+# identity comparisons (data root, install root, activation target) from mixing
+# logical paths such as macOS $HOME under /var with physical paths under
+# /private/var.
+canonicalize_path() {
+    local path="$1" depth="${2:-0}" suffix="" base parent target directory
+
+    case "$path" in
+        /*) ;;
+        *) path="$PWD/$path" ;;
+    esac
+    while [ "${path%/}" != "$path" ] && [ -n "${path#/}" ]; do
+        path="${path%/}"
+    done
+
+    while [ ! -e "$path" ] && [ ! -L "$path" ]; do
+        base="${path##*/}"
+        parent="${path%/*}"
+        [ -n "$parent" ] || parent="/"
+        [ "$base" != "$path" ] || break
+        suffix="/$base$suffix"
+        path="${parent%/}"
+        [ -n "$path" ] || path="/"
+    done
+
+    if [ -L "$path" ]; then
+        if [ "$depth" -lt 40 ]; then
+            target="$(readlink "$path")"
+            case "$target" in
+                /*) ;;
+                *) target="$(dirname "$path")/$target" ;;
+            esac
+            path="$(canonicalize_path "$target" "$((depth + 1))")"
+        fi
+    else
+        directory="$(dirname "$path")"
+        if [ "$directory" != "$path" ]; then
+            directory="$(cd -P "$directory" && pwd)"
+            if [ "$directory" = "/" ]; then
+                path="/$(basename "$path")"
+            else
+                path="$directory/$(basename "$path")"
+            fi
+        fi
+    fi
+
+    if [ "$path" = "/" ]; then
+        printf '/%s\n' "${suffix#/}"
+    else
+        printf '%s%s\n' "$path" "$suffix"
+    fi
+}
+
+# Canonical host data root shared by release installs and locks. The launcher
+# always reports physical directories (it resolves itself with cd -P), so this
+# must be physical too: on macOS a sandbox HOME below /var/folders resolves to
+# /private/var/folders, and a logical data root would never match release
+# paths reported by the launcher.
 devbox_data_root() {
-    printf '%s/devbox\n' "${XDG_DATA_HOME:-$HOME/.local/share}"
+    canonicalize_path "${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
 }
 
 choose_install_bin() {
@@ -123,7 +183,8 @@ uninstall_cli() {
     }
     [ -L "$installed" ] || die "$installed is not a symlink; refusing to remove it"
 
-    target="$(resolve_path "$installed")"
+    target="$(canonicalize_path "$installed")"
+    source_path="$(canonicalize_path "$source_path")"
     data_root="$(devbox_data_root)"
     release_current="$data_root/current"
     if [ "$target" = "$source_path" ]; then
