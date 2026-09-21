@@ -31,7 +31,10 @@ EOF
 }
 
 github_state() {
-    if command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
+    # `gh auth status` exits 0 even for an invalid or expired token, so match
+    # its success line rather than trusting the exit code.
+    if command -v gh >/dev/null 2>&1 &&
+        gh auth status --hostname github.com 2>&1 | grep -q 'Logged in to github.com'; then
         printf 'authenticated'
     else
         printf 'not configured'
@@ -39,7 +42,9 @@ github_state() {
 }
 
 claude_state() {
-    if [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; then
+    # On Linux Claude Code stores login credentials here; ~/.claude.json is
+    # onboarding metadata that exists even before login.
+    if [ -s "$HOME/.claude/.credentials.json" ]; then
         printf 'configured'
     else
         printf 'not configured'

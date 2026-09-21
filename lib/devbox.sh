@@ -4,11 +4,8 @@ DEVBOX_PROFILE="devbox"
 DEVBOX_OWNER_VERSION="devbox-profile-v1"
 DEVBOX_GUEST_USER="devbox"
 DEVBOX_GUEST_HOME="/home/$DEVBOX_GUEST_USER"
-DEVBOX_GUEST_WORKSPACE="$DEVBOX_GUEST_HOME/workspace"
 DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_HOME/.config/devbox"
-DEVBOX_GUEST_SERVICES_ROOT="/var/lib/devbox/services"
 DEVBOX_GUEST_ROOT="/var/lib/devbox"
-DEVBOX_GUEST_BUNDLE_ROOT="$DEVBOX_GUEST_ROOT/bundles"
 DEVBOX_GUEST_PROVISIONING_ROOT="$DEVBOX_GUEST_ROOT/provisioning"
 DEVBOX_SSH_AUTHORIZED_KEYS_FILE='/etc/ssh/authorized_keys/%u'
 
@@ -24,7 +21,6 @@ configure_devbox_paths() {
         '' | "$DEVBOX_LIMA_HOME") ;;
         *) die "devbox requires LIMA_HOME to be unset or $DEVBOX_LIMA_HOME" ;;
     esac
-    DEVBOX_STATE_ROOT="$HOME/.local/share/devbox"
     DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
     DEVBOX_SHARED_LOCK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devbox/locks"
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"

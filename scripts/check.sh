@@ -69,6 +69,39 @@ printf '%s\n' "$companion_status" | grep -q '^github: not configured$' ||
     fail "companion did not report github as unconfigured"
 printf '%s\n' "$companion_status" | grep -q '^databricks: not configured$' ||
     fail "companion did not report databricks as unconfigured"
+
+# `gh auth status` exits 0 for an invalid token, so a stubbed failure must not
+# be reported as authenticated.
+stub_bin="$validation_root/bin"
+mkdir -p "$stub_bin"
+cat >"$stub_bin/gh" <<'EOF'
+#!/bin/bash
+[ "$1" = auth ] && [ "$2" = status ] && printf 'X Failed to log in to github.com\n'
+exit 0
+EOF
+chmod +x "$stub_bin/gh"
+invalid_gh_status="$(HOME="$companion_home" PATH="$stub_bin:/usr/bin:/bin" \
+    "$(command -v bash)" provision/config/guest/devbox auth status)" ||
+    fail "companion 'auth status' failed with a stubbed gh"
+printf '%s\n' "$invalid_gh_status" | grep -q '^github: not configured$' ||
+    fail "companion reported an invalid GitHub token as authenticated"
+
+# ~/.claude.json is onboarding metadata that exists before login; only the
+# credentials file means signed in.
+claude_home="$validation_root/claude-home"
+mkdir -p "$claude_home"
+printf '{}\n' >"$claude_home/.claude.json"
+claude_status="$(HOME="$claude_home" PATH=/nonexistent "$(command -v bash)" \
+    provision/config/guest/devbox auth status)" || fail "companion 'auth status' failed"
+printf '%s\n' "$claude_status" | grep -q '^claude: not configured$' ||
+    fail "companion reported Claude as configured from onboarding metadata"
+mkdir -p "$claude_home/.claude"
+printf '{}\n' >"$claude_home/.claude/.credentials.json"
+claude_status="$(HOME="$claude_home" PATH=/nonexistent "$(command -v bash)" \
+    provision/config/guest/devbox auth status)" || fail "companion 'auth status' failed"
+printf '%s\n' "$claude_status" | grep -q '^claude: configured$' ||
+    fail "companion did not report Claude credentials as configured"
+
 companion_db="$(HOME="$companion_home" bash provision/config/guest/devbox db info)" ||
     fail "companion 'db info' failed"
 printf '%s\n' "$companion_db" | grep -q 'postgres port: 15432' ||
