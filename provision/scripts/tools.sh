@@ -13,7 +13,12 @@ source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/addons.sh"
 
 set -a
-source "$DEVBOX_GUEST_CONFIG_ROOT/env"
+if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
+    source "$DEVBOX_GUEST_CONFIG_ROOT/config"
+    source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
+else
+    source "$DEVBOX_GUEST_CONFIG_ROOT/env"
+fi
 source "$DEVBOX_PROVISION_ROOT/versions.env"
 set +a
 
