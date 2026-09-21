@@ -18,7 +18,7 @@ or skipped without blocking any later phase.
 | Phase 1: isolation POC | Complete | — | PR #6 |
 | Phase 2: no-mount v2 profile | Complete | — | PR #8 |
 | Phase 3: guest identity and workspace | Complete | Phase 2 | PR #10 |
-| Phase 4a: guest config and secrets | Not started | Phase 3 | — |
+| Phase 4a: guest config and secrets | In progress | Phase 3 | PR #14 |
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
 | Phase 5: PostgreSQL and Valkey | Not started | Phase 4a | — |
 | Phase 6: signed release distribution | Not started | Phase 5 | — |

@@ -6,8 +6,6 @@ V2_GUEST_USER="devbox"
 V2_GUEST_HOME="/home/$V2_GUEST_USER"
 V2_GUEST_WORKSPACE="$V2_GUEST_HOME/workspace"
 V2_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2"
-V2_GUEST_CONFIG_FILE="$V2_GUEST_CONFIG_ROOT/config"
-V2_GUEST_SECRETS_FILE="$V2_GUEST_CONFIG_ROOT/secrets"
 V2_GUEST_ROOT="/var/lib/devbox-v2"
 V2_GUEST_BUNDLE_ROOT="$V2_GUEST_ROOT/bundles"
 V2_GUEST_PROVISIONING_ROOT="$V2_GUEST_ROOT/provisioning"
@@ -382,6 +380,8 @@ sync_v2_guest_config() {
         mkdir -p "$directory"
         config="$directory/config"
         secrets="$directory/secrets"
+        # Drop the superseded host-seeded env file from earlier v2 guests.
+        rm -f "$directory/env"
         if [ ! -e "$config" ]; then
             temporary="$(mktemp "$directory/.config.XXXXXX")"
             cat >"$temporary"

@@ -1495,6 +1495,24 @@ grep -q 'v2 guest secrets permissions' provision/scripts/verify.sh
 grep -q 'head -c 24 /dev/urandom' lib/v2.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/config"' provision/scripts/tools.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"' provision/scripts/tools.sh
+HOME="$v2_home" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/guest.sh"
+    source "$ROOT/lib/v2.sh"
+    POSTGRES_PASSWORD="must-not-leak"
+    rendered="$(render_v2_guest_config)"
+    case "$rendered" in
+        *POSTGRES_PASSWORD*) exit 1 ;;
+    esac
+    case "$rendered" in
+        *"export GIT_NAME="*) ;;
+        *) exit 1 ;;
+    esac
+' || {
+    printf 'ERROR: v2 guest config must exclude host-supplied secrets\n' >&2
+    exit 1
+}
 grep -q 'Host devbox' lib/colima.sh
 grep -q 'Host devbox-v2' lib/v2.sh
 if "$ROOT/devbox" v2 invalid >/dev/null 2>&1; then
