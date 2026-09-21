@@ -65,11 +65,25 @@ Provisioning installs a small guest-local `devbox` companion at
 
 ## Release distribution
 
-`VERSION` is the source of truth for release builds; the `Release` workflow
-refuses a tag or dispatch version that does not match it. `scripts/release.sh`
-builds `dist/devbox-<version>/devbox-<version>.tar.gz` with a per-file
-`MANIFEST` and sibling `SHA256SUMS`, signs `SHA256SUMS`, and verifies
-fail-closed before extracting into the install root: checksum, signature
+`VERSION` is the source of truth for release builds. Merging a bump of
+`VERSION` to `main` triggers the `Release` workflow, which first runs the
+`Check` workflow and then waits for approval on the protected `release`
+environment before checking out the commit that last changed `VERSION` and
+building the archive from it, signing it with the `RELEASE_SIGNING_KEY` secret,
+verifying against the committed `release-signing-key.pub.pem`, creating the
+`v<version>` tag at that commit, and publishing the archive, `SHA256SUMS`, and
+`SHA256SUMS.sig` with generated release notes; suffixed versions are marked
+prerelease. A `workflow_dispatch` run is recovery-only and must match the
+version already in `VERSION`: it rebuilds the commit that last changed
+`VERSION`, completes a partial release by uploading the missing assets in
+place, and never replaces a complete published release. After `VERSION` moves
+on, an older incomplete release can no longer be recovered by dispatch; release
+a new version instead.
+
+`scripts/release.sh` builds `dist/devbox-<version>/devbox-<version>.tar.gz`
+with a per-file `MANIFEST` and sibling `SHA256SUMS`, signs `SHA256SUMS`, and
+verifies fail-closed before extracting into the install root: checksum,
+signature
 (against the committed `release-signing-key.pub.pem`, overridable with
 `DEVBOX_RELEASE_PUBKEY`), exactly one `devbox-<version>` top-level directory,
 regular-file/directory entry types, and every MANIFEST path and hash. The
@@ -91,10 +105,12 @@ directory is replaced. Release installs keep host configuration at
 `~/.config/devbox/env` (mode 0600) instead of inside the
 versioned tree, and the Colima ownership marker records the install root (the
 data root for releases, the checkout directory for checkouts), so a release
-upgrade does not invalidate it. The `Release` workflow builds, signs with the
-`RELEASE_SIGNING_KEY` secret, verifies against the committed
-`release-signing-key.pub.pem`, and publishes the archive, `SHA256SUMS`, and
-`SHA256SUMS.sig`.
+upgrade does not invalidate it. `scripts/release.sh prune [--keep N]` bounds
+the installed `releases/` tree: it keeps the active release plus the `N` most
+recently modified non-active releases (default 0) and removes staging
+directories older than 24 hours; the active release is never removed. Prune
+skips version-named symlinks and refuses a releases directory that is itself a
+symlink.
 
 ## Lifecycle
 

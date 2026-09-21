@@ -137,6 +137,7 @@ same tooling:
 ```sh
 ~/.local/share/devbox/current/scripts/release.sh list   # active is marked
 ~/.local/share/devbox/current/scripts/release.sh use <version>
+~/.local/share/devbox/current/scripts/release.sh prune [--keep N]  # drop old installs
 ```
 
 Release installs keep host configuration at `~/.config/devbox/env` (mode
@@ -154,10 +155,26 @@ devbox install --adopt
 
 ### Publish a release (maintainer)
 
-`VERSION` is the source of truth: bump it, commit it, then tag `v<version>`
-(or dispatch the `Release` workflow with the same version). The workflow fails
-when the tag or dispatch input does not match `VERSION`; nothing bumps
-`VERSION` automatically yet.
+`VERSION` is the source of truth. Merge a commit that bumps `VERSION` to `main`
+and the `Release` workflow runs: it runs the `Check` workflow, waits for
+approval on the protected `release` environment, then checks out the commit
+that last changed `VERSION`, builds the archive from it, signs it with the
+`RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
+public key, creates the `v<version>` tag at that commit, and publishes the
+archive, `SHA256SUMS`, and `SHA256SUMS.sig` with automatically generated
+release notes. Suffixed versions such as `0.1.0-rc1` are published as
+prereleases. The workflow creates the tag; do not push tags by hand.
+
+`workflow_dispatch` is recovery-only: dispatch it on `main` with the version
+already in `VERSION` (the input must match it). Recovery resolves the current
+`VERSION` to the commit that last changed it, rebuilds that commit, and
+re-uploads the missing assets in place instead of recreating the release; a run
+that finds a complete published release fails, so bump `VERSION` for a new
+release instead of rerunning an old one. Because recovery always rebuilds the
+commit that last changed `VERSION`, an older incomplete release cannot be
+recovered after `VERSION` moves on; release a new version instead.
+
+The local tooling mirrors the workflow:
 
 ```sh
 scripts/release.sh build                                        # dist/devbox-<version>
@@ -166,12 +183,17 @@ scripts/release.sh verify dist/devbox-<version>/devbox-<version>.tar.gz
 scripts/release.sh install dist/devbox-<version>/devbox-<version>.tar.gz
 scripts/release.sh list
 scripts/release.sh use <version>
+scripts/release.sh prune [--keep N]
 ```
 
 `build` with no argument uses `VERSION` and writes
 `dist/devbox-<version>/devbox-<version>.tar.gz` with sibling `SHA256SUMS` and
 (when signed) `SHA256SUMS.sig`. `verify` fails closed and checks the signature
 against the committed public key (override with `DEVBOX_RELEASE_PUBKEY`).
+`prune` bounds the installed `releases/` tree: it removes non-active releases,
+keeping the active release plus the `N` most recently modified non-active
+releases (default 0), and removes staging directories older than 24 hours; the
+active release is never removed.
 
 ## Security
 

@@ -47,19 +47,41 @@ Confirm on macOS:
 
 ## Release artifacts
 
-`VERSION` is the source of truth for the tagged revision; bump it, commit it,
-then tag `v<version>` or dispatch the `Release` workflow with the same
-version.
+`VERSION` is the source of truth for the released revision. Merge a commit that
+bumps `VERSION` into `main`; the `Release` workflow runs the `Check` workflow,
+waits for approval on the protected `release` environment, then checks out the
+commit that last changed `VERSION`, builds the archive from it, signs it with
+the `RELEASE_SIGNING_KEY` secret, verifies it against the committed public key,
+creates the `v<version>` tag at that commit, and publishes the archive,
+`SHA256SUMS`, and `SHA256SUMS.sig` with generated release notes. Suffixed
+versions such as `0.1.0-rc1` are published as prereleases. The workflow creates
+the tag; do not push tags by hand.
+
+If a release run fails after the tag exists, rerun it from `main` with
+`workflow_dispatch` using the version already in `VERSION` (the input must
+match); recovery rebuilds the commit that last changed `VERSION` and re-uploads
+missing assets in place. A complete published release is never replaced; bump
+`VERSION` for the next release instead. After `VERSION` has moved on, an older
+incomplete release cannot be recovered by dispatch; release a new version.
+
+Mirror the build locally:
 
 ```sh
 scripts/release.sh build
 scripts/release.sh verify "dist/devbox-<version>/devbox-<version>.tar.gz"
 ```
 
-Confirm the `Release` workflow refuses a tag or dispatch version that does not
-match `VERSION`, signs with the `RELEASE_SIGNING_KEY` secret, verifies against
-the committed public key, and publishes the archive, `SHA256SUMS`, and
-`SHA256SUMS.sig`.
+Old installs accumulate under `~/.local/share/devbox/releases`; prune them
+while keeping the active release:
+
+```sh
+~/.local/share/devbox/current/scripts/release.sh prune --keep 1
+```
+
+Confirm the workflow refuses a dispatch input that does not match `VERSION`,
+fails when the tag exists at another commit or the release is already complete,
+signs with the `RELEASE_SIGNING_KEY` secret, verifies against the committed
+public key, and publishes the archive, `SHA256SUMS`, and `SHA256SUMS.sig`.
 
 ## Published-release round trip
 

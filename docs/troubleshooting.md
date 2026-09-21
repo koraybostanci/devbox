@@ -108,6 +108,20 @@ warning, and `scripts/release.sh install` copies it to the stable path once if
 the stable file does not exist yet, before the tree that carries it is
 replaced.
 
+Installed releases accumulate under `~/.local/share/devbox/releases`. Bound the
+tree with `scripts/release.sh prune [--keep N]`, which removes non-active
+releases, keeps the active release plus the `N` most recently modified
+non-active releases (default 0), and removes staging directories older than 24
+hours. The active release is never removed; version-named symlinks are skipped
+and a releases directory that is itself a symlink is refused.
+
+A `Release` workflow that fails after the tag exists is recovered by
+dispatching it again from `main` with the version already in `VERSION` (the
+input must match); recovery rebuilds the commit that last changed `VERSION` and
+uploads the missing assets in place. A complete published release is never
+replaced, so bump `VERSION` to release again. Once `VERSION` has moved on, an
+older incomplete release can no longer be recovered by dispatch.
+
 ## Checkout moved or renamed
 
 The Colima profile records its install root in an ownership marker
