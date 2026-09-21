@@ -2,10 +2,10 @@
 
 A disposable, isolated Ubuntu development VM on macOS, powered by Colima.
 
-Your editors and project files stay on macOS; shells, compilers, CLIs, Docker,
-and project processes run inside the VM. The guest is fully self-contained —
-there are no host filesystem mounts — so you can rebuild or destroy it without
-touching your Mac.
+Your editors and SSH clients run on macOS; the project files, shells,
+compilers, CLIs, Docker, and project processes all live inside the VM. The
+guest is fully self-contained — there are no host filesystem mounts — so you
+can rebuild or destroy it without touching your Mac.
 
 ## Requirements
 

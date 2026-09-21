@@ -46,6 +46,7 @@ Authentication and helpers (optional, guest-local):
 Maintenance:
     provision                      Force non-destructive provisioning
     destroy                        Remove the VM and its container runtime data
+    uninstall                      Remove the devbox command symlink
 
 Other:
     help                           Show this help message
