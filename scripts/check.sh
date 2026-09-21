@@ -1496,6 +1496,11 @@ grep -q 'head -c 24 /dev/urandom' lib/v2.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/config"' provision/scripts/tools.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"' provision/scripts/tools.sh
 grep -q 'run_v2_services' lib/v2.sh
+grep -q 'validate_v2_colima_config' lib/v2.sh
+if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/v2.sh; then
+    printf 'ERROR: v2 must not require host jq or yq\n' >&2
+    exit 1
+fi
 grep -q 'V2_GUEST_SERVICES_ROOT' lib/v2.sh
 grep -q 'VALKEY_PASSWORD' lib/v2.sh
 grep -q 'devbox v2 services status' lib/v2.sh
