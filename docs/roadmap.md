@@ -21,7 +21,7 @@ or skipped without blocking any later phase.
 | Phase 4a: guest config and secrets | Complete | Phase 3 | PR #14 |
 | Phase 4b: optional provider auth | Optional | Phase 3 | — |
 | Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
-| Phase 6: signed release distribution | Not started | Phase 5 | — |
+| Phase 6: signed release distribution | Complete | Phase 5 | PR #18, #19 |
 | Phase 7: v2 host dependencies removed | Not started | Phase 6 | — |
 | Phase 8: migration and default promotion | Not started | Phase 7 | — |
 
@@ -128,6 +128,10 @@ legacy container commands and their data remain functional.
 
 **Purpose.** Publish the v2 bundle through a signed, verifiable release
 distribution path.
+
+**Status.** Complete (PR #18, PR #19). Verified with `scripts/accept-phase6.sh`
+(11/11) and a published pre-release whose signature verifies against the
+committed public key.
 
 **Compatibility guarantee.** Existing clone-and-run installation and all
 legacy profile behavior remain supported; release distribution adds an option
