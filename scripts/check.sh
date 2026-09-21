@@ -1024,6 +1024,10 @@ grep -Fq 'sudo -u "$user" -- test -w /var/run/docker.sock' lib/v2.sh
     printf 'ERROR: v2 guest privilege parser must not rely on NOPASSWD parsing\n' >&2
     exit 1
 }
+grep -Fq 'chmod 644 "$temporary"' lib/v2.sh || {
+    printf 'ERROR: v2 authorized_keys must be readable by the target user (sshd reads it unprivileged)\n' >&2
+    exit 1
+}
 v2_guest_privileges_remote_shell="$validation_root/v2-guest-privileges-remote-shell"
 HOME="$v2_home" V2_GUEST_PRIVILEGES_REMOTE_SHELL="$v2_guest_privileges_remote_shell" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/v2.sh"

@@ -714,7 +714,9 @@ authorize_v2_host_key() {
             temporary="$(mktemp "$keys_dir/.${user}.XXXXXX")"
             printf "%s\\n" "$key" >"$temporary"
             chown root:root "$temporary"
-            chmod 600 "$temporary"
+            # sshd reads AuthorizedKeysFile as the target user, not as root, so
+            # the file must be readable by that user; it holds only a public key.
+            chmod 644 "$temporary"
             mv "$temporary" "$authorized"
         done
         [ -d /etc/ssh/sshd_config.d ] && [ ! -L /etc/ssh/sshd_config.d ] &&
