@@ -63,13 +63,15 @@ increasing `DEVBOX_DISK`.
 
 The guest root disk is a fixed-size image disk (~20 GiB), separate from the
 Colima data disk that `DEVBOX_DISK` sizes. The `devbox` home is bind-mounted
-onto the data disk so toolchains and caches use it. If provisioning still runs
-out of space:
+onto the data disk so toolchains and caches use it. The first converge on an
+existing VM moves the current home contents onto the data disk (and clears the
+root-disk copy) before mounting, so it can be applied with a plain
+`devbox start`. If provisioning still runs out of space:
 
 - Confirm the bind mount with `devbox exec df -h /home/devbox` (it should show
   the larger data disk, not `/dev/root`).
 - Increase `DEVBOX_DISK` in `.env` (for example `60`), then `devbox destroy`
-  and `devbox start`.
+  and `devbox start` (resizing the data disk requires recreating it).
 - Clear a failed build before retrying:
   `devbox exec rm -rf '/tmp/python-build.*'`.
 

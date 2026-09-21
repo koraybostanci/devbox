@@ -20,7 +20,9 @@ Provisioning creates an unprivileged `devbox` account:
 
 - Home `/home/devbox`, writable workspace `/home/devbox/workspace`. The home is
   bind-mounted onto the Colima data disk (`/mnt/lima-*`) so the toolchain and
-  caches do not fill the small fixed-size guest root disk.
+  caches do not fill the small fixed-size guest root disk. On an existing VM the
+  first converge moves the current home contents onto the data disk before
+  switching the mount, so nothing is hidden and the root-disk space is freed.
 - No sudo, no Docker group membership, no Docker-socket access, no access to
   root-managed bundle state.
 - Direct IDE/CLI access uses the separate `devbox` SSH alias, authorized

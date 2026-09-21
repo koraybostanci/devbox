@@ -26,6 +26,21 @@ devbox_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
+# Move an existing root-disk home onto the data-disk target before it is
+# bind-mounted, so converging a pre-existing VM neither hides user data nor
+# leaves the old copy consuming root-disk space. Does nothing once the target
+# already holds data or when there is nothing to move.
+migrate_guest_home_contents() {
+    local source="$1"
+    local target="$2"
+
+    [ -n "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] && return 0
+    [ -n "$(find "$source" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] || return 0
+    printf 'Moving existing guest home onto the data disk...\n'
+    cp -a "$source/." "$target/"
+    find "$source" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
 # Keep the guest user's toolchain and caches on the large Lima data disk
 # (mounted under /mnt/lima-*), not the fixed-size root disk.
 relocate_guest_home() {
@@ -43,7 +58,11 @@ relocate_guest_home() {
     mkdir -p "$target"
     chmod 700 "$target"
     if ! mountpoint -q "$guest_home"; then
+        # A symlinked home is unsafe; leave it for the caller's validation to
+        # reject rather than following it during the move.
+        [ ! -L "$guest_home" ] || return 0
         mkdir -p "$guest_home"
+        migrate_guest_home_contents "$guest_home" "$target"
         mount --bind "$target" "$guest_home"
     fi
     grep -qE "^[^#]*[[:space:]]$guest_home[[:space:]]" /etc/fstab 2>/dev/null ||
