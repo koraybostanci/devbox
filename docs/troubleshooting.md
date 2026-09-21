@@ -22,8 +22,9 @@ chmod 600 .env
 ```
 
 Supported keys: `GIT_NAME`, `GIT_EMAIL`, `POSTGRES_USER`, `POSTGRES_DB`,
-`POSTGRES_PORT`, `DEVBOX_CPU`, `DEVBOX_MEMORY`, `DEVBOX_DISK`. `POSTGRES_PASSWORD`
-is generated inside the guest and must not be set.
+`POSTGRES_PORT`, `DEVBOX_CPU`, `DEVBOX_MEMORY`, `DEVBOX_DISK`. Unsupported keys
+are ignored with a warning. `POSTGRES_PASSWORD` is generated inside the guest
+and is never read from the host.
 
 ## VM state or SSH
 

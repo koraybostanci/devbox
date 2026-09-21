@@ -60,7 +60,8 @@ validate_env_file() {
             die "$env_file:$line_number must be a KEY=value assignment"
         fi
         key="${BASH_REMATCH[2]}"
-        is_allowed_env_key "$key" || die "$env_file:$line_number contains unsupported variable $key"
+        is_allowed_env_key "$key" ||
+            warn "$env_file:$line_number ignores unsupported variable $key"
     done <"$env_file"
 }
 
@@ -75,6 +76,7 @@ load_env() {
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
         [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]
         key="${BASH_REMATCH[2]}"
+        is_allowed_env_key "$key" || continue
         value_expression="${line#*=}"
         printf -v "$key" '%s' "$(env_value "$value_expression")"
     done <"$DEVBOX_DIR/.env"
