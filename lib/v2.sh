@@ -970,7 +970,7 @@ write_v2_ssh_config() {
     local managed_backup config_backup journal journal_temporary
     local ssh_dir managed_dir managed_config config config_dir config_mode
     local ssh_dir_existed=false managed_dir_existed=false config_dir_existed=false
-    local managed_existed=false config_existed=false
+    local managed_existed=false config_existed=false source_host
 
     staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-v2-source.XXXXXX")"
     staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox-v2.XXXXXX")"
@@ -1027,8 +1027,13 @@ write_v2_ssh_config() {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "generated v2 SSH configuration is invalid"
     fi
+    source_host="$(awk 'toupper($1) == "HOST" { print $2; exit }' "$staged_source")"
+    [ -n "$source_host" ] || {
+        command rm -f "$staged_source" "$staged_managed" "$staged_config"
+        die "Colima returned an invalid v2 SSH configuration"
+    }
     if ! validate_v2_effective_ssh_config \
-        "$(ssh -F "$staged_source" -G devbox-v2 2>/dev/null)" "$staged_config"; then
+        "$(ssh -F "$staged_source" -G "$source_host" 2>/dev/null)" "$staged_config"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "generated v2 SSH configuration has conflicting effective settings"
     fi
