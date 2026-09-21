@@ -10,6 +10,17 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 validation_root="$(mktemp -d)"
 trap 'command rm -rf "$validation_root"' EXIT
 
+# Make the Homebrew Docker Compose plugin discoverable (macOS CI layout).
+if command -v brew >/dev/null 2>&1; then
+    compose_plugin_dir="$(brew --prefix)/lib/docker/cli-plugins"
+    if [ -d "$compose_plugin_dir" ]; then
+        export DOCKER_CONFIG="$validation_root/docker"
+        mkdir -p "$DOCKER_CONFIG"
+        printf '{"cliPluginsExtraDirs":["%s"]}\n' "$compose_plugin_dir" \
+            >"$DOCKER_CONFIG/config.json"
+    fi
+fi
+
 # --- shell syntax -----------------------------------------------------------
 shell_files=()
 while IFS= read -r shell_file; do
@@ -165,12 +176,16 @@ HOME="$v2_home" V2_IDENTITY="$v2_identity_script" ROOT="$ROOT" DEVBOX_DIR="$ROOT
 bash -n "$v2_identity_script" || fail "v2 identity validator is not valid Bash"
 
 # --- managed services -------------------------------------------------------
-POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
-    VALKEY_PASSWORD=test VALKEY_PORT=16379 \
-    docker compose -f provision/config/services/compose.yaml config -q ||
-    fail "v2 service definition is invalid"
-grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
-    fail "v2 services must publish to loopback only"
+if docker compose version >/dev/null 2>&1; then
+    POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
+        VALKEY_PASSWORD=test VALKEY_PORT=16379 \
+        docker compose -f provision/config/services/compose.yaml config -q ||
+        fail "v2 service definition is invalid"
+    grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
+        fail "v2 services must publish to loopback only"
+else
+    printf 'WARN: docker compose is unavailable; skipping service-definition validation\n' >&2
+fi
 
 # --- release tooling --------------------------------------------------------
 release_root="$validation_root/release"
