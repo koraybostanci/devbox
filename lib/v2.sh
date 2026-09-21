@@ -383,7 +383,7 @@ sync_v2_guest_config() {
         secrets="$directory/secrets"
         # Drop the superseded host-seeded env file from earlier v2 guests.
         rm -f "$directory/env"
-        if [ ! -e "$config" ]; then
+        if [ ! -s "$config" ] || ! grep -q "^export POSTGRES_USER=" "$config" 2>/dev/null; then
             temporary="$(mktemp "$directory/.config.XXXXXX")"
             cat >"$temporary"
             chmod 600 "$temporary"
@@ -442,8 +442,17 @@ run_v2_services() {
         . "$config"
         . "$secrets"
         set +a
-        : "${POSTGRES_USER:?}" "${POSTGRES_DB:?}" "${POSTGRES_PORT:?}"
-        : "${POSTGRES_PASSWORD:?}" "${VALKEY_PASSWORD:?}"
+        missing=
+        for variable in POSTGRES_USER POSTGRES_DB POSTGRES_PORT POSTGRES_PASSWORD VALKEY_PASSWORD; do
+            eval "value=\${$variable:-}"
+            [ -n "$value" ] || missing="$missing $variable"
+        done
+        [ -z "$missing" ] || {
+            printf "ERROR: v2 service credentials are missing:%s\\n" "$missing" >&2
+            printf "v2 guest config:\\n" >&2
+            cat "$config" >&2 || true
+            exit 1
+        }
         VALKEY_PORT="${VALKEY_PORT:-16379}"
         umask 077
         envfile="$services/env"
