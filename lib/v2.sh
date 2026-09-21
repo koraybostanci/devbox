@@ -489,6 +489,35 @@ show_v2_services_status() {
     '
 }
 
+migrate_v2_projects() {
+    local force="${1:-false}" source_dir
+
+    load_env v2
+    DEVBOX_PROJECTS_DIR="${DEVBOX_PROJECTS_DIR:-$(dirname "$DEVBOX_DIR")/projects}"
+    source_dir="$DEVBOX_PROJECTS_DIR"
+    [ -d "$source_dir" ] && [ ! -L "$source_dir" ] ||
+        die "Legacy projects directory is unavailable: $source_dir"
+    require_running_v2_vm
+    log "Migrating projects from $source_dir into /home/devbox/workspace (legacy is left untouched)..."
+    tar -C "$source_dir" --exclude '.DS_Store' --exclude '._*' -cf - . |
+        v2_admin_guest sudo bash -c '
+        set -Eeuo pipefail
+        force="$1"
+        workspace=/home/devbox/workspace
+        [ -d "$workspace" ] && [ ! -L "$workspace" ] || {
+            printf "ERROR: v2 guest workspace is invalid\\n" >&2
+            exit 1
+        }
+        if [ "$force" != true ] && [ -n "$(ls -A "$workspace")" ]; then
+            printf "ERROR: v2 workspace is not empty; re-run with --force to merge\\n" >&2
+            exit 1
+        fi
+        tar -C "$workspace" -xf -
+        chown -R devbox:devbox "$workspace"
+    ' _ "$force"
+    log "Projects migrated. The legacy profile and its host mounts are unchanged."
+}
+
 v2_guest_provision_digest() {
     v2_admin_guest bash -c 'cat "$HOME/.local/state/devbox-v2/provision.sha256" 2>/dev/null || true'
 }
@@ -1415,7 +1444,7 @@ run_v2() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox v2 <start|provision|connect|exec|status|services|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox v2 <start|provision|connect|exec|status|services|migrate|stop|destroy>"
             check_host_platform
             check_v2_dependencies
             acquire_lock lifecycle
@@ -1446,6 +1475,16 @@ run_v2() {
             [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox v2 services status"
             require_running_v2_vm
             show_v2_services_status
+            ;;
+        migrate)
+            [ "${1:-}" = projects ] || die "Usage: devbox v2 migrate projects [--force]"
+            case "${2:-}" in
+                '') force=false ;;
+                --force) force=true ;;
+                *) die "Usage: devbox v2 migrate projects [--force]" ;;
+            esac
+            [ $# -le 2 ] || die "Usage: devbox v2 migrate projects [--force]"
+            migrate_v2_projects "$force"
             ;;
         stop)
             case "${1:-}" in
@@ -1487,6 +1526,6 @@ run_v2() {
             release_lock
             log "Destroyed v2 VM runtime data. No host project or data directories were used."
             ;;
-        *) die "Usage: devbox v2 <start|provision|connect|exec|status|services|stop|destroy>" ;;
+        *) die "Usage: devbox v2 <start|provision|connect|exec|status|services|migrate|stop|destroy>" ;;
     esac
 }
