@@ -26,6 +26,33 @@ devbox_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
+# Keep the guest user's toolchain and caches on the large Lima data disk
+# (mounted under /mnt/lima-*), not the fixed-size root disk.
+relocate_guest_home() {
+    local guest_user="$1"
+    local guest_home="/home/$1"
+    local data_root target
+
+    [ "$guest_user" = devbox ] || return 1
+    data_root="$(findmnt -rno TARGET -t ext4 2>/dev/null | grep -E '^/mnt/lima-' | head -n 1 || true)"
+    [ -n "$data_root" ] && mountpoint -q "$data_root" || {
+        printf 'WARNING: Lima data disk not found; guest home stays on the root disk\n' >&2
+        return 0
+    }
+    target="$data_root/devbox-home"
+    mkdir -p "$target"
+    chmod 700 "$target"
+    if ! mountpoint -q "$guest_home"; then
+        mkdir -p "$guest_home"
+        mount --bind "$target" "$guest_home"
+    fi
+    grep -qE "^[^#]*[[:space:]]$guest_home[[:space:]]" /etc/fstab 2>/dev/null ||
+        printf '%s %s none bind,nofail,x-systemd.requires-mounts-for=%s 0 0\n' \
+            "$target" "$guest_home" "$data_root" >>/etc/fstab
+    chown "$guest_user":"$guest_user" "$guest_home"
+    chmod 700 "$guest_home"
+}
+
 configure_devbox_guest_identity() {
     local guest_user="${DEVBOX_GUEST_USER:-devbox}"
     local guest_home="/home/$guest_user"
@@ -84,6 +111,7 @@ configure_devbox_guest_identity() {
         usermod --shell "$zsh_path" "$guest_user"
     fi
 
+    relocate_guest_home "$guest_user" || return 1
     [ ! -L "$guest_home" ] && [ -d "$guest_home" ] || {
         printf 'ERROR: devbox guest home must be a real directory: %s\n' "$guest_home" >&2
         return 1

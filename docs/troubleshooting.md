@@ -59,6 +59,20 @@ For DNS failures, configure Colima's DNS rather than editing guest resolver
 files. For disk failures, check free space on macOS and in the guest before
 increasing `DEVBOX_DISK`.
 
+## Provisioning fails with `No space left on device`
+
+The guest root disk is a fixed-size image disk (~20 GiB), separate from the
+Colima data disk that `DEVBOX_DISK` sizes. The `devbox` home is bind-mounted
+onto the data disk so toolchains and caches use it. If provisioning still runs
+out of space:
+
+- Confirm the bind mount with `devbox exec df -h /home/devbox` (it should show
+  the larger data disk, not `/dev/root`).
+- Increase `DEVBOX_DISK` in `.env` (for example `60`), then `devbox destroy`
+  and `devbox start`.
+- Clear a failed build before retrying:
+  `devbox exec rm -rf '/tmp/python-build.*'`.
+
 ## Services
 
 PostgreSQL and Valkey are root-managed and bound to `127.0.0.1` only. Check
