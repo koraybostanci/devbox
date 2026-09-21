@@ -73,6 +73,15 @@ if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
     check "v2 has no legacy mounts" bash -c '
         [ ! -e /mnt/devbox/projects ] && [ ! -e /mnt/devbox/data ]
     '
+    source "$DEVBOX_GUEST_CONFIG_ROOT/config"
+    source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
+    check "v2 services root is root-owned and closed" bash -c '
+        [ -d /var/lib/devbox-v2/services ] &&
+            [ "$(stat -c "%U" /var/lib/devbox-v2/services)" = root ] &&
+            [ ! -w /var/lib/devbox-v2/services ]
+    '
+    check "v2 PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
+    check "v2 Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
     check "v2 Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
 else
     check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
