@@ -4,9 +4,9 @@
 # Run on the macOS host from the devbox repository root:
 #     bash scripts/accept-phase4a.sh
 #
-# Provisions, then verifies that the v2 guest stores non-secret defaults and
-# generated secrets guest-locally, seeds configuration once, and never takes
-# the service secret from the host. Exits non-zero if any check fails.
+# `devbox v2 exec` sends its arguments through plain ssh, which joins argv and
+# lets the guest shell re-parse it. Remote arguments are therefore kept simple
+# (single paths); all matching/parsing is done locally on captured output.
 
 set -uo pipefail
 
@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 V2_CONFIG="/home/devbox/.config/devbox-v2/config"
 V2_SECRETS="/home/devbox/.config/devbox-v2/secrets"
+MARKER="# accept-phase4a marker"
 
 pass=0
 fail=0
@@ -23,6 +24,7 @@ ok()   { printf 'PASS: %s\n' "$1"; pass=$((pass + 1)); }
 no()   { printf 'FAIL: %s\n' "$1" >&2; fail=$((fail + 1)); }
 note() { printf 'WARN: %s\n' "$1"; warn=$((warn + 1)); }
 
+# check DESC [CMD...]            -> PASS when CMD succeeds
 check() {
     local desc="$1" out
     shift
@@ -34,6 +36,7 @@ check() {
     fi
 }
 
+# refute DESC [CMD...]           -> PASS when CMD fails
 refute() {
     local desc="$1" out
     shift
@@ -56,13 +59,15 @@ equal() {
     fi
 }
 
+guest_file() { ./devbox v2 exec cat "$1" 2>/dev/null; }
+
 echo "== provisioning v2 =="
 if ! ./devbox v2 provision; then
     echo "FATAL: './devbox v2 provision' failed; capture the output above." >&2
     exit 1
 fi
 
-# Positive control: without a working exec channel, negative checks would pass
+# Positive control: without a working exec channel, negative checks pass
 # vacuously.
 if ! ./devbox v2 exec true >/dev/null 2>&1; then
     echo "FATAL: the v2 exec channel is unusable; cannot verify Phase 4a." >&2
@@ -79,12 +84,20 @@ refute "superseded env file is gone" ./devbox v2 exec test -e /home/devbox/.conf
 
 echo
 echo "== generated secret =="
-check "POSTGRES_PASSWORD is a generated 48-hex value" bash -c \
-    "./devbox v2 exec grep -Eq '^export POSTGRES_PASSWORD=[0-9a-f]{48}\$' '$V2_SECRETS'"
-refute "POSTGRES_PASSWORD is not the legacy default" bash -c \
-    "./devbox v2 exec grep -q 'devpass' '$V2_SECRETS'"
-check "config carries non-secret PostgreSQL defaults" bash -c \
-    "./devbox v2 exec grep -q '^export POSTGRES_USER=' '$V2_CONFIG'"
+secrets_content="$(guest_file "$V2_SECRETS")"
+config_content="$(guest_file "$V2_CONFIG")"
+printf '%s\n' "$secrets_content" | grep -Eq '^export POSTGRES_PASSWORD=[0-9a-f]{48}$' &&
+    ok "POSTGRES_PASSWORD is a generated 48-hex value" ||
+    no "POSTGRES_PASSWORD is a generated 48-hex value"
+printf '%s\n' "$secrets_content" | grep -q 'devpass' &&
+    no "POSTGRES_PASSWORD is not the legacy default" ||
+    ok "POSTGRES_PASSWORD is not the legacy default"
+printf '%s\n' "$config_content" | grep -q '^export POSTGRES_USER=' &&
+    ok "config carries non-secret PostgreSQL defaults" ||
+    no "config carries non-secret PostgreSQL defaults"
+printf '%s\n' "$config_content" | grep -q 'POSTGRES_PASSWORD' &&
+    no "config must not contain POSTGRES_PASSWORD" ||
+    ok "config does not contain POSTGRES_PASSWORD"
 
 echo
 echo "== configuration is seed-once and guest-authoritative =="
@@ -103,9 +116,10 @@ else
     no "second provision failed"
 fi
 
-./devbox v2 exec bash -c 'printf "%s\n" "# accept-phase4a marker" >>"$HOME/.config/devbox-v2/config"'
+# Guest edit: append a benign comment via stdin, re-provision, then remove it.
+printf '%s\n' "$MARKER" | ./devbox v2 exec tee -a "$V2_CONFIG" >/dev/null 2>&1
 if ./devbox v2 provision >/dev/null 2>&1; then
-    if ./devbox v2 exec grep -qF '# accept-phase4a marker' "$V2_CONFIG" >/dev/null 2>&1; then
+    if guest_file "$V2_CONFIG" | grep -qF "$MARKER"; then
         ok "guest edits to config survive re-provision"
     else
         no "guest edits to config were overwritten"
@@ -113,7 +127,7 @@ if ./devbox v2 provision >/dev/null 2>&1; then
 else
     no "third provision failed"
 fi
-./devbox v2 exec sed -i '/# accept-phase4a marker/d' "$V2_CONFIG"
+guest_file "$V2_CONFIG" | grep -vF "$MARKER" | ./devbox v2 exec tee "$V2_CONFIG" >/dev/null 2>&1
 
 echo
 printf 'Phase 4a acceptance: %d passed, %d failed, %d warning(s)\n' "$pass" "$fail" "$warn"
