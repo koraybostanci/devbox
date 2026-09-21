@@ -53,16 +53,15 @@ weaken any later phase's exit criteria.
 The phases form this sequence; each later phase builds on the accepted
 identity, workspace, and configuration established earlier.
 
-1. Phase 7 — remove v2 host runtime dependencies.
-2. Phase 8 — explicit migration and default promotion.
+1. Phase 8 — explicit migration and default promotion.
 
 Phase 3 (guest `devbox` identity and workspace) is complete and merged as
 PR #10, Phase 4a (guest-local configuration and secret generation) as PR #14,
-Phase 5 (root-managed PostgreSQL and Valkey) as PR #16, and Phase 6 (signed
-release distribution) as PR #18 and PR #19. Phase 4b (optional provider
-authentication) depends only on Phase 3 and is deliberately off the critical
-path: no later phase requires provider authentication, so it may be deferred or
-skipped.
+Phase 5 (root-managed PostgreSQL and Valkey) as PR #16, Phase 6 (signed release
+distribution) as PR #18 and PR #19, and Phase 7 (remove v2 host runtime
+dependencies) as PR #21. Phase 4b (optional provider authentication) depends
+only on Phase 3 and is deliberately off the critical path: no later phase
+requires provider authentication, so it may be deferred or skipped.
 
 ## Completed phases
 
@@ -143,6 +142,17 @@ skipped.
 - Verified with `scripts/accept-phase6.sh` (11/11) and a published pre-release
   whose signature verifies locally against the committed public key.
 
+### Phase 7: remove v2 host runtime dependencies — complete (PR #21)
+
+- v2 now requires only Colima, the OpenSSH client, and macOS built-ins; host
+  `jq`, `yq`, Homebrew, Docker, and Docker Compose are not needed.
+- `check_v2_dependencies` requires only `colima` and `ssh`; `v2_state` and
+  `show_v2_status` parse `colima list` with `awk`; the generated Colima
+  configuration is validated by a shell `validate_v2_colima_config`.
+- Services still run inside the guest; contributor tooling (`scripts/check.sh`)
+  remains separate and continues to use `brew`, `jq`, `yq`, and `docker`.
+- Verified with `scripts/accept-phase7.sh` (5/5 checks).
+
 ## Phase 4b: optional provider authentication
 
 Optional and off the critical path. This phase may be deferred or skipped
@@ -165,27 +175,6 @@ Phase 3's stable guest identity and workspace.
 - Optional provider authentication is never required by another phase.
 - Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
   and unchanged.
-
-## Phase 7: remove v2 host runtime dependencies
-
-### Prerequisite
-
-Phase 6's signed release distribution and a v2 workflow that covers identity,
-workspace, configuration, and services. Optional provider authentication
-(Phase 4b) is not required.
-
-### Scope
-
-- Remove v2 requirements for host Docker, Compose, jq, yq, Homebrew, and
-  Docker configuration.
-- Retain only the declared virtualization/runtime, OpenSSH, and macOS built-in
-  requirements.
-- Split contributor tooling from the supported release-install workflow.
-
-### Exit criteria
-
-A clean account can install and operate v2 without host developer tooling;
-legacy prerequisites remain supported for legacy users.
 
 ## Phase 8: explicit migration and default promotion
 
