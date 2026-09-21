@@ -101,11 +101,9 @@ devbox uninstall             # remove the devbox symlink
 
 ### Install a published release
 
-Releases are published on the [Releases page](https://github.com/koraybostanci/devbox/releases)
-as `devbox-<version>.tar.gz`, `SHA256SUMS`, and `SHA256SUMS.sig`. Download
-them with an authenticated `gh`, fetch the committed public key out of band
-(from the repository, not from the release assets), and verify the checksum
-and signature before the archive is extracted into the install root:
+Releases are on the [Releases page](https://github.com/koraybostanci/devbox/releases).
+Download the assets, verify the checksum and signature against the committed
+key, then install (requires an authenticated `gh`):
 
 ```sh
 gh release download --repo koraybostanci/devbox --pattern '*'
@@ -116,94 +114,42 @@ openssl dgst -sha256 -verify release-signing-key.pub.pem \
     -signature SHA256SUMS.sig SHA256SUMS
 tar -xzf devbox-<version>.tar.gz
 DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
-    ./devbox-<version>/scripts/release.sh install devbox-<version>.tar.gz [--force]
+    ./devbox-<version>/scripts/release.sh install devbox-<version>.tar.gz
 ```
 
-`scripts/release.sh install` resolves the archive and key paths against the
-directory you invoke it from, verifies the checksum, signature, layout, and
-per-file `MANIFEST` (extracting into a private temporary directory) before
-extracting into the install root, then installs below
+`install` verifies the archive before touching the install root, installs under
 `~/.local/share/devbox/releases/<version>`, activates
-`~/.local/share/devbox/current`, and puts `devbox` on your `PATH`. A missing
-`SHA256SUMS.sig` is a hard failure unless `DEVBOX_ALLOW_UNSIGNED=1` is set for
-local testing. Reinstalling a version whose tree still matches its `MANIFEST`
-is idempotent; a tree that no longer matches is replaced, and `--force`
-replaces an existing version directory even when it is intact.
+`~/.local/share/devbox/current`, and links `devbox` onto your `PATH`. Release
+installs keep host configuration at `~/.config/devbox/env` (mode 0600): run
+`devbox init`, edit it, and run `devbox init` again.
 
-Upgrades install a new release alongside the old one and leave the other
-versions in place, so `use` can switch back. The installed tree carries the
-same tooling:
-
-```sh
-~/.local/share/devbox/current/scripts/release.sh list   # active is marked
-~/.local/share/devbox/current/scripts/release.sh use <version>
-~/.local/share/devbox/current/scripts/release.sh prune [--keep N]  # drop old installs
-```
-
-Release installs keep host configuration at `~/.config/devbox/env` (mode
-0600), so upgrades keep your settings; a legacy in-tree `.env` is copied there
-once, before its release tree is replaced. Run `devbox init` to create it from
-the archive's `.env.example`, edit it, then run `devbox init` again.
-
-If the existing VM was created by a checkout or by an earlier release, claim
-it from the new installation while the VM is stopped:
+Upgrades install alongside the old version and keep your configuration. If the
+VM was created by a checkout or an earlier release, claim it while stopped:
 
 ```sh
 devbox stop
 devbox install --adopt
 ```
 
-### Publish a release (maintainer)
-
-`VERSION` is the source of truth. Merge a commit that bumps `VERSION` to `main`
-and the `Release` workflow runs: it runs the `Check` workflow, checks out the
-commit that last changed `VERSION`, builds the archive from it, signs it with
-the `RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
-public key, and creates a **draft** release titled `devbox v<version>`. The
-draft carries the archive, `SHA256SUMS`, and `SHA256SUMS.sig` with
-automatically generated release notes and targets that commit; the `v<version>`
-tag is created when the draft is published, so do not push tags by hand.
-Suffixed versions such as `0.1.0-rc1` are drafted as prereleases.
-
-The draft is the approval gate: nothing is public until a maintainer opens the
-[Releases page](https://github.com/koraybostanci/devbox/releases), reviews the
-generated notes and all three assets, and clicks **Publish release**. The
-workflow never publishes a release on its own. After publishing, bump `VERSION`
-for the next release.
-
-`workflow_dispatch` is recovery-only: dispatch it on `main` with the version
-already in `VERSION` (the input must match it). Recovery resolves the current
-`VERSION` to the commit that last changed it, rebuilds that commit, and
-re-uploads the missing assets into the existing draft with `--clobber`; the
-release stays a draft until a maintainer publishes it. Recovery requires the
-draft to target the release commit: a tagged draft needs its tag at that commit,
-and an untagged draft (the normal state while it is still a draft) needs its
-target commit to match it. A draft whose tag is at another commit, or whose
-target commit does not match, cannot be recovered, and a published release is
-never overwritten. Because recovery always rebuilds the commit that last changed
-`VERSION`, an older incomplete draft cannot be recovered after `VERSION` moves
-on; bump `VERSION` for a new release instead.
-
-The local tooling mirrors the workflow:
+Manage installed versions with the shipped tooling:
 
 ```sh
-scripts/release.sh build                                        # dist/devbox-<version>
-scripts/release.sh sign dist/devbox-<version>/devbox-<version>.tar.gz --key <key>
-scripts/release.sh verify dist/devbox-<version>/devbox-<version>.tar.gz
-scripts/release.sh install dist/devbox-<version>/devbox-<version>.tar.gz
-scripts/release.sh list
-scripts/release.sh use <version>
-scripts/release.sh prune [--keep N]
+~/.local/share/devbox/current/scripts/release.sh list
+~/.local/share/devbox/current/scripts/release.sh use <version>
+~/.local/share/devbox/current/scripts/release.sh prune [--keep N]
 ```
 
-`build` with no argument uses `VERSION` and writes
-`dist/devbox-<version>/devbox-<version>.tar.gz` with sibling `SHA256SUMS` and
-(when signed) `SHA256SUMS.sig`. `verify` fails closed and checks the signature
-against the committed public key (override with `DEVBOX_RELEASE_PUBKEY`).
-`prune` bounds the installed `releases/` tree: it removes non-active releases,
-keeping the active release plus the `N` most recently modified non-active
-releases (default 0), and removes staging directories older than 24 hours; the
-active release is never removed.
+### Publish a release (maintainer)
+
+`VERSION` is the source of truth. Bump it in a PR and merge to `main`; the
+`Release` workflow runs the checks, builds and signs the archive from that
+commit, and opens a **draft** release. Review the notes and assets, then click
+**Publish release** — the workflow never publishes on its own. Bump `VERSION`
+for the next release.
+
+Details, recovery, and the local equivalents of the workflow are in
+[docs/release-checklist.md](docs/release-checklist.md); installer behavior is in
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Security
 
