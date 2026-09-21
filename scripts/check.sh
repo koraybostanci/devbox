@@ -1673,3 +1673,34 @@ if grep -R -E -- \
     printf 'ERROR: prohibited provisioning pattern found\n' >&2
     exit 1
 fi
+
+# Phase 6: release tooling builds, verifies, and installs.
+grep -q 'release_paths' scripts/release.sh
+grep -q 'check_archive_paths' scripts/release.sh
+release_test_root="$validation_root/release"
+mkdir -p "$release_test_root/home"
+"$ROOT/scripts/release.sh" build 0.0.0 >/dev/null || {
+    printf 'ERROR: release build failed\n' >&2
+    exit 1
+}
+release_archive="$ROOT/dist/devbox-0.0.0.tar.gz"
+"$ROOT/scripts/release.sh" verify "$release_archive" >/dev/null || {
+    printf 'ERROR: release verification failed\n' >&2
+    exit 1
+}
+HOME="$release_test_root/home" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null || {
+    printf 'ERROR: release installation failed\n' >&2
+    exit 1
+}
+[ -x "$release_test_root/home/.local/share/devbox/releases/0.0.0/devbox" ] || {
+    printf 'ERROR: release launcher was not installed\n' >&2
+    exit 1
+}
+[ -L "$release_test_root/home/.local/share/devbox/current" ] || {
+    printf 'ERROR: release was not activated\n' >&2
+    exit 1
+}
+cp "$release_archive" "$release_test_root/first.tar.gz"
+"$ROOT/scripts/release.sh" build 0.0.0 >/dev/null
+cmp "$release_test_root/first.tar.gz" "$release_archive" ||
+    printf 'WARN: release archives are not byte-identical across rebuilds\n' >&2
