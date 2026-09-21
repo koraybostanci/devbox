@@ -1495,6 +1495,22 @@ grep -q 'v2 guest secrets permissions' provision/scripts/verify.sh
 grep -q 'head -c 24 /dev/urandom' lib/v2.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/config"' provision/scripts/tools.sh
 grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"' provision/scripts/tools.sh
+grep -q 'run_v2_services' lib/v2.sh
+grep -q 'V2_GUEST_SERVICES_ROOT' lib/v2.sh
+grep -q 'VALKEY_PASSWORD' lib/v2.sh
+grep -q 'devbox v2 services status' lib/v2.sh
+grep -q 'v2 PostgreSQL listens on loopback' provision/scripts/verify.sh
+grep -q 'v2 Valkey listens on loopback' provision/scripts/verify.sh
+grep -q '"127.0.0.1:' provision/config/services/compose.yaml || {
+    printf 'ERROR: v2 services must publish to loopback only\n' >&2
+    exit 1
+}
+POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
+    VALKEY_PASSWORD=test VALKEY_PORT=16379 \
+    docker compose -f provision/config/services/compose.yaml config -q || {
+    printf 'ERROR: v2 service definition is invalid\n' >&2
+    exit 1
+}
 HOME="$v2_home" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"

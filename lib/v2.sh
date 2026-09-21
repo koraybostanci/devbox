@@ -6,6 +6,7 @@ V2_GUEST_USER="devbox"
 V2_GUEST_HOME="/home/$V2_GUEST_USER"
 V2_GUEST_WORKSPACE="$V2_GUEST_HOME/workspace"
 V2_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2"
+V2_GUEST_SERVICES_ROOT="/var/lib/devbox-v2/services"
 V2_GUEST_ROOT="/var/lib/devbox-v2"
 V2_GUEST_BUNDLE_ROOT="$V2_GUEST_ROOT/bundles"
 V2_GUEST_PROVISIONING_ROOT="$V2_GUEST_ROOT/provisioning"
@@ -382,7 +383,7 @@ sync_v2_guest_config() {
         secrets="$directory/secrets"
         # Drop the superseded host-seeded env file from earlier v2 guests.
         rm -f "$directory/env"
-        if [ ! -e "$config" ]; then
+        if [ ! -s "$config" ] || ! grep -q "^export POSTGRES_USER=" "$config" 2>/dev/null; then
             temporary="$(mktemp "$directory/.config.XXXXXX")"
             cat >"$temporary"
             chmod 600 "$temporary"
@@ -392,11 +393,100 @@ sync_v2_guest_config() {
         fi
         if [ ! -e "$secrets" ]; then
             temporary="$(mktemp "$directory/.secrets.XXXXXX")"
-            printf "export POSTGRES_PASSWORD=%s\\n" \
-                "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \\n")" >"$temporary"
-            chmod 600 "$temporary"
-            mv "$temporary" "$secrets"
+            : >"$temporary"
+        else
+            temporary="$(mktemp "$directory/.secrets.XXXXXX")"
+            cat "$secrets" >"$temporary"
         fi
+        # Generate any missing service secret, preserving existing values.
+        grep -q "^export POSTGRES_PASSWORD=" "$temporary" ||
+            printf "export POSTGRES_PASSWORD=%s\\n" \
+                "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \\n")" >>"$temporary"
+        grep -q "^export VALKEY_PASSWORD=" "$temporary" ||
+            printf "export VALKEY_PASSWORD=%s\\n" \
+                "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \\n")" >>"$temporary"
+        chmod 600 "$temporary"
+        mv "$temporary" "$secrets"
+    '
+}
+
+# Bring up the root-managed v2 services (PostgreSQL and Valkey) in the guest.
+# The definition and credentials stay root-owned; the devbox user only reads
+# its client credentials from ~/.config/devbox-v2/secrets.
+run_v2_services() {
+    local digest="$1"
+
+    v2_admin_guest sudo bash -c '
+        set -Eeuo pipefail
+        digest="$1"
+        provisioning="/var/lib/devbox-v2/provisioning/$digest"
+        services=/var/lib/devbox-v2/services
+        config=/home/devbox/.config/devbox-v2/config
+        secrets=/home/devbox/.config/devbox-v2/secrets
+        compose_source="$provisioning/config/services/compose.yaml"
+        [ -d "$provisioning" ] && [ ! -L "$provisioning" ] || {
+            printf "ERROR: v2 provisioning input is unavailable\\n" >&2
+            exit 1
+        }
+        [ -f "$compose_source" ] && [ ! -L "$compose_source" ] || {
+            printf "ERROR: v2 service definition is unavailable\\n" >&2
+            exit 1
+        }
+        [ -r "$config" ] && [ -r "$secrets" ] || {
+            printf "ERROR: v2 guest configuration or secrets are unavailable\\n" >&2
+            exit 1
+        }
+        mkdir -p "$services/data/postgres" "$services/data/valkey"
+        chmod 700 "$services"
+        set -a
+        . "$config"
+        . "$secrets"
+        set +a
+        missing=
+        [ -n "${POSTGRES_USER:-}" ] || missing="$missing POSTGRES_USER"
+        [ -n "${POSTGRES_DB:-}" ] || missing="$missing POSTGRES_DB"
+        [ -n "${POSTGRES_PORT:-}" ] || missing="$missing POSTGRES_PORT"
+        [ -n "${POSTGRES_PASSWORD:-}" ] || missing="$missing POSTGRES_PASSWORD"
+        [ -n "${VALKEY_PASSWORD:-}" ] || missing="$missing VALKEY_PASSWORD"
+        [ -z "$missing" ] || {
+            printf "ERROR: v2 service credentials are missing:%s\\n" "$missing" >&2
+            printf "v2 guest config:\\n" >&2
+            cat "$config" >&2 || true
+            exit 1
+        }
+        VALKEY_PORT="${VALKEY_PORT:-16379}"
+        umask 077
+        envfile="$services/env"
+        temporary="$(mktemp "$services/.env.XXXXXX")"
+        {
+            printf "POSTGRES_USER=%s\\n" "$POSTGRES_USER"
+            printf "POSTGRES_DB=%s\\n" "$POSTGRES_DB"
+            printf "POSTGRES_PORT=%s\\n" "$POSTGRES_PORT"
+            printf "POSTGRES_PASSWORD=%s\\n" "$POSTGRES_PASSWORD"
+            printf "VALKEY_PORT=%s\\n" "$VALKEY_PORT"
+            printf "VALKEY_PASSWORD=%s\\n" "$VALKEY_PASSWORD"
+        } >"$temporary"
+        chmod 600 "$temporary"
+        mv "$temporary" "$envfile"
+        compose="$services/compose.yaml"
+        temporary="$(mktemp "$services/.compose.XXXXXX")"
+        cat "$compose_source" >"$temporary"
+        chmod 600 "$temporary"
+        mv "$temporary" "$compose"
+        docker compose --project-name devbox-v2 --env-file "$envfile" -f "$compose" up -d --wait
+    ' _ "$digest"
+}
+
+show_v2_services_status() {
+    v2_admin_guest sudo bash -c '
+        set -Eeuo pipefail
+        services=/var/lib/devbox-v2/services
+        [ -f "$services/compose.yaml" ] || {
+            printf "devbox-v2 services are not provisioned\\n" >&2
+            exit 1
+        }
+        docker compose --project-name devbox-v2 \
+            --env-file "$services/env" -f "$services/compose.yaml" ps
     '
 }
 
@@ -431,6 +521,7 @@ run_v2_guest_provisioning() {
     stage_v2_guest_provisioning_input "$digest" || return
     sync_v2_guest_config || return
     ensure_v2_guest_ssh_access || return
+    run_v2_services "$digest" || return
     v2_as_guest env \
         DEVBOX_PROVISION_ROOT="$V2_GUEST_PROVISIONING_ROOT/$digest" \
         DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT" \
@@ -1325,7 +1416,7 @@ run_v2() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox v2 <start|provision|connect|exec|status|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox v2 <start|provision|connect|exec|status|services|stop|destroy>"
             check_host_platform
             check_v2_dependencies
             acquire_lock lifecycle
@@ -1351,6 +1442,11 @@ run_v2() {
         status)
             [ $# -eq 0 ] || die "Usage: devbox v2 status"
             show_v2_status
+            ;;
+        services)
+            [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox v2 services status"
+            require_running_v2_vm
+            show_v2_services_status
             ;;
         stop)
             case "${1:-}" in
@@ -1392,6 +1488,6 @@ run_v2() {
             release_lock
             log "Destroyed v2 VM runtime data. No host project or data directories were used."
             ;;
-        *) die "Usage: devbox v2 <start|provision|connect|exec|status|stop|destroy>" ;;
+        *) die "Usage: devbox v2 <start|provision|connect|exec|status|services|stop|destroy>" ;;
     esac
 }
