@@ -54,7 +54,7 @@ HOME="$zsh_profile_home" ROOT="$ROOT" zsh -dfc '
     printf 'ERROR: zsh did not retain legacy guest environment selection\n' >&2
     exit 1
 }
-printf 'DEVBOX_ENV_SOURCE=v2\n' >"$zsh_profile_home/.config/devbox-v2/env"
+printf 'DEVBOX_ENV_SOURCE=v2\n' >"$zsh_profile_home/.config/devbox-v2/config"
 HOME="$zsh_profile_home" ROOT="$ROOT" zsh -dfc '
     source "$ROOT/provision/config/zsh/zshrc"
     [ "$DEVBOX_ENV_SOURCE" = v2 ]
@@ -880,12 +880,12 @@ HOME="$v2_home" V2_GUEST_DISPATCH_HOME="$v2_guest_dispatch_home" ROOT="$ROOT" DE
             [ -n "$directory" ] && [ "$directory" != / ]
             mkdir -p "$directory"
             mkdir -p "$DEVBOX_PROVISION_ROOT"
-            temporary="$(mktemp "$directory/.env.XXXXXX")"
+            temporary="$(mktemp "$directory/.config.XXXXXX")"
             printf guest-env >"$temporary"
-            mv "$temporary" "$directory/env"
+            mv "$temporary" "$directory/config"
             printf "%s\n" "$HOME" >"$DEVBOX_PROVISION_ROOT/home"
         '\''
-    [ "$(cat "$V2_GUEST_HOME/.config/devbox-v2/env")" = guest-env ]
+    [ "$(cat "$V2_GUEST_HOME/.config/devbox-v2/config")" = guest-env ]
     [ "$(cat "$V2_GUEST_HOME/provisioning/home")" = "$V2_GUEST_HOME" ]
 '
 v2_stage_capture="$validation_root/v2-stage-dispatch"
@@ -944,7 +944,7 @@ grep -q 'HOME="$V2_GUEST_HOME"' lib/v2.sh
 grep -q 'PWD="$V2_GUEST_HOME"' lib/v2.sh
 grep -q 'cd -- "$home"' lib/v2.sh
 grep -q 'v2_as_guest env' lib/v2.sh
-grep -q 'DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2"' lib/v2.sh
+grep -q 'DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT"' lib/v2.sh
 grep -q 'DEVBOX_PROVISION_ROOT="$V2_GUEST_PROVISIONING_ROOT/$digest"' lib/v2.sh
 grep -q 'DEVBOX_NO_MOUNTS=true' lib/v2.sh
 grep -q 'run_v2_root_apps "$digest"' lib/v2.sh
@@ -1293,7 +1293,7 @@ for v2_unsafe_privilege in nopasswd docker-write; do
         }
         run_v2_root_apps() { printf "root-apps-ran:%s\n" "$V2_UNSAFE_PRIVILEGE" >>"$V2_FIRST_PROVISION_ACCESS_CAPTURE"; }
         stage_v2_guest_provisioning_input() { printf "staged:%s\n" "$V2_UNSAFE_PRIVILEGE" >>"$V2_FIRST_PROVISION_ACCESS_CAPTURE"; }
-        sync_v2_guest_env() { printf "synced:%s\n" "$V2_UNSAFE_PRIVILEGE" >>"$V2_FIRST_PROVISION_ACCESS_CAPTURE"; }
+        sync_v2_guest_config() { printf "synced:%s\n" "$V2_UNSAFE_PRIVILEGE" >>"$V2_FIRST_PROVISION_ACCESS_CAPTURE"; }
         ensure_v2_guest_ssh_access() { printf "authorized:%s\n" "$V2_UNSAFE_PRIVILEGE" >>"$V2_FIRST_PROVISION_ACCESS_CAPTURE"; }
         run_v2_guest_provisioning deadbeef /dev/null
     ' >/dev/null 2>&1; then
@@ -1377,7 +1377,7 @@ HOME="$v2_home" V2_CURRENT_DIGEST_ACCESS_CAPTURE="$v2_current_digest_access_capt
     v2_guest_bundle_is_valid() { return 0; }
     validate_v2_guest_identity() { return 0; }
     validate_v2_guest_privileges() { return 1; }
-    sync_v2_guest_env() { printf "synced\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
+    sync_v2_guest_config() { printf "synced\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     remove_v2_managed_guest_ssh_authorization() { printf "guest-revoked\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     remove_v2_ssh_config() { printf "alias-removed\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     reconcile_v2_guest_workspace() { printf "workspace-reconciled\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
@@ -1408,7 +1408,7 @@ HOME="$v2_home" V2_CURRENT_DIGEST_ACCESS_CAPTURE="$v2_current_digest_access_capt
     v2_guest_bundle_is_valid() { return 0; }
     validate_v2_guest_identity() { return 0; }
     validate_v2_guest_privileges() { return 0; }
-    sync_v2_guest_env() { printf "synced\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
+    sync_v2_guest_config() { printf "synced\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     remove_v2_managed_guest_ssh_authorization() { printf "guest-revoked\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     remove_v2_ssh_config() { printf "alias-removed\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
     reconcile_v2_guest_workspace() { printf "workspace-reconciled\n" >>"$V2_CURRENT_DIGEST_ACCESS_CAPTURE"; }
@@ -1455,7 +1455,7 @@ if HOME="$v2_provision_failure_home" XDG_DATA_HOME="$v2_provision_failure_home/d
     stage_v2_guest_provisioning_input() {
         printf "staged-after-failure\n" >>"$V2_PROVISION_FAILURE_EVENTS"
     }
-    sync_v2_guest_env() {
+    sync_v2_guest_config() {
         printf "env-synced-after-failure\n" >>"$V2_PROVISION_FAILURE_EVENTS"
     }
     ensure_v2_guest_ssh_access() {
@@ -1490,6 +1490,29 @@ grep -q 'v2 active user' provision/scripts/verify.sh
 grep -q 'v2 root bundle state is inaccessible' provision/scripts/verify.sh
 grep -q 'v2 staged provisioning input is root-owned, readable, and read-only' provision/scripts/verify.sh
 grep -q 'v2 guest cannot access Docker socket' provision/scripts/verify.sh
+grep -q 'v2 guest config permissions' provision/scripts/verify.sh
+grep -q 'v2 guest secrets permissions' provision/scripts/verify.sh
+grep -q 'head -c 24 /dev/urandom' lib/v2.sh
+grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/config"' provision/scripts/tools.sh
+grep -q 'source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"' provision/scripts/tools.sh
+HOME="$v2_home" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    source "$ROOT/lib/guest.sh"
+    source "$ROOT/lib/v2.sh"
+    POSTGRES_PASSWORD="must-not-leak"
+    rendered="$(render_v2_guest_config)"
+    case "$rendered" in
+        *POSTGRES_PASSWORD*) exit 1 ;;
+    esac
+    case "$rendered" in
+        *"export GIT_NAME="*) ;;
+        *) exit 1 ;;
+    esac
+' || {
+    printf 'ERROR: v2 guest config must exclude host-supplied secrets\n' >&2
+    exit 1
+}
 grep -q 'Host devbox' lib/colima.sh
 grep -q 'Host devbox-v2' lib/v2.sh
 if "$ROOT/devbox" v2 invalid >/dev/null 2>&1; then

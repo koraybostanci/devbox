@@ -59,8 +59,9 @@ atomically moves the `provision/` tree below `/var/lib/devbox-v2`. Root
 provisioning creates and reconciles the separate unprivileged `devbox` user,
 its zsh login shell, and the real `/home/devbox/workspace` directory. The
 root-owned provisioning input is readable but not writable by `devbox`, which
-runs the tools and verifier; its allowlisted environment is transferred to
-`/home/devbox/.config/devbox-v2/env`.
+runs the tools and verifier; its guest-local configuration is established under
+`/home/devbox/.config/devbox-v2/` as a seeded-once `config` plus guest-generated
+`secrets`.
 
 No-mount v2 does not assert strict network isolation. Phase 1 showed that stock
 Colima 0.10.3 retains a Lima `user-v2` network in the isolation POC. The v2
