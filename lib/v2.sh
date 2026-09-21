@@ -828,30 +828,84 @@ v2_effective_ssh_value() {
 validate_v2_effective_ssh_config() {
     local source_config="$1" managed_config="$2" effective_config
     local expected_hostname expected_port expected_identity actual_identity
-    local controlmaster controlpath proxycommand proxyjump
+    local controlmaster controlpath proxycommand proxyjump value
 
-    effective_config="$(ssh -F "$managed_config" -G devbox-v2 2>/dev/null)" || return 1
+    effective_config="$(ssh -F "$managed_config" -G devbox-v2 2>/dev/null)" || {
+        printf 'ERROR: v2 SSH effective configuration could not be computed\n' >&2
+        return 1
+    }
     expected_hostname="$(v2_effective_ssh_value "$source_config" hostname)"
     expected_port="$(v2_effective_ssh_value "$source_config" port)"
     expected_identity="$(v2_effective_ssh_value "$source_config" identityfile)"
     actual_identity="$(v2_effective_ssh_value "$effective_config" identityfile)"
+    [ -n "$expected_hostname" ] && [ -n "$expected_port" ] && [ -n "$expected_identity" ] || {
+        printf 'ERROR: Colima v2 SSH configuration lacks hostname, port, or identity\n' >&2
+        return 1
+    }
+    value="$(v2_effective_ssh_value "$effective_config" user)"
+    [ "$value" = "$V2_GUEST_USER" ] || {
+        printf 'ERROR: v2 SSH effective user is %s, expected %s\n' "$value" "$V2_GUEST_USER" >&2
+        return 1
+    }
+    value="$(v2_effective_ssh_value "$effective_config" identitiesonly)"
+    [ "$value" = yes ] || {
+        printf 'ERROR: v2 SSH effective IdentitiesOnly is %s\n' "$value" >&2
+        return 1
+    }
+    value="$(v2_effective_ssh_value "$effective_config" forwardagent)"
+    [ "$value" = no ] || {
+        printf 'ERROR: v2 SSH effective ForwardAgent is %s\n' "$value" >&2
+        return 1
+    }
     controlmaster="$(v2_effective_ssh_value "$effective_config" controlmaster)"
+    case "$controlmaster" in no | false) ;; *)
+        printf 'ERROR: v2 SSH effective ControlMaster is %s\n' "$controlmaster" >&2
+        return 1
+        ;;
+    esac
     controlpath="$(v2_effective_ssh_value "$effective_config" controlpath)"
+    case "$controlpath" in '' | none) ;; *)
+        printf 'ERROR: v2 SSH effective ControlPath is %s\n' "$controlpath" >&2
+        return 1
+        ;;
+    esac
     proxycommand="$(v2_effective_ssh_value "$effective_config" proxycommand)"
-    proxyjump="$(v2_effective_ssh_value "$effective_config" proxyjump)"
     [ -n "$proxycommand" ] || proxycommand=none
+    [ "$proxycommand" = none ] || {
+        printf 'ERROR: v2 SSH effective ProxyCommand is %s\n' "$proxycommand" >&2
+        return 1
+    }
+    proxyjump="$(v2_effective_ssh_value "$effective_config" proxyjump)"
     [ -n "$proxyjump" ] || proxyjump=none
-    [ -n "$expected_hostname" ] && [ -n "$expected_port" ] && [ -n "$expected_identity" ] || return 1
-    [ "$(v2_effective_ssh_value "$effective_config" user)" = "$V2_GUEST_USER" ] || return 1
-    [ "$(v2_effective_ssh_value "$effective_config" identitiesonly)" = yes ] || return 1
-    [ "$(v2_effective_ssh_value "$effective_config" forwardagent)" = no ] || return 1
-    case "$controlmaster" in no|false) ;; *) return 1 ;; esac
-    case "$controlpath" in ''|none) ;; *) return 1 ;; esac
-    [ "$proxycommand" = none ] || return 1
-    [ "$proxyjump" = none ] || return 1
-    [ "$(v2_effective_ssh_value "$effective_config" hostname)" = "$expected_hostname" ] || return 1
-    [ "$(v2_effective_ssh_value "$effective_config" port)" = "$expected_port" ] || return 1
-    [ "$actual_identity" = "$expected_identity" ]
+    [ "$proxyjump" = none ] || {
+        printf 'ERROR: v2 SSH effective ProxyJump is %s\n' "$proxyjump" >&2
+        return 1
+    }
+    value="$(v2_effective_ssh_value "$effective_config" hostname)"
+    [ "$value" = "$expected_hostname" ] || {
+        printf 'ERROR: v2 SSH effective hostname is %s, expected %s\n' "$value" "$expected_hostname" >&2
+        return 1
+    }
+    value="$(v2_effective_ssh_value "$effective_config" port)"
+    [ "$value" = "$expected_port" ] || {
+        printf 'ERROR: v2 SSH effective port is %s, expected %s\n' "$value" "$expected_port" >&2
+        return 1
+    }
+    # OpenSSH accumulates IdentityFile across every matching block, so a
+    # `Host *` block in the user configuration legitimately appends extra
+    # identities after the managed one. Require the managed identity (or
+    # identities) to come first, which is what makes the dedicated v2 key win;
+    # do not reject inherited extras that follow it.
+    case "$actual_identity" in
+        "$expected_identity") ;;
+        "$expected_identity"$'\n'*) ;;
+        *)
+            printf 'ERROR: v2 SSH effective identity does not start with the managed identity\n' >&2
+            printf '  expected first: %s\n' "$expected_identity" >&2
+            printf '  effective: %s\n' "$actual_identity" >&2
+            return 1
+            ;;
+    esac
 }
 
 recover_v2_ssh_config_transaction() {
