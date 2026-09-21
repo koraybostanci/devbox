@@ -221,7 +221,11 @@ create_v2_bundle_snapshot() {
     V2_BUNDLE_DIGEST="$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")"
     (
         cd "$V2_BUNDLE_SNAPSHOT"
-        COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
+        if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
+            COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$V2_BUNDLE_ARCHIVE" provision
+        else
+            COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
+        fi
     )
     chmod 400 "$V2_BUNDLE_ARCHIVE"
 }
