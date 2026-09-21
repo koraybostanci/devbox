@@ -86,8 +86,8 @@ echo
 echo "== privilege boundary =="
 refute "devbox is not in a privileged group" bash -c \
     './devbox v2 exec id -nG | tr " " "\n" | grep -Eq "^(sudo|wheel|admin|adm)$"'
-check "sudo reports devbox is not allowed to run sudo" bash -c \
-    './devbox v2 exec env LC_ALL=C sudo -n -l 2>&1 | grep -q "is not allowed to run sudo on"'
+check "devbox sudo listing grants no privileges" bash -c \
+    '! ./devbox v2 exec env LC_ALL=C sudo -n -l 2>&1 | grep -Eq "may run the following commands|NOPASSWD|\(ALL"'
 refute "devbox cannot execute passwordless sudo" ./devbox v2 exec sudo -n true
 check "devbox cannot write the Docker socket" bash -c \
     '! ./devbox v2 exec test -S /var/run/docker.sock || ! ./devbox v2 exec test -w /var/run/docker.sock'
