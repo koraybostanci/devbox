@@ -95,33 +95,56 @@ jobs:
             release_exists=true
           fi
           if [ "$release_exists" = true ]; then
-            # Fail closed: a failed assets query is not "no assets". Treating
-            # it as empty would classify a complete published release as
-            # incomplete and clobber it during recovery.
-            if ! assets="$(gh release view "v$version" --json assets --jq '.assets[].name')"; then
-              printf 'ERROR: release v%s exists but its assets could not be queried; retry once the GitHub API is available.\n' \
+            # Fail closed: a failed query is not "no assets" and not
+            # "not a draft". Treating it as empty would classify a complete
+            # published release as an incomplete draft and clobber it during
+            # recovery.
+            if ! release_view="$(gh release view "v$version" --json isDraft,assets --jq '.isDraft, (.assets[].name)')"; then
+              printf 'ERROR: release v%s exists but its state could not be queried; retry once the GitHub API is available.\n' \
                 "$version" >&2
               exit 1
             fi
+            is_draft="$(printf '%s\n' "$release_view" | sed -n '1p')"
+            case "$is_draft" in
+              true|false) ;;
+              *)
+                printf 'ERROR: release v%s did not report a usable isDraft value; refusing to continue.\n' \
+                  "$version" >&2
+                exit 1
+                ;;
+            esac
+            assets="$(printf '%s\n' "$release_view" | sed -n '2,$p')"
             missing=""
             for expected in "devbox-$version.tar.gz" SHA256SUMS SHA256SUMS.sig; do
               if ! printf '%s\n' "$assets" | grep -qx "$expected"; then
                 missing="$missing $expected"
               fi
             done
-            if [ -z "$missing" ]; then
+            tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
+            if [ "$is_draft" = true ]; then
+              if [ -z "$missing" ]; then
+                # Complete draft: never rebuild or upload, just hand the
+                # maintainer the publish instruction.
+                state=ready
+                printf 'Draft release v%s already has all assets; the publish step only points at the GitHub UI.\n' \
+                  "$version"
+              elif [ -z "$tag_commit" ] || [ "$tag_commit" != "$version_commit" ]; then
+                printf 'ERROR: draft release v%s is missing:%s but tag v%s is not at the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
+                  "$version" "$missing" "$version" "$version_commit" >&2
+                exit 1
+              else
+                state=recover
+                printf 'Recovering draft release v%s (missing:%s)\n' "$version" "$missing"
+              fi
+            elif [ -z "$missing" ]; then
               printf 'ERROR: release v%s is already published with all assets; bump VERSION to release again.\n' \
                 "$version" >&2
               exit 1
-            fi
-            tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
-            if [ -z "$tag_commit" ] || [ "$tag_commit" != "$version_commit" ]; then
-              printf 'ERROR: release v%s is incomplete (missing:%s) but tag v%s is not at the release commit %s; delete the incomplete release before rerunning.\n' \
-                "$version" "$missing" "$version" "$version_commit" >&2
+            else
+              printf 'ERROR: release v%s is published but missing:%s; a published release is never overwritten. Bump VERSION to release again.\n' \
+                "$version" "$missing" >&2
               exit 1
             fi
-            state=recover
-            printf 'Recovering incomplete release v%s (missing:%s)\n' "$version" "$missing"
           else
             tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
             if [ -n "$tag_commit" ]; then
@@ -140,9 +163,11 @@ jobs:
         run: git checkout --detach "$version_commit"
 
       - name: Build release
+        if: env.release_state != 'ready'
         run: scripts/release.sh build
 
       - name: Sign release
+        if: env.release_state != 'ready'
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -157,19 +182,33 @@ jobs:
           scripts/release.sh sign "dist/devbox-$version/devbox-$version.tar.gz" --key "$key"
 
       - name: Verify release
+        if: env.release_state != 'ready'
         run: scripts/release.sh verify "dist/devbox-$version/devbox-$version.tar.gz"
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
         run: |
+          draft_url="$SERVER_URL/$REPOSITORY/releases/edit/v$version"
+          if [ "$release_state" = "ready" ]; then
+            printf 'Draft release v%s is already prepared with all assets; nothing was rebuilt or uploaded.\n' \
+              "$version"
+            printf 'Review the release notes and assets, then publish the draft in the GitHub UI: %s\n' \
+              "$draft_url"
+            exit 0
+          fi
           if [ "$release_state" = "recover" ]; then
             gh release upload "v$version" \
               "dist/devbox-$version/devbox-$version.tar.gz" \
               "dist/devbox-$version/SHA256SUMS" \
               "dist/devbox-$version/SHA256SUMS.sig" \
               --clobber
-            printf 'Completed incomplete release v%s from release commit %s\n' "$version" "$version_commit"
+            printf 'Completed draft release v%s from release commit %s (missing assets uploaded; the release stays a draft)\n' \
+              "$version" "$version_commit"
+            printf 'Review the release notes and assets, then publish the draft in the GitHub UI: %s\n' \
+              "$draft_url"
             exit 0
           fi
           args=(
@@ -179,6 +218,7 @@ jobs:
             "dist/devbox-$version/SHA256SUMS.sig"
             --title "devbox v$version"
             --generate-notes
+            --draft
           )
           case "$version" in
             *-*) args+=(--prerelease) ;;
@@ -187,3 +227,7 @@ jobs:
             args+=(--target "$version_commit")
           fi
           gh release create "${args[@]}"
+          printf 'Created draft release v%s from release commit %s; it is not public until a maintainer publishes it\n' \
+            "$version" "$version_commit"
+          printf 'Review the release notes and assets, then publish the draft in the GitHub UI: %s\n' \
+            "$draft_url"

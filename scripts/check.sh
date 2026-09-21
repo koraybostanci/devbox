@@ -113,6 +113,13 @@ printf '%s\n' "$push_paths" | grep -qx -- '- VERSION' ||
 if grep -n '\${{ steps\.' .github/workflows/release.yml; then
     fail "release.yml must not reference step outputs"
 fi
+# The approval gate is a draft release a maintainer publishes manually:
+# release.yml must create drafts and must inspect isDraft before recovering or
+# failing on an existing release.
+grep -q -- '--draft' .github/workflows/release.yml ||
+    fail "release.yml must create draft releases for manual publishing"
+grep -q 'isDraft' .github/workflows/release.yml ||
+    fail "release.yml must inspect isDraft before acting on an existing release"
 # Workflow context expressions belong in env: blocks, never in run: scripts.
 # Both inline run: values and block-scalar run: bodies are scanned.
 run_context_usage="$(

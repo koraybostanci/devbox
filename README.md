@@ -156,23 +156,31 @@ devbox install --adopt
 ### Publish a release (maintainer)
 
 `VERSION` is the source of truth. Merge a commit that bumps `VERSION` to `main`
-and the `Release` workflow runs: it runs the `Check` workflow, waits for
-approval on the protected `release` environment, then checks out the commit
-that last changed `VERSION`, builds the archive from it, signs it with the
-`RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
-public key, creates the `v<version>` tag at that commit, and publishes the
-archive, `SHA256SUMS`, and `SHA256SUMS.sig` with automatically generated
-release notes. Suffixed versions such as `0.1.0-rc1` are published as
-prereleases. The workflow creates the tag; do not push tags by hand.
+and the `Release` workflow runs: it runs the `Check` workflow, checks out the
+commit that last changed `VERSION`, builds the archive from it, signs it with
+the `RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
+public key, and creates a **draft** release titled `devbox v<version>`. The
+draft carries the archive, `SHA256SUMS`, and `SHA256SUMS.sig` with
+automatically generated release notes, and the `v<version>` tag targets that
+commit; do not push tags by hand. Suffixed versions such as `0.1.0-rc1` are
+drafted as prereleases.
+
+The draft is the approval gate: nothing is public until a maintainer opens the
+[Releases page](https://github.com/koraybostanci/devbox/releases), reviews the
+generated notes and all three assets, and clicks **Publish release**. The
+workflow never publishes a release on its own. After publishing, bump `VERSION`
+for the next release.
 
 `workflow_dispatch` is recovery-only: dispatch it on `main` with the version
 already in `VERSION` (the input must match it). Recovery resolves the current
 `VERSION` to the commit that last changed it, rebuilds that commit, and
-re-uploads the missing assets in place instead of recreating the release; a run
-that finds a complete published release fails, so bump `VERSION` for a new
-release instead of rerunning an old one. Because recovery always rebuilds the
-commit that last changed `VERSION`, an older incomplete release cannot be
-recovered after `VERSION` moves on; release a new version instead.
+re-uploads the missing assets into the existing draft with `--clobber`; the
+release stays a draft until a maintainer publishes it. Recovery requires the
+draft's tag to be at the release commit, so a draft whose tag is not at the
+release commit cannot be recovered, and a published release is never
+overwritten. Because recovery always rebuilds the commit that last changed
+`VERSION`, an older incomplete draft cannot be recovered after `VERSION` moves
+on; bump `VERSION` for a new release instead.
 
 The local tooling mirrors the workflow:
 
