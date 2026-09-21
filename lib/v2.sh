@@ -5,6 +5,9 @@ V2_OWNER_VERSION="devbox-v2-profile-v1"
 V2_GUEST_USER="devbox"
 V2_GUEST_HOME="/home/$V2_GUEST_USER"
 V2_GUEST_WORKSPACE="$V2_GUEST_HOME/workspace"
+V2_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2"
+V2_GUEST_CONFIG_FILE="$V2_GUEST_CONFIG_ROOT/config"
+V2_GUEST_SECRETS_FILE="$V2_GUEST_CONFIG_ROOT/secrets"
 V2_GUEST_ROOT="/var/lib/devbox-v2"
 V2_GUEST_BUNDLE_ROOT="$V2_GUEST_ROOT/bundles"
 V2_GUEST_PROVISIONING_ROOT="$V2_GUEST_ROOT/provisioning"
@@ -351,19 +354,49 @@ v2_guest_bundle_is_valid() {
     ' _ "$digest"
 }
 
-sync_v2_guest_env() {
+render_v2_guest_config() {
+    local key value
+    local -a guest_keys=(
+        GIT_NAME GIT_EMAIL
+        POSTGRES_USER POSTGRES_DB POSTGRES_PORT
+    )
+
+    for key in "${guest_keys[@]}"; do
+        value="${!key:-}"
+        printf 'export %s=%s\n' "$key" "$(shell_quote "$value")"
+    done
+}
+
+# Establish the guest-local v2 configuration:
+#   config  - non-secret defaults; seeded once, then the guest is authoritative.
+#   secrets - service secrets; always generated inside the guest, never seeded
+#             from the host.
+sync_v2_guest_config() {
     load_env v2
-    render_guest_env | v2_as_guest env \
-        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2" \
+    render_v2_guest_config | v2_as_guest env \
+        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT" \
         bash -c '
         set -Eeuo pipefail
         umask 077
         directory="$DEVBOX_GUEST_CONFIG_ROOT"
         mkdir -p "$directory"
-        temporary="$(mktemp "$directory/.env.XXXXXX")"
-        cat >"$temporary"
-        chmod 600 "$temporary"
-        mv "$temporary" "$directory/env"
+        config="$directory/config"
+        secrets="$directory/secrets"
+        if [ ! -e "$config" ]; then
+            temporary="$(mktemp "$directory/.config.XXXXXX")"
+            cat >"$temporary"
+            chmod 600 "$temporary"
+            mv "$temporary" "$config"
+        else
+            cat >/dev/null
+        fi
+        if [ ! -e "$secrets" ]; then
+            temporary="$(mktemp "$directory/.secrets.XXXXXX")"
+            printf "export POSTGRES_PASSWORD=%s\\n" \
+                "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \\n")" >"$temporary"
+            chmod 600 "$temporary"
+            mv "$temporary" "$secrets"
+        fi
     '
 }
 
@@ -396,11 +429,11 @@ run_v2_guest_provisioning() {
     }
     run_v2_root_apps "$digest" || return
     stage_v2_guest_provisioning_input "$digest" || return
-    sync_v2_guest_env || return
+    sync_v2_guest_config || return
     ensure_v2_guest_ssh_access || return
     v2_as_guest env \
         DEVBOX_PROVISION_ROOT="$V2_GUEST_PROVISIONING_ROOT/$digest" \
-        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2" \
+        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT" \
         DEVBOX_NO_MOUNTS=true \
         bash -c '
         set -Eeuo pipefail
@@ -1240,7 +1273,7 @@ provision_v2_guest() (
                     die "v2 guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
                 die "v2 guest user has unsafe identity or privileges; managed direct SSH access was removed"
             }
-            sync_v2_guest_env || return
+            sync_v2_guest_config || return
             ensure_v2_guest_ssh_access || return
             return
         fi

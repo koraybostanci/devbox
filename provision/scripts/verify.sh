@@ -46,8 +46,9 @@ login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
-check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
 if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
+    check "v2 guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
+    check "v2 guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
     check "guest-local provisioning bundle" has_verified_v2_bundle "$DEVBOX_PROVISION_ROOT"
     check "v2 root bundle state is inaccessible" bash -c '
         [ ! -r /var/lib/devbox-v2/bundles ] &&
@@ -74,6 +75,7 @@ if [ "${DEVBOX_NO_MOUNTS:-false}" = true ]; then
     '
     check "v2 Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
 else
+    check "guest environment permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/env" 600
     check "projects mount is writable" test -w /mnt/devbox/projects
     check "data mount is writable" test -w /mnt/devbox/data
     check "Docker daemon" docker info
