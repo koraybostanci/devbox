@@ -970,7 +970,7 @@ write_v2_ssh_config() {
     local managed_backup config_backup journal journal_temporary
     local ssh_dir managed_dir managed_config config config_dir config_mode
     local ssh_dir_existed=false managed_dir_existed=false config_dir_existed=false
-    local managed_existed=false config_existed=false source_host
+    local managed_existed=false config_existed=false source_host reachability_error
 
     staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-v2-source.XXXXXX")"
     staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox-v2.XXXXXX")"
@@ -1037,7 +1037,18 @@ write_v2_ssh_config() {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "generated v2 SSH configuration has conflicting effective settings"
     fi
-    if ! ssh -F "$staged_config" -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 true >/dev/null 2>&1; then
+    if ! reachability_error="$(ssh -F "$staged_config" -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 true 2>&1)"; then
+        printf 'ERROR: generated SSH host '\''devbox-v2'\'' is not reachable\n' >&2
+        printf '  ssh: %s\n' "$reachability_error" >&2
+        printf '  effective: hostname=%s port=%s user=%s identitiesonly=%s\n' \
+            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" hostname | head -n 1)" \
+            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" port | head -n 1)" \
+            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" user | head -n 1)" \
+            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" identitiesonly | head -n 1)" >&2
+        printf '  managed block:\n' >&2
+        sed -n '/^# BEGIN devbox-v2$/,/^# END devbox-v2$/p' "$staged_config" >&2 || true
+        printf '  colima source config:\n' >&2
+        cat "$staged_source" >&2 || true
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "generated SSH host 'devbox-v2' is not reachable"
     fi
