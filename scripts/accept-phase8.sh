@@ -48,8 +48,23 @@ if [ -d "$projects_dir" ]; then
 fi
 
 check "devbox v2 migrate projects" ./devbox v2 migrate projects --force
-check "v2 workspace is populated" bash -c './devbox v2 exec test -d "$HOME/workspace" &&
-    [ -n "$(./devbox v2 exec ls -A "$HOME/workspace")" ]'
+check "v2 workspace exists" ./devbox v2 exec test -d /home/devbox/workspace
+check "v2 workspace is populated" bash -c '
+    [ -n "$(./devbox v2 exec ls -A /home/devbox/workspace)" ]
+'
+
+# Confirm a real legacy project landed in the guest workspace.
+sample=""
+if [ -d "$projects_dir" ]; then
+    sample="$(find "$projects_dir" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort | head -n 1)"
+    sample="$(basename "$sample")"
+fi
+if [ -n "$sample" ]; then
+    check "migrated project '$sample' is present in the v2 workspace" \
+        ./devbox v2 exec test -d "/home/devbox/workspace/$sample"
+else
+    printf 'WARN: no legacy project directories found to confirm the copy\n' >&2
+fi
 
 if [ -n "$legacy_before" ]; then
     legacy_after="$(find "$projects_dir" -type f | wc -l | tr -d ' ')"
