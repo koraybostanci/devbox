@@ -4,7 +4,7 @@ Guidance for agents working in this repository.
 
 ## What this repo is
 
-Infrastructure-as-code for a personal dev VM (Colima profile `devbox-v2`)
+Infrastructure-as-code for a personal dev VM (Colima profile `devbox`)
 running Ubuntu 24.04 on Apple Silicon. Clone → `./devbox init` → edit `.env` →
 `./devbox start` → fully provisioned dev environment with no host mounts. The
 VM is disposable; everything that matters lives in the guest.
@@ -29,13 +29,12 @@ VM is disposable; everything that matters lives in the guest.
 - `devbox` — the launcher.
 - `lib/common.sh` — logging, locking, CLI install helpers.
 - `lib/config.sh` — host platform check, `.env` parsing.
-- `lib/v2.sh` — VM lifecycle, provisioning, identity, SSH, services.
+- `lib/devbox.sh` — VM lifecycle, provisioning, identity, SSH, services.
 - `provision/` — guest provisioning bundle (system/tools/verify scripts and
   `config/services/compose.yaml`).
-- `colima-v2.yaml` — the Colima profile template.
+- `colima.yaml` — the Colima profile template.
 - `scripts/check.sh` — static checks (the CI gate).
 - `scripts/release.sh` — build/verify/install signed releases.
-- `scripts/accept-phase*.sh` — acceptance harnesses run on macOS.
 
 ## Notes
 

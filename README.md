@@ -62,7 +62,7 @@ stop/start and is removed only by `devbox destroy`.
 PostgreSQL and Valkey run as root-managed containers inside the guest, bound to
 `127.0.0.1` only. The unprivileged `devbox` user cannot control Docker; it
 reaches the services over loopback using credentials in
-`~/.config/devbox-v2/secrets`.
+`~/.config/devbox/secrets`.
 
 ```sh
 devbox services status

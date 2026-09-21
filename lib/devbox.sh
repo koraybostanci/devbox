@@ -1,41 +1,41 @@
 #!/bin/bash
 
-V2_PROFILE="devbox-v2"
-V2_OWNER_VERSION="devbox-v2-profile-v1"
-V2_GUEST_USER="devbox"
-V2_GUEST_HOME="/home/$V2_GUEST_USER"
-V2_GUEST_WORKSPACE="$V2_GUEST_HOME/workspace"
-V2_GUEST_CONFIG_ROOT="$V2_GUEST_HOME/.config/devbox-v2"
-V2_GUEST_SERVICES_ROOT="/var/lib/devbox-v2/services"
-V2_GUEST_ROOT="/var/lib/devbox-v2"
-V2_GUEST_BUNDLE_ROOT="$V2_GUEST_ROOT/bundles"
-V2_GUEST_PROVISIONING_ROOT="$V2_GUEST_ROOT/provisioning"
-V2_SSH_AUTHORIZED_KEYS_FILE='/etc/ssh/authorized_keys/%u'
+DEVBOX_PROFILE="devbox"
+DEVBOX_OWNER_VERSION="devbox-profile-v1"
+DEVBOX_GUEST_USER="devbox"
+DEVBOX_GUEST_HOME="/home/$DEVBOX_GUEST_USER"
+DEVBOX_GUEST_WORKSPACE="$DEVBOX_GUEST_HOME/workspace"
+DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_HOME/.config/devbox"
+DEVBOX_GUEST_SERVICES_ROOT="/var/lib/devbox/services"
+DEVBOX_GUEST_ROOT="/var/lib/devbox"
+DEVBOX_GUEST_BUNDLE_ROOT="$DEVBOX_GUEST_ROOT/bundles"
+DEVBOX_GUEST_PROVISIONING_ROOT="$DEVBOX_GUEST_ROOT/provisioning"
+DEVBOX_SSH_AUTHORIZED_KEYS_FILE='/etc/ssh/authorized_keys/%u'
 
-configure_v2_paths() {
+configure_devbox_paths() {
     local colima_home
 
     colima_home="${COLIMA_HOME:-$HOME/.colima}"
     [ "$colima_home" = "$HOME/.colima" ] ||
-        die "v2 requires the standard Colima home $HOME/.colima; unset COLIMA_HOME"
-    DEVBOX_V2_COLIMA_HOME="$HOME/.colima"
-    DEVBOX_V2_LIMA_HOME="$DEVBOX_V2_COLIMA_HOME/_lima"
+        die "devbox requires the standard Colima home $HOME/.colima; unset COLIMA_HOME"
+    DEVBOX_COLIMA_HOME="$HOME/.colima"
+    DEVBOX_LIMA_HOME="$DEVBOX_COLIMA_HOME/_lima"
     case "${LIMA_HOME:-}" in
-        '' | "$DEVBOX_V2_LIMA_HOME") ;;
-        *) die "v2 requires LIMA_HOME to be unset or $DEVBOX_V2_LIMA_HOME" ;;
+        '' | "$DEVBOX_LIMA_HOME") ;;
+        *) die "devbox requires LIMA_HOME to be unset or $DEVBOX_LIMA_HOME" ;;
     esac
-    DEVBOX_V2_STATE_ROOT="$HOME/.local/share/devbox/v2"
-    DEVBOX_V2_CONFIG_ROOT="$HOME/.config/devbox/v2"
+    DEVBOX_STATE_ROOT="$HOME/.local/share/devbox"
+    DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
     DEVBOX_SHARED_LOCK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devbox/locks"
-    DEVBOX_V2_COLIMA_PROFILE="$DEVBOX_V2_COLIMA_HOME/$V2_PROFILE"
-    DEVBOX_V2_COLIMA_CONFIG="$DEVBOX_V2_COLIMA_PROFILE/colima.yaml"
-    DEVBOX_V2_COLIMA_OWNER="$DEVBOX_V2_COLIMA_PROFILE/.devbox-owner"
-    DEVBOX_V2_DOCKER_CONFIG="$DEVBOX_V2_CONFIG_ROOT/docker"
+    DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
+    DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
+    DEVBOX_COLIMA_OWNER="$DEVBOX_COLIMA_PROFILE/.devbox-owner"
+    DEVBOX_DOCKER_CONFIG="$DEVBOX_CONFIG_ROOT/docker"
     DEVBOX_LOCK_DIR="$DEVBOX_SHARED_LOCK_DIR"
     export DEVBOX_LOCK_DIR
 }
 
-check_v2_dependencies() {
+check_devbox_dependencies() {
     local command_name colima_version
     local -a missing=()
 
@@ -43,64 +43,64 @@ check_v2_dependencies() {
         command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
     done
     [ "${#missing[@]}" -eq 0 ] ||
-        die "Missing host dependencies for v2: ${missing[*]}. Install Colima from https://colima.run."
-    colima_version="$(v2_colima version | awk 'NR == 1 {print $3}')"
+        die "Missing host dependencies for devbox: ${missing[*]}. Install Colima from https://colima.run."
+    colima_version="$(devbox_colima version | awk 'NR == 1 {print $3}')"
     version_at_least "$colima_version" "$MINIMUM_COLIMA_VERSION" ||
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
 }
 
-check_v2_ownership() {
+check_devbox_ownership() {
     local owner_version owner_checkout
 
-    [ -e "$DEVBOX_V2_COLIMA_PROFILE" ] || return 0
-    [ -f "$DEVBOX_V2_COLIMA_OWNER" ] ||
-        die "Colima profile '$V2_PROFILE' already exists but is not owned by this devbox checkout"
-    owner_version="$(sed -n '1p' "$DEVBOX_V2_COLIMA_OWNER")"
-    owner_checkout="$(sed -n '2p' "$DEVBOX_V2_COLIMA_OWNER")"
-    [ "$owner_version" = "$V2_OWNER_VERSION" ] ||
-        die "Invalid ownership marker in $DEVBOX_V2_COLIMA_OWNER"
+    [ -e "$DEVBOX_COLIMA_PROFILE" ] || return 0
+    [ -f "$DEVBOX_COLIMA_OWNER" ] ||
+        die "Colima profile '$DEVBOX_PROFILE' already exists but is not owned by this devbox checkout"
+    owner_version="$(sed -n '1p' "$DEVBOX_COLIMA_OWNER")"
+    owner_checkout="$(sed -n '2p' "$DEVBOX_COLIMA_OWNER")"
+    [ "$owner_version" = "$DEVBOX_OWNER_VERSION" ] ||
+        die "Invalid ownership marker in $DEVBOX_COLIMA_OWNER"
     [ "$owner_checkout" = "$DEVBOX_DIR" ] ||
-        die "Colima profile '$V2_PROFILE' is owned by another devbox checkout: $owner_checkout"
+        die "Colima profile '$DEVBOX_PROFILE' is owned by another devbox checkout: $owner_checkout"
 }
 
-v2_profile_exists() {
-    [ -e "$DEVBOX_V2_COLIMA_PROFILE" ]
+devbox_profile_exists() {
+    [ -e "$DEVBOX_COLIMA_PROFILE" ]
 }
 
-mark_v2_profile_owned() {
+mark_devbox_profile_owned() {
     local temporary
 
-    temporary="$(mktemp "$DEVBOX_V2_COLIMA_PROFILE/.devbox-owner.XXXXXX")"
-    printf '%s\n%s\n' "$V2_OWNER_VERSION" "$DEVBOX_DIR" >"$temporary"
+    temporary="$(mktemp "$DEVBOX_COLIMA_PROFILE/.devbox-owner.XXXXXX")"
+    printf '%s\n%s\n' "$DEVBOX_OWNER_VERSION" "$DEVBOX_DIR" >"$temporary"
     chmod 600 "$temporary"
-    mv "$temporary" "$DEVBOX_V2_COLIMA_OWNER"
+    mv "$temporary" "$DEVBOX_COLIMA_OWNER"
 }
 
-prepare_v2_docker_config() {
-    mkdir -p "$DEVBOX_V2_DOCKER_CONFIG"
-    chmod 700 "$DEVBOX_V2_DOCKER_CONFIG"
+prepare_devbox_docker_config() {
+    mkdir -p "$DEVBOX_DOCKER_CONFIG"
+    chmod 700 "$DEVBOX_DOCKER_CONFIG"
 }
 
-v2_colima() {
+devbox_colima() {
     local colima_bin
 
-    check_v2_ownership
-    prepare_v2_docker_config
+    check_devbox_ownership
+    prepare_devbox_docker_config
     colima_bin="$(command -v colima 2>/dev/null || true)"
     [ -n "$colima_bin" ] && [ -x "$colima_bin" ] ||
         die "Missing host dependency: colima"
-    COLIMA_HOME="$DEVBOX_V2_COLIMA_HOME" \
-        LIMA_HOME="$DEVBOX_V2_LIMA_HOME" \
-        DOCKER_CONFIG="$DEVBOX_V2_DOCKER_CONFIG" \
+    COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
+        LIMA_HOME="$DEVBOX_LIMA_HOME" \
+        DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
         "$colima_bin" "$@"
 }
 
-v2_state() {
-    v2_colima list 2>/dev/null |
-        awk -v profile="$V2_PROFILE" '$1 == profile { print $2; exit }'
+devbox_state() {
+    devbox_colima list 2>/dev/null |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }'
 }
 
-validate_v2_colima_config() {
+validate_devbox_colima_config() {
     local file="$1"
 
     grep -qE '^runtime:[[:space:]]*docker$' "$file" &&
@@ -112,99 +112,99 @@ validate_v2_colima_config() {
         ! grep -qE '^mounts:' "$file"
 }
 
-render_v2_colima_config() {
+render_devbox_colima_config() {
     local content temporary
 
-    load_env v2
-    check_v2_ownership
-    mkdir -p "$DEVBOX_V2_COLIMA_PROFILE"
-    content="$(<"$DEVBOX_DIR/colima-v2.yaml")"
+    load_env
+    check_devbox_ownership
+    mkdir -p "$DEVBOX_COLIMA_PROFILE"
+    content="$(<"$DEVBOX_DIR/colima.yaml")"
     content="${content//'{{CPU}}'/$DEVBOX_CPU}"
     content="${content//'{{MEMORY}}'/$DEVBOX_MEMORY}"
     content="${content//'{{DISK}}'/$DEVBOX_DISK}"
-    [[ "$content" != *'{{'* ]] || die "Unresolved placeholder in rendered v2 Colima configuration"
+    [[ "$content" != *'{{'* ]] || die "Unresolved placeholder in rendered devbox Colima configuration"
 
-    temporary="$(mktemp "$DEVBOX_V2_COLIMA_PROFILE/.colima.yaml.XXXXXX")"
+    temporary="$(mktemp "$DEVBOX_COLIMA_PROFILE/.colima.yaml.XXXXXX")"
     printf '%s\n' "$content" >"$temporary"
-    validate_v2_colima_config "$temporary" || {
+    validate_devbox_colima_config "$temporary" || {
         command rm -f "$temporary"
-        die "Generated v2 Colima configuration is invalid"
+        die "Generated devbox Colima configuration is invalid"
     }
     chmod 600 "$temporary"
-    mv "$temporary" "$DEVBOX_V2_COLIMA_CONFIG"
-    mark_v2_profile_owned
+    mv "$temporary" "$DEVBOX_COLIMA_CONFIG"
+    mark_devbox_profile_owned
 }
 
-v2_admin_guest() {
-    v2_colima ssh -p "$V2_PROFILE" -- "$@"
+devbox_admin_guest() {
+    devbox_colima ssh -p "$DEVBOX_PROFILE" -- "$@"
 }
 
-v2_guest() {
-    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
+devbox_guest() {
+    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
 }
 
 # Interactive variant for prompts (provider login, portable shell).
-v2_guest_interactive() {
-    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 -- "$@"
+devbox_guest_interactive() {
+    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
 }
 
-v2_as_guest() {
-    v2_admin_guest sudo -u "$V2_GUEST_USER" -- env \
-        HOME="$V2_GUEST_HOME" \
-        PWD="$V2_GUEST_HOME" \
+devbox_as_guest() {
+    devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" -- env \
+        HOME="$DEVBOX_GUEST_HOME" \
+        PWD="$DEVBOX_GUEST_HOME" \
         bash -c '
         set -Eeuo pipefail
         home="$1"
         shift
         [ -d "$home" ] && [ ! -L "$home" ] || {
-            printf "ERROR: v2 guest home is invalid: %s\\n" "$home" >&2
+            printf "ERROR: devbox guest home is invalid: %s\\n" "$home" >&2
             exit 1
         }
         cd -- "$home"
         export HOME="$home"
         export PWD="$PWD"
         exec "$@"
-    ' _ "$V2_GUEST_HOME" "$@"
+    ' _ "$DEVBOX_GUEST_HOME" "$@"
 }
 
-require_running_v2_vm() {
-    [ "$(v2_state)" = Running ] || die "v2 VM is not running; run 'devbox start' first"
+require_running_devbox_vm() {
+    [ "$(devbox_state)" = Running ] || die "devbox VM is not running; run 'devbox start' first"
 }
 
-wait_for_v2_ssh() {
+wait_for_devbox_ssh() {
     local attempts=60 attempt
 
-    log "Waiting for v2 VM SSH readiness..."
+    log "Waiting for devbox VM SSH readiness..."
     for ((attempt = 1; attempt <= attempts; attempt++)); do
-        if v2_admin_guest true >/dev/null 2>&1; then
+        if devbox_admin_guest true >/dev/null 2>&1; then
             return
         fi
         sleep 2
     done
-    die "v2 VM SSH did not become ready within $((attempts * 2)) seconds"
+    die "devbox VM SSH did not become ready within $((attempts * 2)) seconds"
 }
 
-start_v2_vm() {
+start_devbox_vm() {
     local state
 
-    render_v2_colima_config
-    state="$(v2_state)"
+    render_devbox_colima_config
+    state="$(devbox_state)"
     case "$state" in
         Running) ;;
         '' | Stopped)
-            v2_colima start "$V2_PROFILE" \
+            devbox_colima start "$DEVBOX_PROFILE" \
                 --activate=false \
                 --ssh-config=false \
                 --ssh-agent=false \
                 --port-forwarder=none \
                 --save-config=false
             ;;
-        *) die "v2 VM is in state '$state'; wait for it to settle and retry" ;;
+        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
-    wait_for_v2_ssh
+    wait_for_devbox_ssh
 }
 
-v2_bundle_digest() {
+devbox_bundle_digest() {
     local provision_root="$1"
 
     (
@@ -215,52 +215,52 @@ v2_bundle_digest() {
     )
 }
 
-create_v2_bundle_snapshot() {
-    V2_BUNDLE_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/devbox-v2-bundle.XXXXXX")"
-    V2_BUNDLE_ARCHIVE="$V2_BUNDLE_SNAPSHOT/provision.tar"
+create_devbox_bundle_snapshot() {
+    DEVBOX_BUNDLE_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/devbox-bundle.XXXXXX")"
+    DEVBOX_BUNDLE_ARCHIVE="$DEVBOX_BUNDLE_SNAPSHOT/provision.tar"
     (
         cd "$DEVBOX_DIR"
         COPYFILE_DISABLE=1 tar -cf - provision
-    ) | COPYFILE_DISABLE=1 tar -xf - -C "$V2_BUNDLE_SNAPSHOT"
-    find "$V2_BUNDLE_SNAPSHOT/provision" -type f -exec chmod a-w {} +
-    V2_BUNDLE_DIGEST="$(v2_bundle_digest "$V2_BUNDLE_SNAPSHOT/provision")"
+    ) | COPYFILE_DISABLE=1 tar -xf - -C "$DEVBOX_BUNDLE_SNAPSHOT"
+    find "$DEVBOX_BUNDLE_SNAPSHOT/provision" -type f -exec chmod a-w {} +
+    DEVBOX_BUNDLE_DIGEST="$(devbox_bundle_digest "$DEVBOX_BUNDLE_SNAPSHOT/provision")"
     (
-        cd "$V2_BUNDLE_SNAPSHOT"
+        cd "$DEVBOX_BUNDLE_SNAPSHOT"
         if [ "$(uname -s)" = "Darwin" ]; then
-            COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$V2_BUNDLE_ARCHIVE" provision
+            COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$DEVBOX_BUNDLE_ARCHIVE" provision
         else
-            COPYFILE_DISABLE=1 tar -cf "$V2_BUNDLE_ARCHIVE" provision
+            COPYFILE_DISABLE=1 tar -cf "$DEVBOX_BUNDLE_ARCHIVE" provision
         fi
     )
-    chmod 400 "$V2_BUNDLE_ARCHIVE"
+    chmod 400 "$DEVBOX_BUNDLE_ARCHIVE"
 }
 
-stream_v2_bundle() {
+stream_devbox_bundle() {
     local digest="$1" archive="$2"
 
-    v2_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         digest="$1"
-        root=/var/lib/devbox-v2/bundles
+        root=/var/lib/devbox/bundles
         target="$root/$digest"
         [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
-            printf "ERROR: v2 bundle digest is invalid\n" >&2
+            printf "ERROR: devbox bundle digest is invalid\n" >&2
             exit 1
         }
-        { [ ! -e /var/lib/devbox-v2 ] && [ ! -L /var/lib/devbox-v2 ]; } ||
-            { [ -d /var/lib/devbox-v2 ] && [ ! -L /var/lib/devbox-v2 ]; } || {
-            printf "ERROR: v2 root bundle directory is invalid\n" >&2
+        { [ ! -e /var/lib/devbox ] && [ ! -L /var/lib/devbox ]; } ||
+            { [ -d /var/lib/devbox ] && [ ! -L /var/lib/devbox ]; } || {
+            printf "ERROR: devbox root bundle directory is invalid\n" >&2
             exit 1
         }
-        install -d -o root -g root -m 755 /var/lib/devbox-v2
+        install -d -o root -g root -m 755 /var/lib/devbox
         { [ ! -e "$root" ] && [ ! -L "$root" ]; } ||
             { [ -d "$root" ] && [ ! -L "$root" ]; } || {
-            printf "ERROR: v2 root bundle directory is invalid\n" >&2
+            printf "ERROR: devbox root bundle directory is invalid\n" >&2
             exit 1
         }
         install -d -o root -g root -m 700 "$root"
         [ -d "$root" ] && [ ! -L "$root" ] || {
-            printf "ERROR: v2 root bundle directory is invalid\n" >&2
+            printf "ERROR: devbox root bundle directory is invalid\n" >&2
             exit 1
         }
         chmod 700 "$root"
@@ -269,7 +269,7 @@ stream_v2_bundle() {
         tar --warning=no-unknown-keyword -xf - -C "$temporary"
         [ ! -L "$temporary/provision" ] &&
             ! find "$temporary/provision" -type l -print -quit | grep -q . || {
-            printf "ERROR: transferred v2 bundle contains a symlink\n" >&2
+            printf "ERROR: transferred devbox bundle contains a symlink\n" >&2
             exit 1
         }
         [ -f "$temporary/provision/scripts/system.sh" ]
@@ -289,7 +289,7 @@ stream_v2_bundle() {
             bundle_digest "$temporary/provision"
         )"
         [ "$actual" = "$digest" ] || {
-            printf "ERROR: transferred v2 bundle digest does not match\n" >&2
+            printf "ERROR: transferred devbox bundle digest does not match\n" >&2
             exit 1
         }
         printf "%s\n" "$digest" >"$temporary/provision/.devbox-bundle.sha256"
@@ -298,11 +298,11 @@ stream_v2_bundle() {
         chown -R root:root "$temporary/provision"
         if [ -d "$target" ]; then
             [ ! -L "$target" ] || {
-                printf "ERROR: existing v2 bundle is not a directory\n" >&2
+                printf "ERROR: existing devbox bundle is not a directory\n" >&2
                 exit 1
             }
             ! find "$target" -type l -print -quit | grep -q . || {
-                printf "ERROR: existing v2 bundle contains a symlink\n" >&2
+                printf "ERROR: existing devbox bundle contains a symlink\n" >&2
                 exit 1
             }
             cached="$(bundle_digest "$target")"
@@ -315,17 +315,17 @@ stream_v2_bundle() {
             backup="$(mktemp -d "$root/.bundle-corrupt.XXXXXX")"
             rmdir "$backup"
             mv "$target" "$backup" || {
-                printf "ERROR: unable to replace corrupt cached v2 bundle\n" >&2
+                printf "ERROR: unable to replace corrupt cached devbox bundle\n" >&2
                 exit 1
             }
             mv "$temporary/provision" "$target" || {
                 mv "$backup" "$target" || true
-                printf "ERROR: verified v2 bundle could not be installed\n" >&2
+                printf "ERROR: verified devbox bundle could not be installed\n" >&2
                 exit 1
             }
             rm -rf "$backup"
         elif [ -e "$target" ] || [ -L "$target" ]; then
-            printf "ERROR: existing v2 bundle is not a directory\n" >&2
+            printf "ERROR: existing devbox bundle is not a directory\n" >&2
             exit 1
         else
             mv "$temporary/provision" "$target"
@@ -333,13 +333,13 @@ stream_v2_bundle() {
     ' _ "$digest" <"$archive"
 }
 
-v2_guest_bundle_is_valid() {
+devbox_guest_bundle_is_valid() {
     local digest="$1"
 
-    v2_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         digest="$1"
-        target="/var/lib/devbox-v2/bundles/$digest"
+        target="/var/lib/devbox/bundles/$digest"
         [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || exit 1
         [ -d "$target" ] && [ ! -L "$target" ] || exit 1
         ! find "$target" -type l -print -quit | grep -q . || exit 1
@@ -361,7 +361,7 @@ v2_guest_bundle_is_valid() {
     ' _ "$digest"
 }
 
-render_v2_guest_config() {
+render_devbox_guest_config() {
     local key value
     local -a guest_keys=(
         GIT_NAME GIT_EMAIL
@@ -374,14 +374,14 @@ render_v2_guest_config() {
     done
 }
 
-# Establish the guest-local v2 configuration:
+# Establish the guest-local devbox configuration:
 #   config  - non-secret defaults; seeded once, then the guest is authoritative.
 #   secrets - service secrets; always generated inside the guest, never seeded
 #             from the host.
-sync_v2_guest_config() {
-    load_env v2
-    render_v2_guest_config | v2_as_guest env \
-        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT" \
+sync_devbox_guest_config() {
+    load_env
+    render_devbox_guest_config | devbox_as_guest env \
+        DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_CONFIG_ROOT" \
         bash -c '
         set -Eeuo pipefail
         umask 077
@@ -389,7 +389,7 @@ sync_v2_guest_config() {
         mkdir -p "$directory"
         config="$directory/config"
         secrets="$directory/secrets"
-        # Drop the superseded host-seeded env file from earlier v2 guests.
+        # Drop the superseded host-seeded env file from earlier devbox guests.
         rm -f "$directory/env"
         if [ ! -s "$config" ] || ! grep -q "^export POSTGRES_USER=" "$config" 2>/dev/null; then
             temporary="$(mktemp "$directory/.config.XXXXXX")"
@@ -418,30 +418,30 @@ sync_v2_guest_config() {
     '
 }
 
-# Bring up the root-managed v2 services (PostgreSQL and Valkey) in the guest.
+# Bring up the root-managed devbox services (PostgreSQL and Valkey) in the guest.
 # The definition and credentials stay root-owned; the devbox user only reads
-# its client credentials from ~/.config/devbox-v2/secrets.
-run_v2_services() {
+# its client credentials from ~/.config/devbox/secrets.
+run_devbox_services() {
     local digest="$1"
 
-    v2_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         digest="$1"
-        provisioning="/var/lib/devbox-v2/provisioning/$digest"
-        services=/var/lib/devbox-v2/services
-        config=/home/devbox/.config/devbox-v2/config
-        secrets=/home/devbox/.config/devbox-v2/secrets
+        provisioning="/var/lib/devbox/provisioning/$digest"
+        services=/var/lib/devbox/services
+        config=/home/devbox/.config/devbox/config
+        secrets=/home/devbox/.config/devbox/secrets
         compose_source="$provisioning/config/services/compose.yaml"
         [ -d "$provisioning" ] && [ ! -L "$provisioning" ] || {
-            printf "ERROR: v2 provisioning input is unavailable\\n" >&2
+            printf "ERROR: devbox provisioning input is unavailable\\n" >&2
             exit 1
         }
         [ -f "$compose_source" ] && [ ! -L "$compose_source" ] || {
-            printf "ERROR: v2 service definition is unavailable\\n" >&2
+            printf "ERROR: devbox service definition is unavailable\\n" >&2
             exit 1
         }
         [ -r "$config" ] && [ -r "$secrets" ] || {
-            printf "ERROR: v2 guest configuration or secrets are unavailable\\n" >&2
+            printf "ERROR: devbox guest configuration or secrets are unavailable\\n" >&2
             exit 1
         }
         mkdir -p "$services/data/postgres" "$services/data/valkey"
@@ -457,8 +457,8 @@ run_v2_services() {
         [ -n "${POSTGRES_PASSWORD:-}" ] || missing="$missing POSTGRES_PASSWORD"
         [ -n "${VALKEY_PASSWORD:-}" ] || missing="$missing VALKEY_PASSWORD"
         [ -z "$missing" ] || {
-            printf "ERROR: v2 service credentials are missing:%s\\n" "$missing" >&2
-            printf "v2 guest config:\\n" >&2
+            printf "ERROR: devbox service credentials are missing:%s\\n" "$missing" >&2
+            printf "devbox guest config:\\n" >&2
             cat "$config" >&2 || true
             exit 1
         }
@@ -481,69 +481,68 @@ run_v2_services() {
         cat "$compose_source" >"$temporary"
         chmod 600 "$temporary"
         mv "$temporary" "$compose"
-        docker compose --project-name devbox-v2 --env-file "$envfile" -f "$compose" up -d --wait
+        docker compose --project-name devbox --env-file "$envfile" -f "$compose" up -d --wait
     ' _ "$digest"
 }
 
-show_v2_services_status() {
-    v2_admin_guest sudo bash -c '
+show_devbox_services_status() {
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
-        services=/var/lib/devbox-v2/services
+        services=/var/lib/devbox/services
         [ -f "$services/compose.yaml" ] || {
-            printf "devbox-v2 services are not provisioned\\n" >&2
+            printf "devbox services are not provisioned\\n" >&2
             exit 1
         }
-        docker compose --project-name devbox-v2 \
+        docker compose --project-name devbox \
             --env-file "$services/env" -f "$services/compose.yaml" ps
     '
 }
 
-v2_guest_provision_digest() {
-    v2_admin_guest bash -c 'cat "$HOME/.local/state/devbox-v2/provision.sha256" 2>/dev/null || true'
+devbox_guest_provision_digest() {
+    devbox_admin_guest bash -c 'cat "$HOME/.local/state/devbox/provision.sha256" 2>/dev/null || true'
 }
 
-run_v2_guest_provisioning() {
+run_devbox_guest_provisioning() {
     local digest="$1" archive="$2"
 
-    stream_v2_bundle "$digest" "$archive" || return
-    log "Provisioning v2 guest tools from bundle $digest..."
-    if ! v2_admin_guest bash -c '
+    stream_devbox_bundle "$digest" "$archive" || return
+    log "Provisioning devbox guest tools from bundle $digest..."
+    if ! devbox_admin_guest bash -c '
         set -Eeuo pipefail
-        export DEVBOX_PROVISION_ROOT="/var/lib/devbox-v2/bundles/$1"
+        export DEVBOX_PROVISION_ROOT="/var/lib/devbox/bundles/$1"
         sudo env DEVBOX_PROVISION_ROOT="$DEVBOX_PROVISION_ROOT" \
-            DEVBOX_NO_MOUNTS=true DEVBOX_V2_GUEST_USER=devbox \
+            DEVBOX_GUEST_USER=devbox \
             bash "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
     ' _ "$digest"; then
-        validate_v2_guest_preflight || {
-            revoke_v2_guest_ssh_access ||
-                die "v2 guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-            die "v2 guest user has unsafe identity or privileges; managed direct SSH access was removed"
+        validate_devbox_guest_preflight || {
+            revoke_devbox_guest_ssh_access ||
+                die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+            die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
         }
         return 1
     fi
-    validate_v2_guest_preflight || {
-        revoke_v2_guest_ssh_access ||
-            die "v2 guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "v2 guest user has unsafe identity or privileges; managed direct SSH access was removed"
+    validate_devbox_guest_preflight || {
+        revoke_devbox_guest_ssh_access ||
+            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
     }
-    run_v2_root_apps "$digest" || return
-    stage_v2_guest_provisioning_input "$digest" || return
-    sync_v2_guest_config || return
-    ensure_v2_guest_ssh_access || return
-    run_v2_services "$digest" || return
-    v2_as_guest env \
-        DEVBOX_PROVISION_ROOT="$V2_GUEST_PROVISIONING_ROOT/$digest" \
-        DEVBOX_GUEST_CONFIG_ROOT="$V2_GUEST_CONFIG_ROOT" \
-        DEVBOX_NO_MOUNTS=true \
+    run_devbox_root_apps "$digest" || return
+    stage_devbox_guest_provisioning_input "$digest" || return
+    sync_devbox_guest_config || return
+    ensure_devbox_guest_ssh_access || return
+    run_devbox_services "$digest" || return
+    devbox_as_guest env \
+        DEVBOX_PROVISION_ROOT="$DEVBOX_GUEST_PROVISIONING_ROOT/$digest" \
+        DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_CONFIG_ROOT" \
         bash -c '
         set -Eeuo pipefail
         bash "$DEVBOX_PROVISION_ROOT/scripts/tools.sh"
         bash "$DEVBOX_PROVISION_ROOT/scripts/verify.sh"
     ' || return
-    printf '%s\n' "$digest" | v2_admin_guest bash -c '
+    printf '%s\n' "$digest" | devbox_admin_guest bash -c '
         set -Eeuo pipefail
         umask 077
-        directory="$HOME/.local/state/devbox-v2"
+        directory="$HOME/.local/state/devbox"
         mkdir -p "$directory"
         temporary="$(mktemp "$directory/.provision.XXXXXX")"
         cat >"$temporary"
@@ -552,12 +551,12 @@ run_v2_guest_provisioning() {
     ' || return
 }
 
-run_v2_root_apps() {
+run_devbox_root_apps() {
     local digest="$1"
 
-    v2_admin_guest bash -c '
+    devbox_admin_guest bash -c '
         set -Eeuo pipefail
-        export DEVBOX_PROVISION_ROOT="/var/lib/devbox-v2/bundles/$1"
+        export DEVBOX_PROVISION_ROOT="/var/lib/devbox/bundles/$1"
         sudo env DEVBOX_PROVISION_ROOT="$DEVBOX_PROVISION_ROOT" bash -s <<'"'"'ROOT_APPS'"'"'
 set -Eeuo pipefail
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
@@ -570,35 +569,35 @@ ROOT_APPS
     ' _ "$digest"
 }
 
-stage_v2_guest_provisioning_input() {
+stage_devbox_guest_provisioning_input() {
     local digest="$1"
 
-    v2_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         digest="$1"
-        root=/var/lib/devbox-v2
+        root=/var/lib/devbox
         source_root="$root/bundles/$digest"
         parent="$root/provisioning"
         target_root="$parent/$digest"
         [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
-            printf "ERROR: v2 provisioning digest is invalid\n" >&2
+            printf "ERROR: devbox provisioning digest is invalid\n" >&2
             exit 1
         }
         [ -d "$root" ] && [ ! -L "$root" ] || {
-            printf "ERROR: v2 root provisioning directory is invalid\\n" >&2
+            printf "ERROR: devbox root provisioning directory is invalid\\n" >&2
             exit 1
         }
         [ -d "$source_root" ] && [ ! -L "$source_root" ] || {
-            printf "ERROR: v2 root provisioning bundle is invalid\\n" >&2
+            printf "ERROR: devbox root provisioning bundle is invalid\\n" >&2
             exit 1
         }
         ! find "$source_root" -type l -print -quit | grep -q . || {
-            printf "ERROR: v2 root provisioning bundle contains a symlink\\n" >&2
+            printf "ERROR: devbox root provisioning bundle contains a symlink\\n" >&2
             exit 1
         }
         [ -d "$parent" ] && [ ! -L "$parent" ] || {
             [ ! -e "$parent" ] && [ ! -L "$parent" ] || {
-                printf "ERROR: v2 root provisioning input directory is invalid\\n" >&2
+                printf "ERROR: devbox root provisioning input directory is invalid\\n" >&2
                 exit 1
             }
             install -d -o root -g root -m 755 "$parent"
@@ -607,7 +606,7 @@ stage_v2_guest_provisioning_input() {
         trap "rm -rf \"$temporary\"" EXIT
         tar -C "$source_root" -cf - . | tar -xf - -C "$temporary"
         ! find "$temporary" -type l -print -quit | grep -q . || {
-            printf "ERROR: v2 root provisioning input contains a symlink\\n" >&2
+            printf "ERROR: devbox root provisioning input contains a symlink\\n" >&2
             exit 1
         }
         find "$temporary" -type d -exec chmod 755 {} +
@@ -615,22 +614,22 @@ stage_v2_guest_provisioning_input() {
         chown -R root:root "$temporary"
         if [ -d "$target_root" ]; then
             [ ! -L "$target_root" ] || {
-                printf "ERROR: v2 guest provisioning input is not a directory\\n" >&2
+                printf "ERROR: devbox guest provisioning input is not a directory\\n" >&2
                 exit 1
             }
             rm -rf "$target_root"
         elif [ -e "$target_root" ] || [ -L "$target_root" ]; then
-            printf "ERROR: v2 guest provisioning input is not a directory\\n" >&2
+            printf "ERROR: devbox guest provisioning input is not a directory\\n" >&2
             exit 1
         fi
         mv "$temporary" "$target_root"
     ' _ "$digest"
 }
 
-v2_host_public_key() {
+devbox_host_public_key() {
     local identity_file
 
-    identity_file="$(v2_colima ssh-config "$V2_PROFILE" | awk '
+    identity_file="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
         {
             line = $0
             sub(/^[[:space:]]+/, "", line)
@@ -656,14 +655,14 @@ v2_host_public_key() {
         }
     ')"
     [ -n "$identity_file" ] && [ -r "$identity_file" ] ||
-        die "Colima SSH configuration has no readable identity file for $V2_PROFILE"
+        die "Colima SSH configuration has no readable identity file for $DEVBOX_PROFILE"
     ssh-keygen -y -f "$identity_file"
 }
 
-v2_host_ssh_user() {
+devbox_host_ssh_user() {
     local user
 
-    user="$(v2_colima ssh-config "$V2_PROFILE" | awk '
+    user="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
         {
             line = $0
             sub(/^[[:space:]]+/, "", line)
@@ -688,15 +687,15 @@ v2_host_ssh_user() {
             }
         }
     ')"
-    [ -n "$user" ] || die "Colima SSH configuration has no user for $V2_PROFILE"
+    [ -n "$user" ] || die "Colima SSH configuration has no user for $DEVBOX_PROFILE"
     printf '%s\n' "$user"
 }
 
-v2_sshd_authorized_keys_config() {
-    printf "AuthorizedKeysFile %s\n" "$V2_SSH_AUTHORIZED_KEYS_FILE"
+devbox_sshd_authorized_keys_config() {
+    printf "AuthorizedKeysFile %s\n" "$DEVBOX_SSH_AUTHORIZED_KEYS_FILE"
 }
 
-v2_guest_identity_is_safe() {
+devbox_guest_identity_is_safe() {
     local guest_user="$1"
     local guest_uid="$2"
     local guest_gid="$3"
@@ -717,11 +716,11 @@ v2_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
-validate_v2_guest_identity() {
+validate_devbox_guest_identity() {
     local identity
     local guest_uid guest_gid group_name group_gid group_members group_names uid_matches gid_matches extra
 
-    identity="$(v2_admin_guest bash -c '
+    identity="$(devbox_admin_guest bash -c '
         user="$1"
         passwd_entry="$(getent passwd "$user" || true)"
         guest_uid="$(printf "%s\\n" "$passwd_entry" | cut -d: -f3)"
@@ -735,22 +734,22 @@ validate_v2_guest_identity() {
         gid_matches="$(getent group | awk -F: -v gid="$guest_gid" '\''$3 == gid { count++ } END { print count + 0 }'\'')"
         printf "%s:%s:%s:%s:%s:%s:%s:%s\\n" \
             "$guest_uid" "$guest_gid" "$group_name" "$group_gid" "$group_members" "$group_names" "$uid_matches" "$gid_matches"
-    ' _ "$V2_GUEST_USER")" || return 1
+    ' _ "$DEVBOX_GUEST_USER")" || return 1
     IFS=: read -r guest_uid guest_gid group_name group_gid group_members group_names uid_matches gid_matches extra <<<"$identity"
     [ -z "$extra" ] || return 1
-    v2_guest_identity_is_safe \
-        "$V2_GUEST_USER" "$guest_uid" "$guest_gid" "$group_name" "$group_gid" "$group_members" "$group_names" \
+    devbox_guest_identity_is_safe \
+        "$DEVBOX_GUEST_USER" "$guest_uid" "$guest_gid" "$group_name" "$group_gid" "$group_members" "$group_names" \
         "$uid_matches" "$gid_matches"
 }
 
-validate_v2_guest_privileges() {
-    v2_admin_guest sudo bash -c '
+validate_devbox_guest_privileges() {
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         user="$1"
         sudo_status=0
         sudo_listing="$(LC_ALL=C sudo -n -l -U "$user" 2>&1)" || sudo_status=$?
         { [ "$sudo_status" -eq 0 ] || [ "$sudo_status" -eq 1 ]; } || {
-            printf "ERROR: failed to inspect v2 guest sudo privileges\n" >&2
+            printf "ERROR: failed to inspect devbox guest sudo privileges\n" >&2
             exit 1
         }
         expected="User $user is not allowed to run sudo on "
@@ -766,69 +765,69 @@ validate_v2_guest_privileges() {
                 ;;
         esac
         [ "$no_sudo_privileges" = true ] || {
-            printf "ERROR: v2 guest user has sudo privileges\n" >&2
+            printf "ERROR: devbox guest user has sudo privileges\n" >&2
             exit 1
         }
         if sudo -u "$user" -- sudo -n true >/dev/null 2>&1; then
-            printf "ERROR: v2 guest user can execute passwordless sudo\n" >&2
+            printf "ERROR: devbox guest user can execute passwordless sudo\n" >&2
             exit 1
         fi
         if [ -S /var/run/docker.sock ] && sudo -u "$user" -- test -w /var/run/docker.sock; then
-            printf "ERROR: v2 guest user can write the Docker socket\n" >&2
+            printf "ERROR: devbox guest user can write the Docker socket\n" >&2
             exit 1
         fi
-    ' _ "$V2_GUEST_USER"
+    ' _ "$DEVBOX_GUEST_USER"
 }
 
-validate_v2_guest_preflight() {
-    validate_v2_guest_identity && validate_v2_guest_privileges
+validate_devbox_guest_preflight() {
+    validate_devbox_guest_identity && validate_devbox_guest_privileges
 }
 
-reconcile_v2_guest_workspace() {
-    v2_as_guest bash -c '
+reconcile_devbox_guest_workspace() {
+    devbox_as_guest bash -c '
         set -Eeuo pipefail
         workspace="$HOME/workspace"
         [ -d "$HOME" ] && [ ! -L "$HOME" ] || {
-            printf "ERROR: v2 guest home is invalid: %s\\n" "$HOME" >&2
+            printf "ERROR: devbox guest home is invalid: %s\\n" "$HOME" >&2
             exit 1
         }
         [ ! -L "$workspace" ] || {
-            printf "ERROR: v2 guest workspace must be a real directory: %s\\n" "$workspace" >&2
+            printf "ERROR: devbox guest workspace must be a real directory: %s\\n" "$workspace" >&2
             exit 1
         }
         [ ! -e "$workspace" ] || [ -d "$workspace" ] || {
-            printf "ERROR: v2 guest workspace must be a real directory: %s\\n" "$workspace" >&2
+            printf "ERROR: devbox guest workspace must be a real directory: %s\\n" "$workspace" >&2
             exit 1
         }
         mkdir -p "$workspace"
         [ -d "$workspace" ] && [ ! -L "$workspace" ] && [ -O "$workspace" ] && [ -G "$workspace" ] || {
-            printf "ERROR: v2 guest workspace has unsafe ownership: %s\\n" "$workspace" >&2
+            printf "ERROR: devbox guest workspace has unsafe ownership: %s\\n" "$workspace" >&2
             exit 1
         }
         chmod 700 "$workspace"
     '
 }
 
-authorize_v2_host_key() {
+authorize_devbox_host_key() {
     local sshd_settings admin_user
 
-    sshd_settings="$(v2_sshd_authorized_keys_config)"
-    admin_user="$(v2_host_ssh_user)" || return
-    v2_host_public_key | v2_admin_guest sudo bash -c '
+    sshd_settings="$(devbox_sshd_authorized_keys_config)"
+    admin_user="$(devbox_host_ssh_user)" || return
+    devbox_host_public_key | devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         guest_user="$2"
         admin_user="$3"
         sshd_settings="$1"
         keys_dir=/etc/ssh/authorized_keys
-        sshd_config=/etc/ssh/sshd_config.d/00-devbox-v2.conf
+        sshd_config=/etc/ssh/sshd_config.d/00-devbox.conf
         key="$(cat)"
         [ -n "$key" ] && [ "$(printf "%s\\n" "$key" | wc -l | tr -d " ")" = 1 ] || {
-            printf "ERROR: invalid v2 host SSH public key\\n" >&2
+            printf "ERROR: invalid devbox host SSH public key\\n" >&2
             exit 1
         }
         for user in "$guest_user" "$admin_user"; do
             [[ "$user" =~ ^[A-Za-z0-9_.-]+$ ]] || {
-                printf "ERROR: invalid v2 SSH user: %s\\n" "$user" >&2
+                printf "ERROR: invalid devbox SSH user: %s\\n" "$user" >&2
                 exit 1
             }
         done
@@ -857,7 +856,7 @@ authorize_v2_host_key() {
             printf "ERROR: OpenSSH drop-in directory is invalid\\n" >&2
             exit 1
         }
-        temporary="$(mktemp /etc/ssh/sshd_config.d/.devbox-v2.XXXXXX)"
+        temporary="$(mktemp /etc/ssh/sshd_config.d/.devbox.XXXXXX)"
         printf "%s\\n" "$sshd_settings" >"$temporary"
         chown root:root "$temporary"
         chmod 600 "$temporary"
@@ -865,12 +864,12 @@ authorize_v2_host_key() {
         sshd -t
         for user in "$guest_user" "$admin_user"; do
             effective="$(sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" 2>/dev/null)" || {
-                printf "ERROR: v2 SSH configuration test failed for %s\\n" "$user" >&2
+                printf "ERROR: devbox SSH configuration test failed for %s\\n" "$user" >&2
                 sshd -T -C "user=$user,host=localhost,addr=127.0.0.1" >&2 || true
                 exit 1
             }
             printf "%s\\n" "$effective" | grep -Fqx "authorizedkeysfile /etc/ssh/authorized_keys/%u" || {
-                printf "ERROR: v2 SSH authorized-keys policy is not effective for %s\\n" "$user" >&2
+                printf "ERROR: devbox SSH authorized-keys policy is not effective for %s\\n" "$user" >&2
                 printf "  drop-in %s: %s\\n" "$sshd_config" "$(cat "$sshd_config" 2>&1 || true)" >&2
                 printf "  effective: %s\\n" "$(printf "%s\\n" "$effective" | grep -i authorizedkeysfile || true)" >&2
                 printf "  include: %s\\n" "$(grep -n "Include" /etc/ssh/sshd_config 2>&1 || true)" >&2
@@ -880,28 +879,28 @@ authorize_v2_host_key() {
             }
         done
         systemctl reload ssh
-    ' _ "$sshd_settings" "$V2_GUEST_USER" "$admin_user"
+    ' _ "$sshd_settings" "$DEVBOX_GUEST_USER" "$admin_user"
 }
 
-remove_v2_managed_guest_ssh_authorization() {
-    v2_admin_guest sudo bash -c '
+remove_devbox_managed_guest_ssh_authorization() {
+    devbox_admin_guest sudo bash -c '
         set -Eeuo pipefail
         authorized=/etc/ssh/authorized_keys/devbox
         [ ! -e "$authorized" ] && [ ! -L "$authorized" ] && exit 0
         [ -f "$authorized" ] && [ ! -L "$authorized" ] &&
             [ "$(stat -c "%u:%g" "$authorized")" = 0:0 ] || {
-            printf "ERROR: managed v2 SSH authorization is invalid: %s\\n" "$authorized" >&2
+            printf "ERROR: managed devbox SSH authorization is invalid: %s\\n" "$authorized" >&2
             exit 1
         }
         rm -f -- "$authorized"
     '
 }
 
-stage_v2_host_ssh_config() {
+stage_devbox_host_ssh_config() {
     local managed_config="$1"
     local config="$2"
     local temporary="$3"
-    local begin_marker='# BEGIN devbox-v2' end_marker='# END devbox-v2'
+    local begin_marker='# BEGIN devbox' end_marker='# END devbox'
     local begin_count end_count
 
     if [ -e "$config" ]; then
@@ -917,15 +916,15 @@ stage_v2_host_ssh_config() {
     if [ -e "$config" ]; then
         awk -v managed_config="$managed_config" '
             function insert_managed_config(    line) {
-                print "# BEGIN devbox-v2"
+                print "# BEGIN devbox"
                 while ((getline line < managed_config) > 0) print line
                 close(managed_config)
-                print "# END devbox-v2"
+                print "# END devbox"
                 print ""
                 inserted = 1
             }
-            $0 == "# BEGIN devbox-v2" { skipping = 1; next }
-            skipping && $0 == "# END devbox-v2" { skipping = 0; next }
+            $0 == "# BEGIN devbox" { skipping = 1; next }
+            skipping && $0 == "# END devbox" { skipping = 0; next }
             skipping { next }
             !inserted && $0 == "# BEGIN devbox" {
                 insert_managed_config()
@@ -948,7 +947,7 @@ stage_v2_host_ssh_config() {
     fi
 }
 
-v2_effective_ssh_value() {
+devbox_effective_ssh_value() {
     local configuration="$1" key="$2"
 
     awk -v key="$key" '
@@ -960,82 +959,82 @@ v2_effective_ssh_value() {
     ' <<<"$configuration"
 }
 
-validate_v2_effective_ssh_config() {
+validate_devbox_effective_ssh_config() {
     local source_config="$1" managed_config="$2" effective_config
     local expected_hostname expected_port expected_identity actual_identity
     local controlmaster controlpath proxycommand proxyjump value
 
-    effective_config="$(ssh -F "$managed_config" -G devbox-v2 2>/dev/null)" || {
-        printf 'ERROR: v2 SSH effective configuration could not be computed\n' >&2
+    effective_config="$(ssh -F "$managed_config" -G devbox 2>/dev/null)" || {
+        printf 'ERROR: devbox SSH effective configuration could not be computed\n' >&2
         return 1
     }
-    expected_hostname="$(v2_effective_ssh_value "$source_config" hostname)"
-    expected_port="$(v2_effective_ssh_value "$source_config" port)"
-    expected_identity="$(v2_effective_ssh_value "$source_config" identityfile)"
-    actual_identity="$(v2_effective_ssh_value "$effective_config" identityfile)"
+    expected_hostname="$(devbox_effective_ssh_value "$source_config" hostname)"
+    expected_port="$(devbox_effective_ssh_value "$source_config" port)"
+    expected_identity="$(devbox_effective_ssh_value "$source_config" identityfile)"
+    actual_identity="$(devbox_effective_ssh_value "$effective_config" identityfile)"
     [ -n "$expected_hostname" ] && [ -n "$expected_port" ] && [ -n "$expected_identity" ] || {
-        printf 'ERROR: Colima v2 SSH configuration lacks hostname, port, or identity\n' >&2
+        printf 'ERROR: Colima devbox SSH configuration lacks hostname, port, or identity\n' >&2
         return 1
     }
-    value="$(v2_effective_ssh_value "$effective_config" user)"
-    [ "$value" = "$V2_GUEST_USER" ] || {
-        printf 'ERROR: v2 SSH effective user is %s, expected %s\n' "$value" "$V2_GUEST_USER" >&2
+    value="$(devbox_effective_ssh_value "$effective_config" user)"
+    [ "$value" = "$DEVBOX_GUEST_USER" ] || {
+        printf 'ERROR: devbox SSH effective user is %s, expected %s\n' "$value" "$DEVBOX_GUEST_USER" >&2
         return 1
     }
-    value="$(v2_effective_ssh_value "$effective_config" identitiesonly)"
+    value="$(devbox_effective_ssh_value "$effective_config" identitiesonly)"
     [ "$value" = yes ] || {
-        printf 'ERROR: v2 SSH effective IdentitiesOnly is %s\n' "$value" >&2
+        printf 'ERROR: devbox SSH effective IdentitiesOnly is %s\n' "$value" >&2
         return 1
     }
-    value="$(v2_effective_ssh_value "$effective_config" forwardagent)"
+    value="$(devbox_effective_ssh_value "$effective_config" forwardagent)"
     [ "$value" = no ] || {
-        printf 'ERROR: v2 SSH effective ForwardAgent is %s\n' "$value" >&2
+        printf 'ERROR: devbox SSH effective ForwardAgent is %s\n' "$value" >&2
         return 1
     }
-    controlmaster="$(v2_effective_ssh_value "$effective_config" controlmaster)"
+    controlmaster="$(devbox_effective_ssh_value "$effective_config" controlmaster)"
     case "$controlmaster" in no | false) ;; *)
-        printf 'ERROR: v2 SSH effective ControlMaster is %s\n' "$controlmaster" >&2
+        printf 'ERROR: devbox SSH effective ControlMaster is %s\n' "$controlmaster" >&2
         return 1
         ;;
     esac
-    controlpath="$(v2_effective_ssh_value "$effective_config" controlpath)"
+    controlpath="$(devbox_effective_ssh_value "$effective_config" controlpath)"
     case "$controlpath" in '' | none) ;; *)
-        printf 'ERROR: v2 SSH effective ControlPath is %s\n' "$controlpath" >&2
+        printf 'ERROR: devbox SSH effective ControlPath is %s\n' "$controlpath" >&2
         return 1
         ;;
     esac
-    proxycommand="$(v2_effective_ssh_value "$effective_config" proxycommand)"
+    proxycommand="$(devbox_effective_ssh_value "$effective_config" proxycommand)"
     [ -n "$proxycommand" ] || proxycommand=none
     [ "$proxycommand" = none ] || {
-        printf 'ERROR: v2 SSH effective ProxyCommand is %s\n' "$proxycommand" >&2
+        printf 'ERROR: devbox SSH effective ProxyCommand is %s\n' "$proxycommand" >&2
         return 1
     }
-    proxyjump="$(v2_effective_ssh_value "$effective_config" proxyjump)"
+    proxyjump="$(devbox_effective_ssh_value "$effective_config" proxyjump)"
     [ -n "$proxyjump" ] || proxyjump=none
     [ "$proxyjump" = none ] || {
-        printf 'ERROR: v2 SSH effective ProxyJump is %s\n' "$proxyjump" >&2
+        printf 'ERROR: devbox SSH effective ProxyJump is %s\n' "$proxyjump" >&2
         return 1
     }
-    value="$(v2_effective_ssh_value "$effective_config" hostname)"
+    value="$(devbox_effective_ssh_value "$effective_config" hostname)"
     [ "$value" = "$expected_hostname" ] || {
-        printf 'ERROR: v2 SSH effective hostname is %s, expected %s\n' "$value" "$expected_hostname" >&2
+        printf 'ERROR: devbox SSH effective hostname is %s, expected %s\n' "$value" "$expected_hostname" >&2
         return 1
     }
-    value="$(v2_effective_ssh_value "$effective_config" port)"
+    value="$(devbox_effective_ssh_value "$effective_config" port)"
     [ "$value" = "$expected_port" ] || {
-        printf 'ERROR: v2 SSH effective port is %s, expected %s\n' "$value" "$expected_port" >&2
+        printf 'ERROR: devbox SSH effective port is %s, expected %s\n' "$value" "$expected_port" >&2
         return 1
     }
     # OpenSSH accumulates IdentityFile across every matching block, so a
     # `Host *` block in the user configuration legitimately appends extra
     # identities after the managed one. Require the managed identity (or
-    # identities) to come first, which is what makes the dedicated v2 key win;
+    # identities) to come first, which is what makes the dedicated devbox key win;
     # do not reject inherited extras that follow it.
     case "$actual_identity" in
         "$expected_identity") ;;
         "$expected_identity"$'\n'*) ;;
         *)
-            printf 'ERROR: v2 SSH effective identity does not start with the managed identity\n' >&2
+            printf 'ERROR: devbox SSH effective identity does not start with the managed identity\n' >&2
             printf '  expected first: %s\n' "$expected_identity" >&2
             printf '  effective: %s\n' "$actual_identity" >&2
             return 1
@@ -1043,9 +1042,9 @@ validate_v2_effective_ssh_config() {
     esac
 }
 
-recover_v2_ssh_config_transaction() {
+recover_devbox_ssh_config_transaction() {
     local managed_config="$1" config="$2" managed_dir="$3" config_dir="$4"
-    local journal="$managed_dir/.devbox-v2-transaction"
+    local journal="$managed_dir/.devbox-transaction"
     local managed_existed config_existed managed_backup config_backup extra
     local managed_restore config_restore
 
@@ -1065,7 +1064,7 @@ recover_v2_ssh_config_transaction() {
         *) return 1 ;;
     esac
     if [ "$managed_existed" = true ]; then
-        case "$managed_backup" in "$managed_dir"/.devbox-v2-backup.*) ;; *) return 1 ;; esac
+        case "$managed_backup" in "$managed_dir"/.devbox-backup.*) ;; *) return 1 ;; esac
         [ -f "$managed_backup" ] && [ ! -L "$managed_backup" ] || return 1
     else
         [ -z "$managed_backup" ] || return 1
@@ -1078,7 +1077,7 @@ recover_v2_ssh_config_transaction() {
     fi
 
     if [ "$managed_existed" = true ]; then
-        managed_restore="$(mktemp "$managed_dir/.devbox-v2-restore.XXXXXX")" || return 1
+        managed_restore="$(mktemp "$managed_dir/.devbox-restore.XXXXXX")" || return 1
         cp -p "$managed_backup" "$managed_restore" &&
             mv "$managed_restore" "$managed_config" || {
             command rm -f "$managed_restore"
@@ -1100,23 +1099,23 @@ recover_v2_ssh_config_transaction() {
     command rm -f "$managed_backup" "$config_backup" "$journal"
 }
 
-write_v2_ssh_config() {
+write_devbox_ssh_config() {
     local staged_source staged_managed staged_config managed_temporary config_temporary
     local managed_backup config_backup journal journal_temporary
     local ssh_dir managed_dir managed_config config config_dir config_mode
     local ssh_dir_existed=false managed_dir_existed=false config_dir_existed=false
     local managed_existed=false config_existed=false source_host reachability_error
 
-    staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-v2-source.XXXXXX")"
-    staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox-v2.XXXXXX")"
-    staged_config="$(mktemp "${TMPDIR:-/tmp}/devbox-v2-config.XXXXXX")"
-    if ! v2_colima ssh-config "$V2_PROFILE" >"$staged_source"; then
+    staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-source.XXXXXX")"
+    staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox.XXXXXX")"
+    staged_config="$(mktemp "${TMPDIR:-/tmp}/devbox-config.XXXXXX")"
+    if ! devbox_colima ssh-config "$DEVBOX_PROFILE" >"$staged_source"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "Colima failed to generate the v2 SSH configuration"
+        die "Colima failed to generate the devbox SSH configuration"
     fi
     if ! awk '
          /^Host[[:space:]]/ {
-            print "Host devbox-v2"
+            print "Host devbox"
             print "  User devbox"
             print "  IdentitiesOnly yes"
              print "  ForwardAgent no"
@@ -1130,62 +1129,62 @@ write_v2_ssh_config() {
          { print }
     ' "$staged_source" >"$staged_managed"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "Colima failed to generate the v2 SSH configuration"
+        die "Colima failed to generate the devbox SSH configuration"
     fi
-    if ! grep -q '^Host devbox-v2$' "$staged_managed" ||
+    if ! grep -q '^Host devbox$' "$staged_managed" ||
         ! grep -Eqi '^[[:space:]]*HostName[[:space:]]+' "$staged_source" ||
         ! grep -Eqi '^[[:space:]]*Port[[:space:]]+' "$staged_source"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "Colima returned an invalid v2 SSH configuration"
+        die "Colima returned an invalid devbox SSH configuration"
     fi
     if ! grep -q '^[[:space:]]*IdentityFile[[:space:]]' "$staged_managed"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "Colima v2 SSH configuration has no identity file"
+        die "Colima devbox SSH configuration has no identity file"
     fi
     chmod 600 "$staged_source"
     chmod 600 "$staged_managed"
 
     ssh_dir="$HOME/.ssh"
     managed_dir="$ssh_dir/config.d"
-    managed_config="$managed_dir/devbox-v2"
+    managed_config="$managed_dir/devbox"
     config="$ssh_dir/config"
     [ -L "$config" ] && config="$(resolve_path "$config")"
     config_dir="$(dirname "$config")"
-    if ! stage_v2_host_ssh_config "$staged_managed" "$config" "$staged_config"; then
+    if ! stage_devbox_host_ssh_config "$staged_managed" "$config" "$staged_config"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "$config contains malformed devbox-v2 markers"
+        die "$config contains malformed devbox markers"
     fi
     chmod 600 "$staged_config"
-    if ! ssh -F "$staged_source" -G devbox-v2 >/dev/null 2>&1 ||
-        ! ssh -F "$staged_managed" -G devbox-v2 >/dev/null 2>&1 ||
-        ! ssh -F "$staged_config" -G devbox-v2 >/dev/null 2>&1; then
+    if ! ssh -F "$staged_source" -G devbox >/dev/null 2>&1 ||
+        ! ssh -F "$staged_managed" -G devbox >/dev/null 2>&1 ||
+        ! ssh -F "$staged_config" -G devbox >/dev/null 2>&1; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "generated v2 SSH configuration is invalid"
+        die "generated devbox SSH configuration is invalid"
     fi
     source_host="$(awk 'toupper($1) == "HOST" { print $2; exit }' "$staged_source")"
     [ -n "$source_host" ] || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "Colima returned an invalid v2 SSH configuration"
+        die "Colima returned an invalid devbox SSH configuration"
     }
-    if ! validate_v2_effective_ssh_config \
+    if ! validate_devbox_effective_ssh_config \
         "$(ssh -F "$staged_source" -G "$source_host" 2>/dev/null)" "$staged_config"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "generated v2 SSH configuration has conflicting effective settings"
+        die "generated devbox SSH configuration has conflicting effective settings"
     fi
-    if ! reachability_error="$(ssh -F "$staged_config" -o BatchMode=yes -o ConnectTimeout=10 devbox-v2 true 2>&1)"; then
-        printf 'ERROR: generated SSH host '\''devbox-v2'\'' is not reachable\n' >&2
+    if ! reachability_error="$(ssh -F "$staged_config" -o BatchMode=yes -o ConnectTimeout=10 devbox true 2>&1)"; then
+        printf 'ERROR: generated SSH host '\''devbox'\'' is not reachable\n' >&2
         printf '  ssh: %s\n' "$reachability_error" >&2
         printf '  effective: hostname=%s port=%s user=%s identitiesonly=%s\n' \
-            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" hostname | head -n 1)" \
-            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" port | head -n 1)" \
-            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" user | head -n 1)" \
-            "$(v2_effective_ssh_value "$(ssh -F "$staged_config" -G devbox-v2 2>/dev/null)" identitiesonly | head -n 1)" >&2
+            "$(devbox_effective_ssh_value "$(ssh -F "$staged_config" -G devbox 2>/dev/null)" hostname | head -n 1)" \
+            "$(devbox_effective_ssh_value "$(ssh -F "$staged_config" -G devbox 2>/dev/null)" port | head -n 1)" \
+            "$(devbox_effective_ssh_value "$(ssh -F "$staged_config" -G devbox 2>/dev/null)" user | head -n 1)" \
+            "$(devbox_effective_ssh_value "$(ssh -F "$staged_config" -G devbox 2>/dev/null)" identitiesonly | head -n 1)" >&2
         printf '  managed block:\n' >&2
-        sed -n '/^# BEGIN devbox-v2$/,/^# END devbox-v2$/p' "$staged_config" >&2 || true
+        sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$staged_config" >&2 || true
         printf '  colima source config:\n' >&2
         cat "$staged_source" >&2 || true
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "generated SSH host 'devbox-v2' is not reachable"
+        die "generated SSH host 'devbox' is not reachable"
     fi
 
     [ -d "$ssh_dir" ] && ssh_dir_existed=true
@@ -1193,20 +1192,20 @@ write_v2_ssh_config() {
     [ -d "$config_dir" ] && config_dir_existed=true
     mkdir -p "$ssh_dir" "$managed_dir" "$config_dir" || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "failed to create the v2 SSH configuration directories"
+        die "failed to create the devbox SSH configuration directories"
     }
     [ -d "$ssh_dir" ] && [ ! -L "$ssh_dir" ] &&
         [ -d "$managed_dir" ] && [ ! -L "$managed_dir" ] &&
         [ -d "$config_dir" ] && [ ! -L "$config_dir" ] || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "v2 SSH configuration directories are invalid"
+        die "devbox SSH configuration directories are invalid"
     }
     [ "$ssh_dir_existed" = true ] || chmod 700 "$ssh_dir"
     [ "$managed_dir_existed" = true ] || chmod 700 "$managed_dir"
     [ "$config_dir_existed" = true ] || chmod 700 "$config_dir"
-    recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" || {
+    recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "failed to recover the interrupted v2 SSH configuration update"
+        die "failed to recover the interrupted devbox SSH configuration update"
     }
     [ -e "$managed_config" ] && managed_existed=true
     if [ -e "$config" ]; then
@@ -1215,19 +1214,19 @@ write_v2_ssh_config() {
     else
         config_mode=600
     fi
-    managed_temporary="$(mktemp "$managed_dir/.devbox-v2.XXXXXX")"
+    managed_temporary="$(mktemp "$managed_dir/.devbox.XXXXXX")"
     config_temporary="$(mktemp "$config_dir/.config.XXXXXX")"
     cp "$staged_managed" "$managed_temporary" && chmod 600 "$managed_temporary" &&
         cp "$staged_config" "$config_temporary" && chmod "$config_mode" "$config_temporary" || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config" "$managed_temporary" "$config_temporary"
-        die "failed to stage the v2 SSH configuration update"
+        die "failed to stage the devbox SSH configuration update"
     }
     command rm -f "$staged_source" "$staged_managed" "$staged_config"
     if [ "$managed_existed" = true ]; then
-        managed_backup="$(mktemp "$managed_dir/.devbox-v2-backup.XXXXXX")"
+        managed_backup="$(mktemp "$managed_dir/.devbox-backup.XXXXXX")"
         cp -p "$managed_config" "$managed_backup" || {
             command rm -f "$managed_temporary" "$config_temporary" "$managed_backup"
-            die "failed to back up the managed v2 SSH configuration"
+            die "failed to back up the managed devbox SSH configuration"
         }
     fi
     if [ "$config_existed" = true ]; then
@@ -1237,66 +1236,66 @@ write_v2_ssh_config() {
             die "failed to back up $config"
         }
     fi
-    journal="$managed_dir/.devbox-v2-transaction"
-    journal_temporary="$(mktemp "$managed_dir/.devbox-v2-transaction.XXXXXX")"
+    journal="$managed_dir/.devbox-transaction"
+    journal_temporary="$(mktemp "$managed_dir/.devbox-transaction.XXXXXX")"
     printf '%s\n%s\n%s\n%s\n' \
         "$managed_existed" "$config_existed" "$managed_backup" "$config_backup" >"$journal_temporary" &&
         chmod 600 "$journal_temporary" &&
         mv "$journal_temporary" "$journal" || {
         command rm -f "$managed_temporary" "$config_temporary" "$managed_backup" "$config_backup" "$journal_temporary"
-        die "failed to journal the v2 SSH configuration update"
+        die "failed to journal the devbox SSH configuration update"
     }
     if ! mv "$managed_temporary" "$managed_config"; then
-        recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the v2 SSH configuration update"
+        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
+            die "failed to roll back the devbox SSH configuration update"
         command rm -f "$config_temporary"
-        die "failed to update the managed v2 SSH configuration"
+        die "failed to update the managed devbox SSH configuration"
     fi
     if ! mv "$config_temporary" "$config"; then
-        recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the v2 SSH configuration update"
+        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
+            die "failed to roll back the devbox SSH configuration update"
         die "failed to update $config"
     fi
     command rm -f "$managed_backup" "$config_backup" "$journal"
 }
 
-ensure_v2_guest_ssh_access() {
-    validate_v2_guest_preflight || {
-        revoke_v2_guest_ssh_access ||
-            die "v2 guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "v2 guest user has unsafe identity or privileges; managed direct SSH access was removed"
+ensure_devbox_guest_ssh_access() {
+    validate_devbox_guest_preflight || {
+        revoke_devbox_guest_ssh_access ||
+            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
     }
-    reconcile_v2_guest_workspace || {
-        revoke_v2_guest_ssh_access ||
-            die "v2 guest workspace is invalid; managed direct SSH access could not be fully removed"
-        die "v2 guest workspace is invalid; managed direct SSH access was removed"
+    reconcile_devbox_guest_workspace || {
+        revoke_devbox_guest_ssh_access ||
+            die "devbox guest workspace is invalid; managed direct SSH access could not be fully removed"
+        die "devbox guest workspace is invalid; managed direct SSH access was removed"
     }
-    authorize_v2_host_key || return
-    write_v2_ssh_config
+    authorize_devbox_host_key || return
+    write_devbox_ssh_config
 }
 
-revoke_v2_guest_ssh_access() {
+revoke_devbox_guest_ssh_access() {
     local status=0
 
-    remove_v2_managed_guest_ssh_authorization || status=1
-    remove_v2_ssh_config || status=1
+    remove_devbox_managed_guest_ssh_authorization || status=1
+    remove_devbox_ssh_config || status=1
     return "$status"
 }
 
-remove_v2_ssh_config() {
+remove_devbox_ssh_config() {
     local ssh_dir="$HOME/.ssh" managed_dir managed_config
     local config="$HOME/.ssh/config" config_dir temporary config_mode
     local managed_backup config_backup journal journal_temporary
-    local begin_marker='# BEGIN devbox-v2' end_marker='# END devbox-v2'
+    local begin_marker='# BEGIN devbox' end_marker='# END devbox'
     local begin_count end_count
     local managed_existed=false
 
     managed_dir="$ssh_dir/config.d"
-    managed_config="$managed_dir/devbox-v2"
+    managed_config="$managed_dir/devbox"
     [ -L "$config" ] && config="$(resolve_path "$config")"
     config_dir="$(dirname "$config")"
-    recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-        die "failed to recover the interrupted v2 SSH configuration update"
+    recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
+        die "failed to recover the interrupted devbox SSH configuration update"
     [ -e "$managed_config" ] && managed_existed=true
     [ -e "$config" ] || {
         command rm -f "$managed_config"
@@ -1305,17 +1304,17 @@ remove_v2_ssh_config() {
     begin_count="$(grep -Fxc "$begin_marker" "$config" || true)"
     end_count="$(grep -Fxc "$end_marker" "$config" || true)"
     [ "$begin_count" -eq "$end_count" ] && [ "$begin_count" -le 1 ] ||
-        die "$config contains malformed devbox-v2 markers"
+        die "$config contains malformed devbox markers"
     temporary="$(mktemp "$config_dir/.config.XXXXXX")"
     if ! awk '
-        $0 == "# BEGIN devbox-v2" { skipping = 1; next }
-        skipping && $0 == "# END devbox-v2" { skipping = 0; next }
+        $0 == "# BEGIN devbox" { skipping = 1; next }
+        skipping && $0 == "# END devbox" { skipping = 0; next }
         skipping { next }
         { print }
         END { if (skipping) exit 1 }
     ' "$config" >"$temporary"; then
         command rm -f "$temporary"
-        die "failed to remove the managed v2 SSH configuration from $config"
+        die "failed to remove the managed devbox SSH configuration from $config"
     fi
     config_mode="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
     chmod "$config_mode" "$temporary" || {
@@ -1330,107 +1329,107 @@ remove_v2_ssh_config() {
         return
     fi
 
-    managed_backup="$(mktemp "$managed_dir/.devbox-v2-backup.XXXXXX")"
+    managed_backup="$(mktemp "$managed_dir/.devbox-backup.XXXXXX")"
     config_backup="$(mktemp "$config_dir/.config-backup.XXXXXX")"
     cp -p "$managed_config" "$managed_backup" &&
         cp -p "$config" "$config_backup" || {
         command rm -f "$temporary" "$managed_backup" "$config_backup"
-        die "failed to back up the v2 SSH configuration cleanup"
+        die "failed to back up the devbox SSH configuration cleanup"
     }
-    journal="$managed_dir/.devbox-v2-transaction"
-    journal_temporary="$(mktemp "$managed_dir/.devbox-v2-transaction.XXXXXX")"
+    journal="$managed_dir/.devbox-transaction"
+    journal_temporary="$(mktemp "$managed_dir/.devbox-transaction.XXXXXX")"
     printf '%s\n%s\n%s\n%s\n' true true "$managed_backup" "$config_backup" >"$journal_temporary" &&
         chmod 600 "$journal_temporary" &&
         mv "$journal_temporary" "$journal" || {
         command rm -f "$temporary" "$managed_backup" "$config_backup" "$journal_temporary"
-        die "failed to journal the v2 SSH configuration cleanup"
+        die "failed to journal the devbox SSH configuration cleanup"
     }
     if ! mv "$temporary" "$config"; then
-        recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the v2 SSH configuration cleanup"
+        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
+            die "failed to roll back the devbox SSH configuration cleanup"
         die "failed to update $config"
     fi
     if ! rm -f -- "$managed_config"; then
-        recover_v2_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the v2 SSH configuration cleanup"
-        die "failed to remove the managed v2 SSH configuration"
+        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
+            die "failed to roll back the devbox SSH configuration cleanup"
+        die "failed to remove the managed devbox SSH configuration"
     fi
     command rm -f "$managed_backup" "$config_backup" "$journal"
 }
 
-provision_v2_guest() (
+provision_devbox_guest() (
     local force="${1:-false}" host_digest guest_digest
 
-    create_v2_bundle_snapshot || return
-    trap 'command rm -rf "$V2_BUNDLE_SNAPSHOT"' EXIT
-    host_digest="$V2_BUNDLE_DIGEST"
-    guest_digest="$(v2_guest_provision_digest)" || return
+    create_devbox_bundle_snapshot || return
+    trap 'command rm -rf "$DEVBOX_BUNDLE_SNAPSHOT"' EXIT
+    host_digest="$DEVBOX_BUNDLE_DIGEST"
+    guest_digest="$(devbox_guest_provision_digest)" || return
     if [ "$force" = false ] && [ "$host_digest" = "$guest_digest" ]; then
-        if v2_guest_bundle_is_valid "$host_digest"; then
-            log "v2 provisioning is current."
-            validate_v2_guest_preflight || {
-                revoke_v2_guest_ssh_access ||
-                    die "v2 guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-                die "v2 guest user has unsafe identity or privileges; managed direct SSH access was removed"
+        if devbox_guest_bundle_is_valid "$host_digest"; then
+            log "devbox provisioning is current."
+            validate_devbox_guest_preflight || {
+                revoke_devbox_guest_ssh_access ||
+                    die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+                die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
             }
-            sync_v2_guest_config || return
-            ensure_v2_guest_ssh_access || return
+            sync_devbox_guest_config || return
+            ensure_devbox_guest_ssh_access || return
             return
         fi
-        log "v2 provisioning bundle is missing or invalid; refreshing."
+        log "devbox provisioning bundle is missing or invalid; refreshing."
     fi
-    run_v2_guest_provisioning "$host_digest" "$V2_BUNDLE_ARCHIVE" || return
+    run_devbox_guest_provisioning "$host_digest" "$DEVBOX_BUNDLE_ARCHIVE" || return
 )
 
-stop_v2_vm() {
+stop_devbox_vm() {
     local force="${1:-false}" state
 
-    if [ ! -e "$DEVBOX_V2_COLIMA_PROFILE" ]; then
-        log "v2 VM is already stopped."
+    if [ ! -e "$DEVBOX_COLIMA_PROFILE" ]; then
+        log "devbox VM is already stopped."
         return
     fi
-    state="$(v2_state)"
+    state="$(devbox_state)"
     case "$state" in
-        '' | Stopped) log "v2 VM is already stopped." ;;
+        '' | Stopped) log "devbox VM is already stopped." ;;
         Running)
             if [ "$force" = true ]; then
-                v2_colima stop --force "$V2_PROFILE"
+                devbox_colima stop --force "$DEVBOX_PROFILE"
             else
-                v2_colima stop "$V2_PROFILE"
+                devbox_colima stop "$DEVBOX_PROFILE"
             fi
             ;;
-        *) die "v2 VM is in state '$state'; wait for it to settle and retry" ;;
+        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
 }
 
-show_v2_status() {
+show_devbox_status() {
     local record
 
-    if [ ! -e "$DEVBOX_V2_COLIMA_PROFILE" ]; then
-        log "devbox-v2: Not created"
+    if [ ! -e "$DEVBOX_COLIMA_PROFILE" ]; then
+        log "devbox: Not created"
         return
     fi
-    record="$(v2_colima list 2>/dev/null | awk -v profile="$V2_PROFILE" '$1 == profile { print; exit }')"
+    record="$(devbox_colima list 2>/dev/null | awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }')"
     if [ -z "$record" ]; then
-        log "devbox-v2: Not created"
+        log "devbox: Not created"
         return
     fi
-    printf 'devbox-v2: %s\n' "${record#* }"
+    printf 'devbox: %s\n' "${record#* }"
 }
 
-run_v2() {
+run_devbox() {
     local action="${1:-}" force=false status
     shift || true
-    configure_v2_paths
+    configure_devbox_paths
 
     case "$action" in
         start | provision)
             [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>"
             check_host_platform
-            check_v2_dependencies
+            check_devbox_dependencies
             acquire_lock lifecycle
-            start_v2_vm
-            if provision_v2_guest "$([ "$action" = provision ] && printf true || printf false)"; then
+            start_devbox_vm
+            if provision_devbox_guest "$([ "$action" = provision ] && printf true || printf false)"; then
                 release_lock
             else
                 status=$?
@@ -1440,30 +1439,30 @@ run_v2() {
             ;;
         connect)
             [ $# -eq 0 ] || die "Usage: devbox connect"
-            require_running_v2_vm
-            v2_guest zsh -l
+            require_running_devbox_vm
+            devbox_guest zsh -l
             ;;
         exec)
             [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
-            require_running_v2_vm
-            v2_guest "$@"
+            require_running_devbox_vm
+            devbox_guest "$@"
             ;;
         status)
             [ $# -eq 0 ] || die "Usage: devbox status"
-            show_v2_status
+            show_devbox_status
             ;;
         services)
             [ "${1:-}" = status ] && [ $# -eq 1 ] || die "Usage: devbox services status"
-            require_running_v2_vm
-            show_v2_services_status
+            require_running_devbox_vm
+            show_devbox_services_status
             ;;
         auth)
-            require_running_v2_vm
-            v2_guest_interactive devbox auth "$@"
+            require_running_devbox_vm
+            devbox_guest_interactive devbox auth "$@"
             ;;
         db)
-            require_running_v2_vm
-            v2_guest devbox db "$@"
+            require_running_devbox_vm
+            devbox_guest devbox db "$@"
             ;;
         stop)
             case "${1:-}" in
@@ -1473,37 +1472,37 @@ run_v2() {
             esac
             [ $# -eq 0 ] || die "Usage: devbox stop [--force]"
             acquire_lock lifecycle
-            stop_v2_vm "$force"
+            stop_devbox_vm "$force"
             release_lock
             ;;
         destroy)
             [ $# -eq 0 ] || die "Usage: devbox destroy"
             acquire_lock lifecycle
-            if ! v2_profile_exists; then
-                remove_v2_ssh_config
+            if ! devbox_profile_exists; then
+                remove_devbox_ssh_config
                 release_lock
-                log "devbox-v2: Not created"
+                log "devbox: Not created"
                 return
             fi
-            check_v2_ownership
-            printf "Type '%s' to delete the v2 VM and all its container runtime data: " "$V2_PROFILE"
+            check_devbox_ownership
+            printf "Type '%s' to delete the devbox VM and all its container runtime data: " "$DEVBOX_PROFILE"
             read -r confirm
-            [ "$confirm" = "$V2_PROFILE" ] || die "Aborted"
-            if [ "$(v2_state)" = Running ]; then
-                remove_v2_managed_guest_ssh_authorization || {
+            [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
+            if [ "$(devbox_state)" = Running ]; then
+                remove_devbox_managed_guest_ssh_authorization || {
                     status=$?
                     release_lock
                     return "$status"
                 }
             fi
-            v2_colima delete --data --force "$V2_PROFILE" || {
+            devbox_colima delete --data --force "$DEVBOX_PROFILE" || {
                 status=$?
                 release_lock
                 return "$status"
             }
-            remove_v2_ssh_config
+            remove_devbox_ssh_config
             release_lock
-            log "Destroyed v2 VM runtime data. No host project or data directories were used."
+            log "Destroyed devbox VM runtime data. No host project or data directories were used."
             ;;
         *) die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>" ;;
     esac
