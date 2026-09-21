@@ -102,42 +102,76 @@ devbox uninstall             # remove the devbox symlink
 ### Install a published release
 
 Releases are published on the [Releases page](https://github.com/koraybostanci/devbox/releases)
-as `devbox-<version>.tar.gz`, `SHA256SUMS`, and `SHA256SUMS.sig`. Download the
-latest with an authenticated `gh`:
+as `devbox-<version>.tar.gz`, `SHA256SUMS`, and `SHA256SUMS.sig`. Download
+them with an authenticated `gh`, fetch the committed public key out of band
+(from the repository, not from the release assets), and verify the checksum
+and signature before the archive is extracted into the install root:
 
 ```sh
-gh release download --repo koraybostanci/devbox --pattern '*'  # tarball + checksums
-tar -xzf devbox-<version>.tar.gz
-./devbox-<version>/devbox install                              # symlink the launcher onto PATH
-```
-
-The launcher symlinks to the extracted directory, so keep it in place. Verify
-before installing — checksum, then signature against the committed key:
-
-```sh
+gh release download --repo koraybostanci/devbox --pattern '*'
 shasum -a 256 -c SHA256SUMS
 gh api -H 'Accept: application/vnd.github.raw' \
     repos/koraybostanci/devbox/contents/release-signing-key.pub.pem > release-signing-key.pub.pem
 openssl dgst -sha256 -verify release-signing-key.pub.pem \
     -signature SHA256SUMS.sig SHA256SUMS
+tar -xzf devbox-<version>.tar.gz
+DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
+    ./devbox-<version>/scripts/release.sh install devbox-<version>.tar.gz [--force]
+```
+
+`scripts/release.sh install` resolves the archive and key paths against the
+directory you invoke it from, verifies the checksum, signature, layout, and
+per-file `MANIFEST` (extracting into a private temporary directory) before
+extracting into the install root, then installs below
+`~/.local/share/devbox/releases/<version>`, activates
+`~/.local/share/devbox/current`, and puts `devbox` on your `PATH`. A missing
+`SHA256SUMS.sig` is a hard failure unless `DEVBOX_ALLOW_UNSIGNED=1` is set for
+local testing. Reinstalling a version whose tree still matches its `MANIFEST`
+is idempotent; a tree that no longer matches is replaced, and `--force`
+replaces an existing version directory even when it is intact.
+
+Upgrades install a new release alongside the old one and leave the other
+versions in place, so `use` can switch back. The installed tree carries the
+same tooling:
+
+```sh
+~/.local/share/devbox/current/scripts/release.sh list   # active is marked
+~/.local/share/devbox/current/scripts/release.sh use <version>
+```
+
+Release installs keep host configuration at `~/.config/devbox/env` (mode
+0600), so upgrades keep your settings; a legacy in-tree `.env` is copied there
+once, before its release tree is replaced. Run `devbox init` to create it from
+the archive's `.env.example`, edit it, then run `devbox init` again.
+
+If the existing VM was created by a checkout or by an earlier release, claim
+it from the new installation while the VM is stopped:
+
+```sh
+devbox stop
+devbox install --adopt
 ```
 
 ### Publish a release (maintainer)
 
-Building, signing, and installing archives from a checkout is maintainer-only:
+`VERSION` is the source of truth: bump it, commit it, then tag `v<version>`
+(or dispatch the `Release` workflow with the same version). The workflow fails
+when the tag or dispatch input does not match `VERSION`; nothing bumps
+`VERSION` automatically yet.
 
 ```sh
-scripts/release.sh build <version>             # dist/devbox-<version>.tar.gz
-scripts/release.sh sign <archive> --key <key>  # signs the archive's SHA256SUMS
-scripts/release.sh verify <archive>            # checksum, manifest, signature
-scripts/release.sh install <archive>           # ~/.local/share/devbox/releases
-scripts/release.sh list                        # installed releases
+scripts/release.sh build                                        # dist/devbox-<version>
+scripts/release.sh sign dist/devbox-<version>/devbox-<version>.tar.gz --key <key>
+scripts/release.sh verify dist/devbox-<version>/devbox-<version>.tar.gz
+scripts/release.sh install dist/devbox-<version>/devbox-<version>.tar.gz
+scripts/release.sh list
+scripts/release.sh use <version>
 ```
 
-`verify` checks the signature against the committed public key (override with
-`DEVBOX_RELEASE_PUBKEY`). `install` activates `~/.local/share/devbox/current`.
-Tagging `v<version>` (or dispatching the `Release` workflow) publishes the
-archive, `SHA256SUMS`, and `SHA256SUMS.sig`.
+`build` with no argument uses `VERSION` and writes
+`dist/devbox-<version>/devbox-<version>.tar.gz` with sibling `SHA256SUMS` and
+(when signed) `SHA256SUMS.sig`. `verify` fails closed and checks the signature
+against the committed public key (override with `DEVBOX_RELEASE_PUBKEY`).
 
 ## Security
 

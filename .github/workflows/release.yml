@@ -21,19 +21,33 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          input_version: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ inputs.version }}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$input_version"
           else
             version="${GITHUB_REF_NAME#v}"
           fi
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
 
+      - name: Verify VERSION
+        env:
+          version: ${{ steps.version.outputs.version }}
+        run: |
+          file_version="$(cat VERSION)"
+          if [ "$version" != "$file_version" ]; then
+            printf 'ERROR: release version %s does not match VERSION (%s)\n' \
+              "$version" "$file_version" >&2
+            exit 1
+          fi
+
       - name: Build release
-        run: scripts/release.sh build "${{ steps.version.outputs.version }}"
+        run: scripts/release.sh build
 
       - name: Sign release
         env:
+          version: ${{ steps.version.outputs.version }}
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           if [ -z "$RELEASE_SIGNING_KEY" ]; then
@@ -44,17 +58,21 @@ jobs:
           key="$(mktemp)"
           trap 'rm -f "$key"' EXIT
           printf '%s\n' "$RELEASE_SIGNING_KEY" >"$key"
-          scripts/release.sh sign "dist/devbox-${{ steps.version.outputs.version }}.tar.gz" --key "$key"
+          scripts/release.sh sign "dist/devbox-$version/devbox-$version.tar.gz" --key "$key"
 
       - name: Verify release
-        run: scripts/release.sh verify "dist/devbox-${{ steps.version.outputs.version }}.tar.gz"
+        env:
+          version: ${{ steps.version.outputs.version }}
+        run: scripts/release.sh verify "dist/devbox-$version/devbox-$version.tar.gz"
 
       - name: Publish release
         env:
+          version: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            "dist/devbox-${{ steps.version.outputs.version }}.tar.gz" \
-            dist/SHA256SUMS dist/SHA256SUMS.sig \
-            --title "devbox v${{ steps.version.outputs.version }}" \
-            --notes "devbox v${{ steps.version.outputs.version }}"
+          gh release create "v$version" \
+            "dist/devbox-$version/devbox-$version.tar.gz" \
+            "dist/devbox-$version/SHA256SUMS" \
+            "dist/devbox-$version/SHA256SUMS.sig" \
+            --title "devbox v$version" \
+            --notes "devbox v$version"

@@ -15,10 +15,12 @@ Install Colima from <https://colima.run>. No other host tooling is required.
 ## `.env` rejected
 
 `.env` must be mode 0600 and contain only supported `KEY=value` assignments
-(single or double quotes are stripped):
+(single or double quotes are stripped). Release installs keep this file at
+`~/.config/devbox/env` instead of the versioned release directory:
 
 ```sh
-chmod 600 .env
+chmod 600 .env            # checkout
+chmod 600 ~/.config/devbox/env   # release install
 ```
 
 Supported keys: `GIT_NAME`, `GIT_EMAIL`, `POSTGRES_USER`, `POSTGRES_DB`,
@@ -84,19 +86,40 @@ update `POSTGRES_PORT` in `.env` and run `devbox provision`.
 
 ## Release installation
 
-A failed `scripts/release.sh verify` means the archive, checksum, manifest, or
-signature did not validate; do not install it. Verification fails closed when a
-signed archive has no committed public key.
+`scripts/release.sh verify` fails closed: it requires `SHA256SUMS.sig` and a
+valid signature against the committed public key (`DEVBOX_RELEASE_PUBKEY`
+overrides the default), plus a single `devbox-<version>` top-level directory,
+regular-file/directory entry types, and a MANIFEST that matches every archived
+file. Unsigned archives are accepted only with `DEVBOX_ALLOW_UNSIGNED=1`, for
+local builds; never install an archive that does not verify.
+
+`scripts/release.sh install` verifies the archive before extracting it into
+the install root, then installs below
+`~/.local/share/devbox/releases/<version>` and activates
+`~/.local/share/devbox/current`. Repeat installs of the same version are
+idempotent; a failed install leaves `current` pointing at the previous
+release. Other releases are left in place, so `use` can switch back; `--force`
+replaces an existing version directory even when it still matches its
+MANIFEST.
+
+Release installs keep host configuration at `~/.config/devbox/env` (mode
+0600). A `.env` left inside a versioned release directory is ignored with a
+warning, and `scripts/release.sh install` copies it to the stable path once if
+the stable file does not exist yet, before the tree that carries it is
+replaced.
 
 ## Checkout moved or renamed
 
-The Colima profile records the checkout path in an ownership marker. Stop the VM
-before moving the repository, then inspect the error and update the marker
-deliberately from the new path:
+The Colima profile records its install root in an ownership marker
+(`~/.colima/devbox/.devbox-owner`): the checkout directory for a checkout, or
+the data root for release installs, so release upgrades keep the profile.
+Stop the VM before moving a checkout, then claim the existing profile from the
+new path:
 
 ```sh
 devbox stop
-cat "$HOME/.colima/devbox/.devbox-owner"
+devbox install --adopt
 ```
 
-Do not rewrite the marker to claim a profile created by another checkout.
+`devbox install --adopt` never adopts a running VM. Do not rewrite the marker
+to claim a profile created by another installation.
