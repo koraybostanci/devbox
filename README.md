@@ -57,6 +57,13 @@ devbox stop [--force]
 Your code lives on the guest disk at `/home/devbox/workspace`; it survives
 stop/start and is removed only by `devbox destroy`.
 
+### Remote access
+
+`devbox start` adds a marked `Host devbox` entry to your OpenSSH config
+(`~/.ssh/config`, plus a copy under `~/.ssh/config.d/devbox`). Point editors,
+`git`, and other tools at host `devbox` to work with the guest files directly
+over SSH; `devbox destroy` removes the entry.
+
 ## Services
 
 PostgreSQL and Valkey run as root-managed containers inside the guest, bound to
@@ -95,12 +102,15 @@ devbox uninstall             # remove the devbox symlink
 Signed releases install without a checkout:
 
 ```sh
-scripts/release.sh build <version>     # dist/devbox-<version>.tar.gz
-scripts/release.sh verify <archive>    # checksum, manifest, signature
-scripts/release.sh install <archive>   # ~/.local/share/devbox/releases
+scripts/release.sh build <version>             # dist/devbox-<version>.tar.gz
+scripts/release.sh sign <archive> --key <key>  # signs the archive's SHA256SUMS
+scripts/release.sh verify <archive>            # checksum, manifest, signature
+scripts/release.sh install <archive>           # ~/.local/share/devbox/releases
+scripts/release.sh list                        # installed releases
 ```
 
-`install` activates `~/.local/share/devbox/current`.
+`verify` checks the signature against the committed public key (override with
+`DEVBOX_RELEASE_PUBKEY`). `install` activates `~/.local/share/devbox/current`.
 
 ## Security
 
