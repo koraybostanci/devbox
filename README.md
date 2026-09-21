@@ -137,6 +137,7 @@ same tooling:
 ```sh
 ~/.local/share/devbox/current/scripts/release.sh list   # active is marked
 ~/.local/share/devbox/current/scripts/release.sh use <version>
+~/.local/share/devbox/current/scripts/release.sh prune [--keep N]  # drop old installs
 ```
 
 Release installs keep host configuration at `~/.config/devbox/env` (mode
@@ -154,10 +155,34 @@ devbox install --adopt
 
 ### Publish a release (maintainer)
 
-`VERSION` is the source of truth: bump it, commit it, then tag `v<version>`
-(or dispatch the `Release` workflow with the same version). The workflow fails
-when the tag or dispatch input does not match `VERSION`; nothing bumps
-`VERSION` automatically yet.
+`VERSION` is the source of truth. Merge a commit that bumps `VERSION` to `main`
+and the `Release` workflow runs: it runs the `Check` workflow, checks out the
+commit that last changed `VERSION`, builds the archive from it, signs it with
+the `RELEASE_SIGNING_KEY` environment secret, verifies it against the committed
+public key, and creates a **draft** release titled `devbox v<version>`. The
+draft carries the archive, `SHA256SUMS`, and `SHA256SUMS.sig` with
+automatically generated release notes, and the `v<version>` tag targets that
+commit; do not push tags by hand. Suffixed versions such as `0.1.0-rc1` are
+drafted as prereleases.
+
+The draft is the approval gate: nothing is public until a maintainer opens the
+[Releases page](https://github.com/koraybostanci/devbox/releases), reviews the
+generated notes and all three assets, and clicks **Publish release**. The
+workflow never publishes a release on its own. After publishing, bump `VERSION`
+for the next release.
+
+`workflow_dispatch` is recovery-only: dispatch it on `main` with the version
+already in `VERSION` (the input must match it). Recovery resolves the current
+`VERSION` to the commit that last changed it, rebuilds that commit, and
+re-uploads the missing assets into the existing draft with `--clobber`; the
+release stays a draft until a maintainer publishes it. Recovery requires the
+draft's tag to be at the release commit, so a draft whose tag is not at the
+release commit cannot be recovered, and a published release is never
+overwritten. Because recovery always rebuilds the commit that last changed
+`VERSION`, an older incomplete draft cannot be recovered after `VERSION` moves
+on; bump `VERSION` for a new release instead.
+
+The local tooling mirrors the workflow:
 
 ```sh
 scripts/release.sh build                                        # dist/devbox-<version>
@@ -166,12 +191,17 @@ scripts/release.sh verify dist/devbox-<version>/devbox-<version>.tar.gz
 scripts/release.sh install dist/devbox-<version>/devbox-<version>.tar.gz
 scripts/release.sh list
 scripts/release.sh use <version>
+scripts/release.sh prune [--keep N]
 ```
 
 `build` with no argument uses `VERSION` and writes
 `dist/devbox-<version>/devbox-<version>.tar.gz` with sibling `SHA256SUMS` and
 (when signed) `SHA256SUMS.sig`. `verify` fails closed and checks the signature
 against the committed public key (override with `DEVBOX_RELEASE_PUBKEY`).
+`prune` bounds the installed `releases/` tree: it removes non-active releases,
+keeping the active release plus the `N` most recently modified non-active
+releases (default 0), and removes staging directories older than 24 hours; the
+active release is never removed.
 
 ## Security
 
