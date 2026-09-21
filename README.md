@@ -68,6 +68,20 @@ reaches the services over loopback using credentials in
 devbox services status
 ```
 
+## Authentication (optional)
+
+Provider sign-in is optional and happens entirely inside the guest; no host
+credentials are used or stored.
+
+```sh
+devbox auth status                 # github, claude, opencode, databricks
+devbox auth login github           # also: claude, opencode, databricks
+devbox db info                     # PostgreSQL connection settings
+```
+
+Credentials are written inside the guest and survive stop/start; they are
+removed only by `devbox destroy`.
+
 ## Maintenance
 
 ```sh
@@ -83,7 +97,7 @@ Signed releases install without a checkout:
 ```sh
 scripts/release.sh build <version>     # dist/devbox-<version>.tar.gz
 scripts/release.sh verify <archive>    # checksum, manifest, signature
-scripts/release.sh install <archive>   # ~/.local/share/devbox/releases/<version>
+scripts/release.sh install <archive>   # ~/.local/share/devbox/releases
 ```
 
 `install` activates `~/.local/share/devbox/current`.

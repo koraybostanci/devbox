@@ -1,0 +1,141 @@
+#!/bin/bash
+# Guest-local devbox companion.
+#
+# Runs inside the guest as the unprivileged `devbox` user. Provider
+# authentication is optional and always guest-local; nothing here reads host
+# credentials.
+
+set -Eeuo pipefail
+
+CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox-v2}"
+PROVIDERS=(github claude opencode databricks)
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '%s\n' "$*"; }
+
+usage() {
+    cat <<'EOF'
+Usage: devbox <command>
+
+Authentication (all optional, guest-local):
+    auth status                    Show per-provider authentication state
+    auth login <provider>          Authenticate a provider inside the guest
+                                   Providers: github, claude, opencode, databricks
+
+Service helpers:
+    db info                        Show PostgreSQL connection settings
+
+Other:
+    help                           Show this help
+EOF
+}
+
+github_state() {
+    if command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
+        printf 'authenticated'
+    else
+        printf 'not configured'
+    fi
+}
+
+claude_state() {
+    if [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; then
+        printf 'configured'
+    else
+        printf 'not configured'
+    fi
+}
+
+opencode_state() {
+    if [ -s "$HOME/.local/share/opencode/auth.json" ]; then
+        printf 'configured'
+    else
+        printf 'not configured'
+    fi
+}
+
+databricks_state() {
+    if command -v databricks >/dev/null 2>&1 && [ -s "$HOME/.databrickscfg" ]; then
+        printf 'configured'
+    else
+        printf 'not configured'
+    fi
+}
+
+auth_status() {
+    printf 'github: %s\n' "$(github_state)"
+    printf 'claude: %s\n' "$(claude_state)"
+    printf 'opencode: %s\n' "$(opencode_state)"
+    printf 'databricks: %s\n' "$(databricks_state)"
+    printf 'note: authentication is optional; credentials stay in the guest.\n'
+}
+
+auth_login() {
+    local provider="${1:-}"
+    case "$provider" in
+        github)
+            command -v gh >/dev/null 2>&1 || die "gh is not installed in the guest"
+            gh auth login --hostname github.com --git-protocol https
+            ;;
+        claude)
+            log "Claude Code stores credentials in the guest. Start 'claude' and"
+            log "complete its login prompt; this companion cannot script it."
+            ;;
+        opencode)
+            command -v opencode >/dev/null 2>&1 || die "opencode is not installed in the guest"
+            opencode auth login
+            ;;
+        databricks)
+            command -v databricks >/dev/null 2>&1 || die "databricks is not installed in the guest"
+            log "Pass your workspace URL, e.g.: databricks auth login --host https://<workspace>"
+            ;;
+        *)
+            die "Usage: devbox auth login <github|claude|opencode|databricks>"
+            ;;
+    esac
+}
+
+db_info() {
+    [ -r "$CONFIG_ROOT/config" ] && [ -r "$CONFIG_ROOT/secrets" ] ||
+        die "guest configuration is unavailable at $CONFIG_ROOT"
+    # shellcheck disable=SC1090,SC1091
+    set -a
+    source "$CONFIG_ROOT/config"
+    source "$CONFIG_ROOT/secrets"
+    set +a
+    printf 'postgres host: 127.0.0.1\n'
+    printf 'postgres port: %s\n' "${POSTGRES_PORT:-15432}"
+    printf 'postgres user: %s\n' "${POSTGRES_USER:-dev}"
+    printf 'postgres db:   %s\n' "${POSTGRES_DB:-dev}"
+    printf 'postgres password: see %s/secrets\n' "$CONFIG_ROOT"
+    printf 'valkey host: 127.0.0.1  (password in %s/secrets)\n' "$CONFIG_ROOT"
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+    help | --help | -h)
+        usage
+        ;;
+    auth)
+        action="${1:-status}"
+        shift || true
+        case "$action" in
+            status) [ $# -eq 0 ] || die "Usage: devbox auth status"; auth_status ;;
+            login) auth_login "$@" ;;
+            *) die "Usage: devbox auth <status|login <provider>>" ;;
+        esac
+        ;;
+    db)
+        [ "${1:-}" = info ] && [ $# -eq 1 ] || die "Usage: devbox db info"
+        db_info
+        ;;
+    '')
+        usage
+        exit 1
+        ;;
+    *)
+        die "Unknown command: $cmd"
+        ;;
+esac

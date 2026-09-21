@@ -52,6 +52,28 @@ if "$ROOT/devbox" bogus >/dev/null 2>&1; then
     fail "unknown command was accepted"
 fi
 
+# --- guest companion --------------------------------------------------------
+[ -f provision/config/guest/devbox ]
+bash -n provision/config/guest/devbox
+grep -q 'config/guest/devbox' provision/scripts/system.sh
+grep -q 'v2_guest_interactive' lib/v2.sh
+companion_home="$validation_root/guest-home"
+mkdir -p "$companion_home/.config/devbox-v2"
+printf 'export POSTGRES_USER=dev\nexport POSTGRES_DB=dev\nexport POSTGRES_PORT=15432\n' \
+    >"$companion_home/.config/devbox-v2/config"
+printf 'export POSTGRES_PASSWORD=test\nexport VALKEY_PASSWORD=test\n' \
+    >"$companion_home/.config/devbox-v2/secrets"
+companion_status="$(HOME="$companion_home" PATH=/nonexistent "$(command -v bash)" \
+    provision/config/guest/devbox auth status)" || fail "companion 'auth status' failed"
+printf '%s\n' "$companion_status" | grep -q '^github: not configured$' ||
+    fail "companion did not report github as unconfigured"
+printf '%s\n' "$companion_status" | grep -q '^databricks: not configured$' ||
+    fail "companion did not report databricks as unconfigured"
+companion_db="$(HOME="$companion_home" bash provision/config/guest/devbox db info)" ||
+    fail "companion 'db info' failed"
+printf '%s\n' "$companion_db" | grep -q 'postgres port: 15432' ||
+    fail "companion did not report PostgreSQL settings"
+
 # --- v2 must not need host jq or yq ----------------------------------------
 if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/v2.sh lib/config.sh; then
     fail "v2 must not require host jq or yq"
