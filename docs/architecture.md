@@ -60,13 +60,17 @@ Provisioning installs a small guest-local `devbox` companion at
 `/usr/local/bin/devbox`. It reports optional provider authentication state
 (`devbox auth status`), starts provider logins inside the guest
 (`devbox auth login <provider>`), and prints PostgreSQL connection settings
-(`devbox db info`). It never reads host credentials.
+(`devbox db info`). It never reads host credentials. It is distinct from the
+host launcher: the launcher (this checkout's `devbox`, or an installed release)
+manages the VM and releases on macOS, while the companion exposes only the
+guest-local helpers above.
 
 ## Release distribution
 
-`scripts/release.sh` builds a deterministic, versioned archive with a per-file
-`MANIFEST` and `SHA256SUMS`, signs `SHA256SUMS`, and verifies checksums and
-signature before extracting with path-traversal protection. Installs go below
+`devbox release` (backed by `lib/release.sh`) builds a deterministic, versioned
+archive with a per-file `MANIFEST` and `SHA256SUMS`, signs `SHA256SUMS`, and
+verifies checksums and signature before extracting with path-traversal
+protection. Installs go below
 `~/.local/share/devbox/releases/<version>` and are activated through
 `~/.local/share/devbox/current`. The `Release` workflow builds, signs with the
 `RELEASE_SIGNING_KEY` secret, verifies against the committed

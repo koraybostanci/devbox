@@ -48,8 +48,8 @@ Confirm on macOS:
 ## Release artifacts
 
 ```sh
-scripts/release.sh build <version>
-scripts/release.sh verify "dist/devbox-<version>.tar.gz"
+devbox release build <version>
+devbox release verify "dist/devbox-<version>.tar.gz"
 ```
 
 Confirm the `Release` workflow signs with the `RELEASE_SIGNING_KEY` secret and

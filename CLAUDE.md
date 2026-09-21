@@ -22,6 +22,7 @@ VM is disposable; everything that matters lives in the guest.
 ./devbox provision         # force non-destructive provisioning
 ./devbox stop [--force]
 ./devbox destroy
+./devbox release <cmd>     # build/verify/install signed releases
 ```
 
 ## Layout
@@ -30,11 +31,12 @@ VM is disposable; everything that matters lives in the guest.
 - `lib/common.sh` — logging, locking, CLI install helpers.
 - `lib/config.sh` — host platform check, `.env` parsing.
 - `lib/devbox.sh` — VM lifecycle, provisioning, identity, SSH, services.
+- `lib/release.sh` — release build/sign/verify/install (exposed as `devbox release`).
 - `provision/` — guest provisioning bundle (system/tools/verify scripts and
   `config/services/compose.yaml`).
 - `colima.yaml` — the Colima profile template.
 - `scripts/check.sh` — static checks (the CI gate).
-- `scripts/release.sh` — build/verify/install signed releases.
+- `scripts/release.sh` — thin wrapper around `devbox release`.
 
 ## Notes
 

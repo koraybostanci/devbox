@@ -102,15 +102,17 @@ devbox uninstall             # remove the devbox symlink
 Signed releases install without a checkout:
 
 ```sh
-scripts/release.sh build <version>             # dist/devbox-<version>.tar.gz
-scripts/release.sh sign <archive> --key <key>  # signs the archive's SHA256SUMS
-scripts/release.sh verify <archive>            # checksum, manifest, signature
-scripts/release.sh install <archive>           # ~/.local/share/devbox/releases
-scripts/release.sh list                        # installed releases
+devbox release build <version>            # dist/devbox-<version>.tar.gz
+devbox release sign <archive> --key <key> # signs the archive's SHA256SUMS
+devbox release verify <archive>           # checksum, manifest, signature
+devbox release install <archive>          # ~/.local/share/devbox/releases
+devbox release list                       # installed releases
 ```
 
 `verify` checks the signature against the committed public key (override with
 `DEVBOX_RELEASE_PUBKEY`). `install` activates `~/.local/share/devbox/current`.
+`release` is part of the host launcher; the in-VM `devbox` companion exposes
+only `auth` and `db`.
 
 ## Security
 

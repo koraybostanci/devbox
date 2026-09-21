@@ -220,6 +220,16 @@ HOME="$release_root/home" "$ROOT/scripts/release.sh" install "$release_archive" 
 [ -x "$release_root/home/.local/share/devbox/releases/0.0.0/devbox" ] ||
     fail "release launcher was not installed"
 [ -L "$release_root/home/.local/share/devbox/current" ] || fail "release was not activated"
+tar -tzf "$release_archive" | grep 'lib/release.sh' >/dev/null ||
+    fail "release archive does not ship lib/release.sh"
+"$ROOT/devbox" release verify "$release_archive" >/dev/null || fail "devbox release verify failed"
+HOME="$release_root/home" "$ROOT/devbox" release list | grep -qx '0.0.0' ||
+    fail "devbox release list did not show the installed release"
+"$ROOT/devbox" release --help | grep -q 'Usage: devbox release' ||
+    fail "devbox release did not print its usage"
+if "$ROOT/devbox" release bogus >/dev/null 2>&1; then
+    fail "devbox release accepted an unknown command"
+fi
 
 release_key="$release_root/signing-key.pem"
 openssl ecparam -name prime256v1 -genkey -noout -out "$release_key" || fail "could not generate test key"
