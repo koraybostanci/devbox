@@ -1,30 +1,5 @@
 #!/bin/bash
 
-ensure_managed_link() {
-    local link_path="$1" target="$2"
-    if [ -L "$link_path" ]; then
-        [ "$(readlink "$link_path")" = "$target" ] || {
-            printf 'ERROR: %s points somewhere unexpected\n' "$link_path" >&2
-            return 1
-        }
-        return
-    fi
-    [ ! -e "$link_path" ] || {
-        printf 'ERROR: %s already exists; move it aside before provisioning\n' "$link_path" >&2
-        return 1
-    }
-    ln -s "$target" "$link_path"
-}
-
-configure_mounts() {
-    [ "${DEVBOX_NO_MOUNTS:-false}" = true ] && return
-    stage "Persistent mounts"
-    [ -d /mnt/devbox/projects ] && [ -w /mnt/devbox/projects ]
-    [ -d /mnt/devbox/data ] && [ -w /mnt/devbox/data ]
-    ensure_managed_link "$HOME/projects" /mnt/devbox/projects
-    ensure_managed_link "$HOME/data" /mnt/devbox/data
-}
-
 configure_git() {
     stage "Git identity and HTTPS defaults"
     git config --global user.name "$GIT_NAME"
@@ -79,7 +54,6 @@ configure_shell() {
 }
 
 configure_guest() {
-    configure_mounts
     configure_git
     configure_opencode
     configure_claude

@@ -17,13 +17,7 @@ BOOTSTRAP_DIR="$(dirname "$DEVBOX_SCRIPT")"
 source "$BOOTSTRAP_DIR/lib/common.sh"
 
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
-PROFILE="devbox"
 source "$DEVBOX_DIR/lib/config.sh"
-source "$DEVBOX_DIR/lib/colima.sh"
-source "$DEVBOX_DIR/lib/guest.sh"
-source "$DEVBOX_DIR/lib/containers.sh"
-source "$DEVBOX_DIR/lib/doctor.sh"
-source "$DEVBOX_DIR/lib/isolation-poc.sh"
 source "$DEVBOX_DIR/lib/v2.sh"
 
 usage() {
@@ -41,45 +35,26 @@ Daily workflow:
     status                         Show VM state and resources
     stop [--force]                 Stop gracefully; force only when requested
 
-Development:
-    ide                            Verify IDE SSH settings
-    doctor                         Run host and guest diagnostics
-    provision                      Force non-destructive provisioning
-    rotate                         Apply .env credential changes
-
-Authentication:
-    github [login|status|logout]   Manage guest-local GitHub HTTPS auth
-    databricks [login|status|logout]  Manage guest-local Databricks OAuth
-
 Services:
-    containers [service] <action>  Manage services: up, down, ps, or logs
+    services status                Show the managed PostgreSQL and Valkey services
 
-Lifecycle:
-    rebuild                        Recreate guest; preserve data and volumes
-    destroy                        Remove VM and volumes; preserve Mac data
-    uninstall                      Remove this checkout's devbox symlink
+Maintenance:
+    provision                      Force non-destructive provisioning
+    destroy                        Remove the VM and its container runtime data
 
 Other:
-    isolation-poc [check]          Run or verify the experimental isolation POC
-    v2 <start|provision|connect|exec|status|stop|destroy>
-                                   Run the experimental no-mount v2 profile
     help                           Show this help message
 
 Typical workflow:
+    devbox init
     devbox start
     devbox connect
     devbox stop
-
-Examples:
-    devbox exec python train.py
-    devbox containers postgres up
 EOF
 }
 
 cmd="${1:-}"
 shift || true
-
-[ "$cmd" = v2 ] || configure_paths
 
 case "$cmd" in
     help | --help | -h)
@@ -97,116 +72,9 @@ case "$cmd" in
     init)
         [ $# -eq 0 ] || die "Usage: devbox init"
         initialize_local_config
-        render_colima_config
         ;;
-    start)
-        [ $# -eq 0 ] || die "Usage: devbox start"
-        check_host_platform
-        check_host_dependencies
-        acquire_lock lifecycle
-        start_vm_only
-        sync_guest_env
-        provision_guest false
-        release_lock
-        log "devbox is ready. Connect with 'devbox connect' or SSH host 'devbox'."
-        ;;
-    provision)
-        [ $# -eq 0 ] || die "Usage: devbox provision"
-        check_host_platform
-        check_host_dependencies
-        acquire_lock lifecycle
-        start_vm_only
-        sync_guest_env
-        provision_guest true
-        release_lock
-        ;;
-    connect)
-        [ $# -eq 0 ] || die "Usage: devbox connect"
-        require_running_vm
-        exec colima ssh -p "$PROFILE" -- zsh -l
-        ;;
-    exec)
-        [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
-        require_running_vm
-        exec colima ssh -p "$PROFILE" -- "$@"
-        ;;
-    stop)
-        force=false
-        case "${1:-}" in
-            '') ;;
-            --force)
-                force=true
-                shift
-                ;;
-            *) die "Usage: devbox stop [--force]" ;;
-        esac
-        [ $# -eq 0 ] || die "Usage: devbox stop [--force]"
-        acquire_lock lifecycle
-        stop_vm "$force"
-        release_lock
-        ;;
-    status)
-        [ $# -eq 0 ] || die "Usage: devbox status"
-        show_status
-        ;;
-    ide)
-        [ $# -eq 0 ] || die "Usage: devbox ide"
-        show_ide_connection
-        ;;
-    delete)
-        die "'devbox delete' was replaced by 'devbox destroy'; nothing was deleted"
-        ;;
-    rebuild)
-        [ $# -eq 0 ] || die "Usage: devbox rebuild"
-        printf 'Recreate guest OS/tools while preserving runtime volumes and Mac-backed data? (yes/N) '
-        read -r confirm
-        [ "$confirm" = "yes" ] || die "Aborted"
-        acquire_lock lifecycle
-        [ -z "$(colima_state)" ] || colima_cmd delete --force "$PROFILE"
-        start_vm_only
-        sync_guest_env
-        provision_guest true
-        release_lock
-        log "Rebuild complete. Guest-local authentication can be restored with 'devbox github login' and 'devbox databricks login'."
-        ;;
-    destroy)
-        [ $# -eq 0 ] || die "Usage: devbox destroy"
-        printf "Type '%s' to delete the VM and all container runtime data: " "$PROFILE"
-        read -r confirm
-        [ "$confirm" = "$PROFILE" ] || die "Aborted"
-        acquire_lock lifecycle
-        [ -z "$(colima_state)" ] || colima_cmd delete --data --force "$PROFILE"
-        remove_ssh_config
-        release_lock
-        log "Destroyed VM runtime data. Mac-backed projects and data were not removed."
-        ;;
-    rotate)
-        [ $# -eq 0 ] || die "Usage: devbox rotate"
-        acquire_lock lifecycle
-        rotate_guest_credentials
-        release_lock
-        ;;
-    github)
-        [ $# -le 1 ] || die "Usage: devbox github [login|status|logout]"
-        github_command "${1:-status}"
-        ;;
-    databricks)
-        [ $# -le 1 ] || die "Usage: devbox databricks [login|status|logout]"
-        databricks_command "${1:-status}"
-        ;;
-    doctor)
-        [ $# -eq 0 ] || die "Usage: devbox doctor"
-        run_doctor
-        ;;
-    containers)
-        run_containers "$@"
-        ;;
-    isolation-poc)
-        [ $# -le 1 ] || die "Usage: devbox isolation-poc [check]"
-        run_isolation_poc "${1:-start}"
-        ;;
-    v2)
-        run_v2 "$@"
+    start | provision | connect | exec | status | services | stop | destroy)
+        run_v2 "$cmd" "$@"
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""

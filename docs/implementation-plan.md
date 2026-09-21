@@ -7,9 +7,8 @@ planning session. The authoritative high-level roadmap remains
 
 ## Product contract
 
-- The legacy `devbox` profile, its host mounts, `devbox` SSH alias, data,
-  commands, `.env` flow, and PostgreSQL container workflow remain available
-  until an explicit migration and separately approved default promotion.
+- devbox is v2 only: no host mounts, an unprivileged guest `devbox` user, and
+  root-managed guest services. The legacy mounted profile has been removed.
 - New behavior is opt-in under `devbox v2` / `devbox-v2`, with namespaced
   state, services, volumes, and SSH configuration.
 - v2 repositories live on the guest disk in `/home/devbox/workspace`; they
@@ -99,7 +98,7 @@ provider authentication, so it may be deferred or skipped.
 - Root-managed bundle state lives below `/var/lib/devbox-v2`; the guest
   privilege preflight rejects any sudo privilege, Docker-socket access is
   denied, and no legacy mounts exist in v2.
-- The real `./devbox v2 provision` lifecycle exposed and fixed several
+- The real `./devbox provision` lifecycle exposed and fixed several
   provisioning defects: a literal `''` inside a host single-quoted remote
   payload, an exact-match SSH `IdentityFile` check that broke on `Host *`, a
   validator querying Colima's prefixed source host name, and authorized-keys
@@ -127,7 +126,7 @@ provider authentication, so it may be deferred or skipped.
   the root-only service env file.
 - `VALKEY_PASSWORD` is generated in-guest alongside `POSTGRES_PASSWORD`; the
   legacy `devbox` Compose project, volume, and ports are untouched.
-- `devbox v2 services status` reports container health.
+- `devbox services status` reports container health.
 - Verified on macOS/Colima with `scripts/accept-phase5.sh` (6/6 checks).
 
 ### Phase 6: signed release distribution — complete (PR #18, PR #19)
@@ -178,29 +177,20 @@ Phase 3's stable guest identity and workspace.
 - Legacy `.env`, `rotate`, and host authentication commands remain legacy-only
   and unchanged.
 
-## Phase 8: explicit migration and default promotion
+## Phase 8: v2 is the default
 
 ### Status
 
-In progress. The explicit, opt-in migration command (`devbox v2 migrate
-projects [--force]`) is complete (PR #23), and PostgreSQL migration is
-documented as a manual procedure. Default promotion is outstanding and
-requires separate explicit approval.
+Complete (PR #25). The legacy mounted profile and its legacy-only code were
+removed, so v2 is the default and only path. The interim migration command
+added earlier in this phase was removed along with legacy support; there is no
+longer a legacy profile to migrate from.
 
-### Prerequisite
+### Outcome
 
-Phase 7 completion, signed distribution, documented data and credential
-handling, and successful compatibility validation for legacy users.
-
-### Scope
-
-- Provide an explicit mounted-profile migration command and documented,
-  confirmed export/import procedures for projects, data, and PostgreSQL.
-- Never mount legacy host directories into v2 or silently delete legacy state.
-- Make v2 the default only for new installations after compatibility,
-  migration, rollback, and destructive-lifecycle acceptance tests pass.
-
-### Approval gate
-
-Default promotion requires separate explicit approval. Legacy mode remains
-available for a documented support window and must remain recoverable.
+- The launcher exposes a single command surface (`init`, `install`, `start`,
+  `connect`, `exec`, `status`, `services`, `provision`, `stop`, `destroy`).
+- Host requirements are Colima, OpenSSH, and macOS built-ins only; `.env`
+  parsing no longer needs `jq`.
+- Runtime dependencies common to every mode are covered by a v2-only
+  `scripts/check.sh`.
