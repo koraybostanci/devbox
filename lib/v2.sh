@@ -443,10 +443,11 @@ run_v2_services() {
         . "$secrets"
         set +a
         missing=
-        for variable in POSTGRES_USER POSTGRES_DB POSTGRES_PORT POSTGRES_PASSWORD VALKEY_PASSWORD; do
-            eval "value=\${$variable:-}"
-            [ -n "$value" ] || missing="$missing $variable"
-        done
+        [ -n "${POSTGRES_USER:-}" ] || missing="$missing POSTGRES_USER"
+        [ -n "${POSTGRES_DB:-}" ] || missing="$missing POSTGRES_DB"
+        [ -n "${POSTGRES_PORT:-}" ] || missing="$missing POSTGRES_PORT"
+        [ -n "${POSTGRES_PASSWORD:-}" ] || missing="$missing POSTGRES_PASSWORD"
+        [ -n "${VALKEY_PASSWORD:-}" ] || missing="$missing VALKEY_PASSWORD"
         [ -z "$missing" ] || {
             printf "ERROR: v2 service credentials are missing:%s\\n" "$missing" >&2
             printf "v2 guest config:\\n" >&2
