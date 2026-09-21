@@ -45,8 +45,47 @@ env_value() {
     printf '%s' "$expression"
 }
 
+# Resolve the host configuration file. An explicit DEVBOX_ENV_FILE wins.
+# Release installs live under the data root's releases/ tree, so their
+# configuration must stay outside the versioned directory; checkouts keep the
+# repository-local .env. The release-tree detection compares canonical
+# directories because the launcher reports DEVBOX_DIR physically while the
+# data root may be reached through a symlinked $HOME.
+devbox_env_file() {
+    local directory data_root
+
+    if [ -n "${DEVBOX_ENV_FILE:-}" ]; then
+        printf '%s\n' "$DEVBOX_ENV_FILE"
+        return
+    fi
+    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
+    data_root="$(devbox_data_root)"
+    case "$directory" in
+        "$data_root"/releases/*) printf '%s\n' "$HOME/.config/devbox/env" ;;
+        *) printf '%s\n' "$directory/.env" ;;
+    esac
+}
+
+# Warn once when a release install still carries the superseded in-tree .env.
+devbox_warn_legacy_env_file() {
+    local directory data_root release_env
+
+    [ "${DEVBOX_ENV_FILE_WARNED:-}" = true ] && return 0
+    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
+    data_root="$(devbox_data_root)"
+    case "$directory" in
+        "$data_root"/releases/*) ;;
+        *) return 0 ;;
+    esac
+    release_env="$HOME/.config/devbox/env"
+    if [ -f "$release_env" ] && [ -f "$directory/.env" ]; then
+        DEVBOX_ENV_FILE_WARNED=true
+        warn "ignoring legacy $directory/.env; release configurations live at $release_env"
+    fi
+}
+
 validate_env_file() {
-    local env_file="$DEVBOX_DIR/.env"
+    local env_file="${1:-$(devbox_env_file)}"
     local line key line_number=0
 
     [ -f "$env_file" ] || die "Missing $env_file; run 'devbox init' first"
@@ -66,9 +105,11 @@ validate_env_file() {
 }
 
 load_env() {
-    local key line value_expression
+    local key line value_expression env_file
 
-    validate_env_file
+    devbox_warn_legacy_env_file
+    env_file="$(devbox_env_file)"
+    validate_env_file "$env_file"
     for key in "${ENV_KEYS[@]}"; do
         unset "$key"
     done
@@ -79,13 +120,13 @@ load_env() {
         is_allowed_env_key "$key" || continue
         value_expression="${line#*=}"
         printf -v "$key" '%s' "$(env_value "$value_expression")"
-    done <"$DEVBOX_DIR/.env"
+    done <"$env_file"
 
     if [ -z "${GIT_NAME:-}" ] || [ "$GIT_NAME" = "Your Name" ]; then
-        die "Set GIT_NAME in $DEVBOX_DIR/.env"
+        die "Set GIT_NAME in $env_file"
     fi
     if [ -z "${GIT_EMAIL:-}" ] || [ "$GIT_EMAIL" = "you@personal.com" ]; then
-        die "Set GIT_EMAIL in $DEVBOX_DIR/.env"
+        die "Set GIT_EMAIL in $env_file"
     fi
 
     DEVBOX_CPU="${DEVBOX_CPU:-4}"
@@ -97,13 +138,24 @@ load_env() {
 }
 
 initialize_local_config() {
+    local env_file config_root
+
     check_host_platform
 
-    if [ ! -f "$DEVBOX_DIR/.env" ]; then
-        cp "$DEVBOX_DIR/.env.example" "$DEVBOX_DIR/.env"
-        chmod 600 "$DEVBOX_DIR/.env"
-        log "Created $DEVBOX_DIR/.env"
-        die "Fill in $DEVBOX_DIR/.env, then run 'devbox init' again"
+    devbox_warn_legacy_env_file
+    env_file="$(devbox_env_file)"
+    if [ ! -f "$env_file" ]; then
+        [ -f "$DEVBOX_DIR/.env.example" ] ||
+            die "Missing $DEVBOX_DIR/.env.example; reinstall devbox"
+        config_root="$(dirname "$env_file")"
+        if [ ! -d "$config_root" ]; then
+            mkdir -p "$config_root"
+            chmod 700 "$config_root"
+        fi
+        cp "$DEVBOX_DIR/.env.example" "$env_file"
+        chmod 600 "$env_file"
+        log "Created $env_file"
+        die "Fill in $env_file, then run 'devbox init' again"
     fi
 
     load_env
