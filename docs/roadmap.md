@@ -23,7 +23,7 @@ or skipped without blocking any later phase.
 | Phase 5: PostgreSQL and Valkey | Complete | Phase 4a | PR #16 |
 | Phase 6: signed release distribution | Complete | Phase 5 | PR #18, #19 |
 | Phase 7: v2 host dependencies removed | Complete | Phase 6 | PR #21 |
-| Phase 8: migration and default promotion | Not started | Phase 7 | — |
+| Phase 8: migration and default promotion | In progress | Phase 7 | PR #23 |
 
 Phase 1 established the isolated-profile proof of concept. It is not a change
 to the legacy profile or its default behavior.
@@ -169,6 +169,10 @@ the legacy workflow is unchanged.
 
 **Purpose.** Offer a deliberate, reversible migration path and promote v2 to
 the default only when the migration criteria are satisfied.
+
+**Status.** In progress. The explicit, opt-in migration command is complete
+(PR #23). Default promotion is outstanding and requires separate explicit
+approval.
 
 **Compatibility guarantee.** Migration is explicit and opt-in until default
 promotion is separately approved. Legacy profiles, mounts, SSH alias, data,
