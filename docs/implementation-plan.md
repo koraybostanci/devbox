@@ -59,9 +59,11 @@ Phase 3 (guest `devbox` identity and workspace) is complete and merged as
 PR #10, Phase 4a (guest-local configuration and secret generation) as PR #14,
 Phase 5 (root-managed PostgreSQL and Valkey) as PR #16, Phase 6 (signed release
 distribution) as PR #18 and PR #19, and Phase 7 (remove v2 host runtime
-dependencies) as PR #21. Phase 4b (optional provider authentication) depends
-only on Phase 3 and is deliberately off the critical path: no later phase
-requires provider authentication, so it may be deferred or skipped.
+dependencies) as PR #21. Phase 8's explicit migration tooling is complete as
+PR #23; its default promotion remains outstanding and requires separate
+explicit approval. Phase 4b (optional provider authentication) depends only on
+Phase 3 and is deliberately off the critical path: no later phase requires
+provider authentication, so it may be deferred or skipped.
 
 ## Completed phases
 
@@ -177,6 +179,13 @@ Phase 3's stable guest identity and workspace.
   and unchanged.
 
 ## Phase 8: explicit migration and default promotion
+
+### Status
+
+In progress. The explicit, opt-in migration command (`devbox v2 migrate
+projects [--force]`) is complete (PR #23), and PostgreSQL migration is
+documented as a manual procedure. Default promotion is outstanding and
+requires separate explicit approval.
 
 ### Prerequisite
 
