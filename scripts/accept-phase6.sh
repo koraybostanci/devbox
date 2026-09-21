@@ -77,7 +77,18 @@ cp "$archive" "$work/tampered.tar.gz"
 printf 'x' >>"$work/tampered.tar.gz"
 refute "tampered archive fails verification" ./scripts/release.sh verify "$work/tampered.tar.gz"
 
-note "release signing and signature verification are not enabled yet"
+echo
+echo "== signing =="
+key="$work/signing-key.pem"
+openssl ecparam -name prime256v1 -genkey -noout -out "$key"
+openssl ec -in "$key" -pubout -out "$work/signing-key.pub.pem" 2>/dev/null
+check "release signs" ./scripts/release.sh sign "$archive" --key "$key"
+check "signature verifies" env DEVBOX_RELEASE_PUBKEY="$work/signing-key.pub.pem" \
+    ./scripts/release.sh verify "$archive"
+printf 'tampered\n' >dist/SHA256SUMS.sig
+refute "tampered signature is rejected" env DEVBOX_RELEASE_PUBKEY="$work/signing-key.pub.pem" \
+    ./scripts/release.sh verify "$archive"
+note "real releases require the committed release-signing public key and the RELEASE_SIGNING_KEY secret"
 
 echo
 printf 'Phase 6 acceptance: %d passed, %d failed, %d warning(s)\n' "$pass" "$fail" "$warn"

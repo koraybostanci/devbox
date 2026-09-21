@@ -2,14 +2,15 @@
 # Build, verify, and install versioned devbox release archives.
 #
 #   scripts/release.sh build <version>
+#   scripts/release.sh sign <archive.tar.gz> --key <private.pem>
 #   scripts/release.sh verify <archive.tar.gz>
 #   scripts/release.sh install <archive.tar.gz> [--force]
 #   scripts/release.sh list
 #
-# Releases are checksummed and carry a manifest; archives are extracted with
-# path-traversal protection before anything is installed. Signing and
-# signature verification are intentionally not wired up yet (Phase 6 hard
-# prerequisite: a release-signing key decision).
+# Releases are checksummed, carry a manifest, and are signed with the release
+# signing key. Archives are extracted with path-traversal protection before
+# anything is installed. Verification checks the signature against the
+# committed public key (override with DEVBOX_RELEASE_PUBKEY).
 
 set -Eeuo pipefail
 
@@ -80,6 +81,8 @@ build_release() {
     )
     printf '%s  %s\n' "$(hash_of "$dist/devbox-$version.tar.gz")" \
         "devbox-$version.tar.gz" >"$dist/SHA256SUMS"
+    # A fresh build is unsigned; drop any signature for a previous build.
+    rm -f "$dist/SHA256SUMS.sig"
     rm -rf "$staging"
     printf 'Built %s\n' "$dist/devbox-$version.tar.gz"
 }
@@ -102,8 +105,24 @@ check_archive_paths() {
     printf '%s\n' "$top"
 }
 
+release_public_key() {
+    printf '%s\n' "${DEVBOX_RELEASE_PUBKEY:-$ROOT/release-signing-key.pub.pem}"
+}
+
+sign_release() {
+    local archive="$1" key="$2" dir sums
+    [ -f "$archive" ] || die "archive not found: $archive"
+    [ -f "$key" ] || die "signing key not found: $key"
+    dir="$(cd "$(dirname "$archive")" && pwd)"
+    sums="$dir/SHA256SUMS"
+    [ -f "$sums" ] || die "missing SHA256SUMS next to $(basename "$archive")"
+    openssl dgst -sha256 -sign "$key" -out "$sums.sig" "$sums" ||
+        die "signing failed"
+    printf 'Signed %s\n' "$sums.sig"
+}
+
 verify_release() {
-    local archive="$1" dir file sums expected actual top
+    local archive="$1" dir file sums expected actual top signature public_key
     [ -f "$archive" ] || die "archive not found: $archive"
     dir="$(cd "$(dirname "$archive")" && pwd)"
     file="$(basename "$archive")"
@@ -113,6 +132,17 @@ verify_release() {
     [ -n "$expected" ] || die "SHA256SUMS has no entry for $file"
     actual="$(hash_of "$archive")"
     [ "$expected" = "$actual" ] || die "checksum mismatch for $file"
+
+    signature="$dir/SHA256SUMS.sig"
+    public_key="$(release_public_key)"
+    if [ -f "$signature" ]; then
+        [ -f "$public_key" ] ||
+            die "archive is signed but no public key found at $public_key"
+        openssl dgst -sha256 -verify "$public_key" -signature "$signature" "$sums" \
+            >/dev/null 2>&1 || die "release signature verification failed for $file"
+    elif [ -f "$public_key" ]; then
+        printf 'WARN: %s has no signature (SHA256SUMS.sig)\n' "$file" >&2
+    fi
 
     top="$(check_archive_paths "$archive")"
 
@@ -162,6 +192,11 @@ case "${1:-}" in
         [ $# -eq 2 ] || die "Usage: scripts/release.sh build <version>"
         build_release "$2"
         ;;
+    sign)
+        [ $# -eq 4 ] && [ "$3" = "--key" ] ||
+            die "Usage: scripts/release.sh sign <archive.tar.gz> --key <private.pem>"
+        sign_release "$2" "$4"
+        ;;
     verify)
         [ $# -eq 2 ] || die "Usage: scripts/release.sh verify <archive.tar.gz>"
         top="$(verify_release "$2")"
@@ -178,6 +213,6 @@ case "${1:-}" in
         list_releases
         ;;
     *)
-        die "Usage: scripts/release.sh <build|verify|install|list> ..."
+        die "Usage: scripts/release.sh <build|sign|verify|install|list> ..."
         ;;
 esac
