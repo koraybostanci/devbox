@@ -31,10 +31,10 @@ bash -n "${shell_files[@]}"
 # --- the legacy mounted profile is gone ------------------------------------
 for legacy_path in \
     lib/colima.sh lib/containers.sh lib/doctor.sh lib/guest.sh \
-    lib/isolation-poc.sh colima.yaml provision/config/containers; do
+    lib/isolation-poc.sh provision/config/containers; do
     [ ! -e "$legacy_path" ] || fail "legacy path still present: $legacy_path"
 done
-if grep -q 'migrate' lib/v2.sh; then
+if grep -q 'migrate' lib/devbox.sh; then
     fail "obsolete legacy migration command still present"
 fi
 
@@ -56,13 +56,13 @@ fi
 [ -f provision/config/guest/devbox ]
 bash -n provision/config/guest/devbox
 grep -q 'config/guest/devbox' provision/scripts/system.sh
-grep -q 'v2_guest_interactive' lib/v2.sh
+grep -q 'devbox_guest_interactive' lib/devbox.sh
 companion_home="$validation_root/guest-home"
-mkdir -p "$companion_home/.config/devbox-v2"
+mkdir -p "$companion_home/.config/devbox"
 printf 'export POSTGRES_USER=dev\nexport POSTGRES_DB=dev\nexport POSTGRES_PORT=15432\n' \
-    >"$companion_home/.config/devbox-v2/config"
+    >"$companion_home/.config/devbox/config"
 printf 'export POSTGRES_PASSWORD=test\nexport VALKEY_PASSWORD=test\n' \
-    >"$companion_home/.config/devbox-v2/secrets"
+    >"$companion_home/.config/devbox/secrets"
 companion_status="$(HOME="$companion_home" PATH=/nonexistent "$(command -v bash)" \
     provision/config/guest/devbox auth status)" || fail "companion 'auth status' failed"
 printf '%s\n' "$companion_status" | grep -q '^github: not configured$' ||
@@ -74,9 +74,9 @@ companion_db="$(HOME="$companion_home" bash provision/config/guest/devbox db inf
 printf '%s\n' "$companion_db" | grep -q 'postgres port: 15432' ||
     fail "companion did not report PostgreSQL settings"
 
-# --- v2 must not need host jq or yq ----------------------------------------
-if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/v2.sh lib/config.sh; then
-    fail "v2 must not require host jq or yq"
+# --- devbox must not need host jq or yq ----------------------------------------
+if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/devbox.sh lib/config.sh; then
+    fail "devbox must not require host jq or yq"
 fi
 
 # --- prohibited provisioning patterns --------------------------------------
@@ -86,65 +86,65 @@ if grep -R -E -- \
     fail "prohibited provisioning pattern found"
 fi
 
-# --- v2 remote payloads must be valid Bash ---------------------------------
-v2_home="$validation_root/home"
-mkdir -p "$v2_home"
+# --- devbox remote payloads must be valid Bash ---------------------------------
+devbox_home="$validation_root/home"
+mkdir -p "$devbox_home"
 payloads_dir="$validation_root/payloads"
 mkdir -p "$payloads_dir"
-HOME="$v2_home" V2_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
-    source "$ROOT/lib/v2.sh"
-    v2_host_ssh_user() { printf "admin\n"; }
-    v2_host_public_key() {
+    source "$ROOT/lib/devbox.sh"
+    devbox_host_ssh_user() { printf "admin\n"; }
+    devbox_host_public_key() {
         printf "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test\n"
     }
-    v2_sshd_authorized_keys_config() { printf "AuthorizedKeysFile /etc/ssh/authorized_keys/%%u\n"; }
+    devbox_sshd_authorized_keys_config() { printf "AuthorizedKeysFile /etc/ssh/authorized_keys/%%u\n"; }
     capture_payloads() {
         local i j target
         for ((i = 1; i <= $#; i++)); do
             if [ "${!i}" = "-c" ]; then
                 j=$((i + 1))
-                target="$(mktemp "$V2_REMOTE_PAYLOADS_DIR/payload.XXXXXX")"
+                target="$(mktemp "$DEVBOX_REMOTE_PAYLOADS_DIR/payload.XXXXXX")"
                 printf "%s" "${!j}" >"$target"
             fi
         done
         return 0
     }
-    v2_admin_guest() { capture_payloads "$@"; }
-    v2_as_guest() { capture_payloads "$@"; }
-    authorize_v2_host_key || true
-    validate_v2_guest_identity || true
-    validate_v2_guest_privileges || true
-    remove_v2_managed_guest_ssh_authorization || true
-' || fail "v2 remote payload capture failed"
+    devbox_admin_guest() { capture_payloads "$@"; }
+    devbox_as_guest() { capture_payloads "$@"; }
+    authorize_devbox_host_key || true
+    validate_devbox_guest_identity || true
+    validate_devbox_guest_privileges || true
+    remove_devbox_managed_guest_ssh_authorization || true
+' || fail "devbox remote payload capture failed"
 payload_count=0
 for payload in "$payloads_dir"/payload.*; do
     [ -f "$payload" ] || continue
     payload_count=$((payload_count + 1))
-    bash -n "$payload" || fail "a v2 remote payload is not valid Bash: $payload"
+    bash -n "$payload" || fail "a devbox remote payload is not valid Bash: $payload"
 done
-[ "$payload_count" -ge 3 ] || fail "expected at least 3 v2 remote payloads, captured $payload_count"
+[ "$payload_count" -ge 3 ] || fail "expected at least 3 devbox remote payloads, captured $payload_count"
 
-# --- v2 privilege parser behavior ------------------------------------------
-v2_privileges_remote="$validation_root/privileges.sh"
-HOME="$v2_home" V2_REMOTE="$v2_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+# --- devbox privilege parser behavior ------------------------------------------
+devbox_privileges_remote="$validation_root/privileges.sh"
+HOME="$devbox_home" DEVBOX_REMOTE="$devbox_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
-    source "$ROOT/lib/v2.sh"
-    v2_admin_guest() {
+    source "$ROOT/lib/devbox.sh"
+    devbox_admin_guest() {
         [ "$1" = sudo ] && [ "$2" = bash ] && [ "$3" = -c ] || exit 1
-        printf "%s" "$4" >"$V2_REMOTE"
+        printf "%s" "$4" >"$DEVBOX_REMOTE"
     }
-    validate_v2_guest_privileges
-' || fail "v2 privilege parser capture failed"
-bash -n "$v2_privileges_remote" || fail "v2 privilege parser is not valid Bash"
+    validate_devbox_guest_privileges
+' || fail "devbox privilege parser capture failed"
+bash -n "$devbox_privileges_remote" || fail "devbox privilege parser is not valid Bash"
 
-HOME="$v2_home" V2_REMOTE="$v2_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+HOME="$devbox_home" DEVBOX_REMOTE="$devbox_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
-    source "$ROOT/lib/v2.sh"
-    v2_admin_guest() { "$@"; }
+    source "$ROOT/lib/devbox.sh"
+    devbox_admin_guest() { "$@"; }
     sudo() {
         case "$1" in
             bash) shift; command bash "$@" ;;
@@ -161,13 +161,13 @@ HOME="$v2_home" V2_REMOTE="$v2_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT
         esac
     }
     export -f sudo
-    validate_v2_guest_privileges
-' || fail "v2 privilege parser rejected the no-sudo guest output"
-HOME="$v2_home" V2_REMOTE="$v2_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+    validate_devbox_guest_privileges
+' || fail "devbox privilege parser rejected the no-sudo guest output"
+HOME="$devbox_home" DEVBOX_REMOTE="$devbox_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
-    source "$ROOT/lib/v2.sh"
-    v2_admin_guest() { "$@"; }
+    source "$ROOT/lib/devbox.sh"
+    devbox_admin_guest() { "$@"; }
     sudo() {
         case "$1" in
             bash) shift; command bash "$@" ;;
@@ -180,31 +180,31 @@ HOME="$v2_home" V2_REMOTE="$v2_privileges_remote" ROOT="$ROOT" DEVBOX_DIR="$ROOT
         esac
     }
     export -f sudo
-    ! validate_v2_guest_privileges
-' || fail "v2 privilege parser accepted sudo privileges"
+    ! validate_devbox_guest_privileges
+' || fail "devbox privilege parser accepted sudo privileges"
 
-# --- v2 identity validator --------------------------------------------------
-v2_identity_script="$validation_root/identity.sh"
-HOME="$v2_home" V2_IDENTITY="$v2_identity_script" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+# --- devbox identity validator --------------------------------------------------
+devbox_identity_script="$validation_root/identity.sh"
+HOME="$devbox_home" DEVBOX_IDENTITY="$devbox_identity_script" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
-    source "$ROOT/lib/v2.sh"
-    v2_admin_guest() {
+    source "$ROOT/lib/devbox.sh"
+    devbox_admin_guest() {
         [ "$1" = bash ] && [ "$2" = -c ] || exit 1
-        printf "%s" "$3" >"$V2_IDENTITY"
+        printf "%s" "$3" >"$DEVBOX_IDENTITY"
     }
-    validate_v2_guest_identity
+    validate_devbox_guest_identity
 ' || true
-bash -n "$v2_identity_script" || fail "v2 identity validator is not valid Bash"
+bash -n "$devbox_identity_script" || fail "devbox identity validator is not valid Bash"
 
 # --- managed services -------------------------------------------------------
 if docker compose version >/dev/null 2>&1; then
     POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
         VALKEY_PASSWORD=test VALKEY_PORT=16379 \
         docker compose -f provision/config/services/compose.yaml config -q ||
-        fail "v2 service definition is invalid"
+        fail "devbox service definition is invalid"
     grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
-        fail "v2 services must publish to loopback only"
+        fail "devbox services must publish to loopback only"
 else
     printf 'WARN: docker compose is unavailable; skipping service-definition validation\n' >&2
 fi

@@ -5,7 +5,7 @@ trap 'printf "ERROR: system provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
 export DEBIAN_FRONTEND=noninteractive
 
-v2_guest_identity_is_safe() {
+devbox_guest_identity_is_safe() {
     local guest_user="$1"
     local guest_uid="$2"
     local guest_gid="$3"
@@ -26,8 +26,8 @@ v2_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
-configure_v2_guest_identity() {
-    local guest_user="${DEVBOX_V2_GUEST_USER:-devbox}"
+configure_devbox_guest_identity() {
+    local guest_user="${DEVBOX_GUEST_USER:-devbox}"
     local guest_home="/home/$guest_user"
     local workspace="$guest_home/workspace"
     local passwd_entry
@@ -44,7 +44,7 @@ configure_v2_guest_identity() {
     local existing_user=false
 
     [ "$guest_user" = devbox ] || {
-        printf 'ERROR: invalid v2 guest user\n' >&2
+        printf 'ERROR: invalid devbox guest user\n' >&2
         return 1
     }
     zsh_path="$(command -v zsh)"
@@ -61,31 +61,31 @@ configure_v2_guest_identity() {
     group_gid="$(printf '%s\n' "$group_entry" | cut -d: -f3)"
     group_members="$(printf '%s\n' "$group_entry" | cut -d: -f4)"
     group_names="$(id -nG "$guest_user")" || {
-        printf 'ERROR: v2 guest user group membership is unavailable\n' >&2
+        printf 'ERROR: devbox guest user group membership is unavailable\n' >&2
         return 1
     }
     uid_matches="$(getent passwd | awk -F: -v uid="$guest_uid" '$3 == uid { count++ } END { print count + 0 }')"
     gid_matches="$(getent group | awk -F: -v gid="$guest_gid" '$3 == gid { count++ } END { print count + 0 }')"
-    v2_guest_identity_is_safe \
+    devbox_guest_identity_is_safe \
         "$guest_user" "$guest_uid" "$guest_gid" "$group_name" "$group_gid" "$group_members" "$group_names" \
         "$uid_matches" "$gid_matches" || {
         if [ "$existing_user" = true ]; then
-            printf 'ERROR: existing v2 guest user has an unsafe identity or group\n' >&2
+            printf 'ERROR: existing devbox guest user has an unsafe identity or group\n' >&2
         else
-            printf 'ERROR: new v2 guest user has an unsafe identity or group\n' >&2
+            printf 'ERROR: new devbox guest user has an unsafe identity or group\n' >&2
         fi
         return 1
     }
     if [ "$existing_user" = true ]; then
         [ "$(printf '%s\n' "$passwd_entry" | cut -d: -f6)" = "$guest_home" ] || {
-            printf 'ERROR: existing v2 guest user has an unexpected home\n' >&2
+            printf 'ERROR: existing devbox guest user has an unexpected home\n' >&2
             return 1
         }
         usermod --shell "$zsh_path" "$guest_user"
     fi
 
     [ ! -L "$guest_home" ] && [ -d "$guest_home" ] || {
-        printf 'ERROR: v2 guest home must be a real directory: %s\n' "$guest_home" >&2
+        printf 'ERROR: devbox guest home must be a real directory: %s\n' "$guest_home" >&2
         return 1
     }
     sudo -u "$guest_user" -- env HOME="$guest_home" PWD="$guest_home" bash -c '
@@ -101,7 +101,7 @@ configure_v2_guest_identity() {
         mkdir -p "$workspace"
         chmod 700 "$HOME" "$workspace"
     ' _ "$guest_home" "$workspace" || {
-        printf 'ERROR: v2 guest workspace must be a real directory: %s\n' "$workspace" >&2
+        printf 'ERROR: devbox guest workspace must be a real directory: %s\n' "$workspace" >&2
         return 1
     }
 }
@@ -161,6 +161,6 @@ for package in "${packages[@]}"; do
     }
 done
 
-configure_v2_guest_identity
+configure_devbox_guest_identity
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox

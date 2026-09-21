@@ -18,7 +18,7 @@ source "$BOOTSTRAP_DIR/lib/common.sh"
 
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
 source "$DEVBOX_DIR/lib/config.sh"
-source "$DEVBOX_DIR/lib/v2.sh"
+source "$DEVBOX_DIR/lib/devbox.sh"
 
 usage() {
     cat <<'EOF'
@@ -79,7 +79,7 @@ case "$cmd" in
         initialize_local_config
         ;;
     start | provision | connect | exec | status | services | auth | db | stop | destroy)
-        run_v2 "$cmd" "$@"
+        run_devbox "$cmd" "$@"
         ;;
     *)
         [ -n "$cmd" ] && echo "Unknown command: $cmd" && echo ""

@@ -33,19 +33,17 @@ On an account without devbox state:
 ```
 
 Confirm the host has no devbox mounts and that `devbox` on the guest cannot
-run Docker or read `/var/lib/devbox-v2/services/env`.
+run Docker or read `/var/lib/devbox/services/env`.
 
 ## Acceptance
 
-Run the harnesses and confirm they pass:
+Confirm on macOS:
 
-```sh
-bash scripts/accept-phase3.sh
-bash scripts/accept-phase4a.sh
-bash scripts/accept-phase5.sh
-bash scripts/accept-phase6.sh
-bash scripts/accept-phase7.sh
-```
+- `scripts/check.sh` passes and CI is green.
+- `devbox start`, `devbox status`, `devbox connect`, `devbox services status`
+  work from a clean account with only Colima/OpenSSH/macOS built-ins.
+- `devbox auth status` and `devbox db info` report correctly.
+- `devbox destroy` removes the VM and its runtime data.
 
 ## Release artifacts
 
