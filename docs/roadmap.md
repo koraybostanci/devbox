@@ -12,6 +12,7 @@ promotion.
 |---|---|---|
 | OpenCode v2 | Complete | PR #5 |
 | Phase 1: isolation POC | Complete | PR #6 |
+| Phase 2: Experimental no-mount v2 profile and bundle | Complete | PR #8 |
 
 Phase 1 established the isolated-profile proof of concept. It is not a change
 to the legacy profile or its default behavior.
@@ -36,25 +37,6 @@ Every phase, including a follow-up after a merged phase, uses this process:
    process.
 
 ## Remaining phases
-
-### Phase 2: Experimental no-mount v2 profile and bundle
-
-**Purpose.** Deliver an opt-in v2 profile and distributable bundle that starts
-without host project or data mounts, building on the isolation POC.
-
-**Status.** Implementation is in progress and remains unmerged. The no-mount
-profile is independent of Phase 1's unresolved Colima `user-v2` network
-limitation; it makes no strict-isolation claim.
-
-**Compatibility guarantee.** The existing `devbox` profile, its mounts,
-`devbox` SSH alias, persisted data, and commands remain unchanged; the v2
-profile is separate and explicitly selected.
-
-**Prerequisites.** OpenCode v2 and the completed Phase 1 isolation POC.
-
-**Exit criteria.** A user can install and run the documented experimental v2
-bundle with no host mounts, while the legacy profile continues to start and
-operate unchanged.
 
 ### Phase 3: Guest devbox identity and workspace
 
