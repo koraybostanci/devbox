@@ -969,17 +969,6 @@ stage_devbox_host_ssh_config() {
     local config="$2"
     local temporary="$3"
     local begin_marker='# BEGIN devbox' end_marker='# END devbox'
-    local begin_count end_count
-
-    if [ -e "$config" ]; then
-        begin_count="$(grep -Fxc "$begin_marker" "$config" || true)"
-        end_count="$(grep -Fxc "$end_marker" "$config" || true)"
-    else
-        begin_count=0
-        end_count=0
-    fi
-    [ "$begin_count" -eq "$end_count" ] && [ "$begin_count" -le 1 ] ||
-        return 1
 
     if [ -e "$config" ]; then
         awk -v managed_config="$managed_config" '
@@ -991,15 +980,24 @@ stage_devbox_host_ssh_config() {
                 print ""
                 inserted = 1
             }
-            $0 == "# BEGIN devbox" { skipping = 1; next }
-            skipping && $0 == "# END devbox" { skipping = 0; next }
+            /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+devbox[[:space:]]*$/ {
+                if (skipping) bad = 1
+                skipping = 1
+                next
+            }
+            /^[[:space:]]*#+[[:space:]]*END[[:space:]]+devbox[[:space:]]*$/ {
+                if (!skipping) bad = 1
+                skipping = 0
+                next
+            }
             skipping { next }
             !inserted && /^[[:space:]]*([Hh][Oo][Ss][Tt]|[Mm][Aa][Tt][Cc][Hh])[[:space:]]/ {
                 insert_managed_config()
             }
             { print }
             END {
-                if (skipping) exit 1
+                if (skipping) bad = 1
+                if (bad) exit 1
                 if (!inserted) insert_managed_config()
             }
         ' "$config" >"$temporary" || return 1
@@ -1013,24 +1011,33 @@ stage_devbox_host_ssh_config() {
 }
 
 # Remove the managed devbox block from a source configuration into a
-# destination file. Returns nonzero when the markers are duplicated,
-# unterminated, or the source cannot be read; the caller discards the
-# destination on failure.
+# destination file. Markers are recognized tolerantly (leading whitespace,
+# extra '#', trailing whitespace), so duplicate and legacy-spelled blocks are
+# all removed and the result is normalized. Returns nonzero when the structure
+# is malformed -- a BEGIN inside a block (nested), an END outside a block
+# (orphan), or EOF while inside a block (unterminated) -- or when the source
+# cannot be read; the caller discards the destination on failure.
 strip_devbox_ssh_block() {
     local config="$1" destination="$2"
-    local begin_marker='# BEGIN devbox' end_marker='# END devbox'
-    local begin_count end_count
 
     [ -e "$config" ] || return 1
-    begin_count="$(grep -Fxc "$begin_marker" "$config" || true)"
-    end_count="$(grep -Fxc "$end_marker" "$config" || true)"
-    [ "$begin_count" -eq "$end_count" ] && [ "$begin_count" -le 1 ] || return 1
     awk '
-        $0 == "# BEGIN devbox" { skipping = 1; next }
-        skipping && $0 == "# END devbox" { skipping = 0; next }
+        /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+devbox[[:space:]]*$/ {
+            if (skipping) bad = 1
+            skipping = 1
+            next
+        }
+        /^[[:space:]]*#+[[:space:]]*END[[:space:]]+devbox[[:space:]]*$/ {
+            if (!skipping) bad = 1
+            skipping = 0
+            next
+        }
         skipping { next }
         { print }
-        END { if (skipping) exit 1 }
+        END {
+            if (skipping) bad = 1
+            if (bad) exit 1
+        }
     ' "$config" >"$destination"
 }
 

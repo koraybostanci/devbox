@@ -382,6 +382,12 @@ assert_single_pair() {
     [ "$(begin_count "$1")" -eq 1 ] || fail "expected exactly one BEGIN marker in $1"
     [ "$(end_count "$1")" -eq 1 ] || fail "expected exactly one END marker in $1"
 }
+assert_managed_content() {
+    local staged="$1" description="$2"
+
+    sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$staged" | sed '1d;$d' >"$staged.block"
+    cmp -s "$managed" "$staged.block" || fail "$description did not embed the managed content"
+}
 
 managed="$unit_root/managed.conf"
 cat >"$managed" <<'CONFIG'
@@ -471,15 +477,60 @@ awk '
 ' "$unit_root/staged-match" ||
     fail "the managed block was not inserted before the first Match entry"
 
-# Malformed markers are refused.
+# Duplicate blocks and legacy marker spellings (indented, extra '#', trailing
+# whitespace) are normalized to exactly one managed block.
+printf '# head\n# BEGIN devbox\nHost stale-one\n# END devbox\n# middle\n# BEGIN devbox\nHost stale-two\n# END devbox\n# tail\n' \
+    >"$unit_root/two-blocks"
+printf '# head\n  # BEGIN devbox\nHost stale\n\t# END devbox\n# tail\n' >"$unit_root/indented-markers"
+printf '# head\n# BEGIN devbox \nHost stale\n# END devbox\t\n# tail\n' >"$unit_root/trailing-space"
+printf '# head\n## BEGIN devbox\nHost stale\n## END devbox\n# tail\n' >"$unit_root/double-hash"
+printf '# head\n## BEGIN devbox \nHost stale\n  # END devbox\n# tail\n' >"$unit_root/mixed-markers"
+
+for normalize_case in two-blocks indented-markers trailing-space double-hash mixed-markers; do
+    stage_devbox_host_ssh_config "$managed" "$unit_root/$normalize_case" \
+        "$unit_root/staged-$normalize_case" ||
+        fail "normalizing $normalize_case markers failed"
+    assert_single_pair "$unit_root/staged-$normalize_case"
+    assert_managed_content "$unit_root/staged-$normalize_case" "$normalize_case"
+    grep -qx '# head' "$unit_root/staged-$normalize_case" ||
+        fail "$normalize_case did not preserve the leading line"
+    grep -qx '# tail' "$unit_root/staged-$normalize_case" ||
+        fail "$normalize_case did not preserve the trailing line"
+    if grep -q 'Host stale' "$unit_root/staged-$normalize_case"; then
+        fail "$normalize_case kept the stale managed content"
+    fi
+done
+grep -qx '# middle' "$unit_root/staged-two-blocks" ||
+    fail "two-block normalization did not preserve the line between the blocks"
+
+# A single managed block is still inserted before the first Host/Match entry
+# when the normalized blocks precede one.
+printf '# head\n# BEGIN devbox\nHost stale\n# END devbox\n# BEGIN devbox\nHost stale\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/two-blocks-host"
+stage_devbox_host_ssh_config "$managed" "$unit_root/two-blocks-host" "$unit_root/staged-two-blocks-host" ||
+    fail "normalizing two blocks before a Host entry failed"
+assert_single_pair "$unit_root/staged-two-blocks-host"
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host other$/ { exit !inside }
+' "$unit_root/staged-two-blocks-host" ||
+    fail "the normalized block was not inserted before the first Host entry"
+[ "$(grep -c '^Host other$' "$unit_root/staged-two-blocks-host")" -eq 1 ] ||
+    fail "the first Host entry was duplicated during normalization"
+
+# Genuinely malformed structure is refused: an orphan END, a nested BEGIN, and
+# an unterminated BEGIN.
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/orphan-end"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/orphan-end" "$unit_root/staged-orphan-end"; then
+    fail "an orphan END marker was accepted"
+fi
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n# tail\n' >"$unit_root/nested-begin"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/nested-begin" "$unit_root/staged-nested-begin"; then
+    fail "a nested BEGIN marker was accepted"
+fi
 printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/missing-end"
 if stage_devbox_host_ssh_config "$managed" "$unit_root/missing-end" "$unit_root/staged-missing-end"; then
     fail "a missing END marker was accepted"
-fi
-printf '# BEGIN devbox\n# END devbox\n# BEGIN devbox\nHost devbox\n# END devbox\n' \
-    >"$unit_root/duplicate-begin"
-if stage_devbox_host_ssh_config "$managed" "$unit_root/duplicate-begin" "$unit_root/staged-duplicate"; then
-    fail "duplicate BEGIN markers were accepted"
 fi
 
 # strip_devbox_ssh_block removes only the managed block.
@@ -490,8 +541,53 @@ strip_devbox_ssh_block "$unit_root/strip-source" "$unit_root/strip-out" ||
 printf 'Host keep\n  HostName keep.example.com\nHost tail\n' >"$unit_root/strip-expected"
 cmp -s "$unit_root/strip-expected" "$unit_root/strip-out" ||
     fail "strip_devbox_ssh_block did not preserve every other line"
+
+# Every well-formed block is removed, including duplicates and legacy marker
+# spellings.
+printf 'Host keep\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost middle\n# BEGIN devbox\nHost devbox\n  Port 2\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-duplicate"
+strip_devbox_ssh_block "$unit_root/strip-duplicate" "$unit_root/strip-duplicate-out" ||
+    fail "strip_devbox_ssh_block rejected duplicate well-formed blocks"
+printf 'Host keep\nHost middle\nHost tail\n' >"$unit_root/strip-duplicate-expected"
+cmp -s "$unit_root/strip-duplicate-expected" "$unit_root/strip-duplicate-out" ||
+    fail "strip_devbox_ssh_block did not remove every duplicate block"
+printf 'Host keep\n \t## BEGIN devbox \nHost devbox\n## END devbox\t\nHost tail\n' >"$unit_root/strip-legacy"
+strip_devbox_ssh_block "$unit_root/strip-legacy" "$unit_root/strip-legacy-out" ||
+    fail "strip_devbox_ssh_block rejected legacy marker spellings"
+printf 'Host keep\nHost tail\n' >"$unit_root/strip-legacy-expected"
+cmp -s "$unit_root/strip-legacy-expected" "$unit_root/strip-legacy-out" ||
+    fail "strip_devbox_ssh_block did not remove a legacy-spelled block"
+printf 'Host keep\n  # BEGIN devbox\nHost devbox\n# END devbox \nHost tail\n' >"$unit_root/strip-indented"
+strip_devbox_ssh_block "$unit_root/strip-indented" "$unit_root/strip-indented-out" ||
+    fail "strip_devbox_ssh_block rejected an indented marker"
+cmp -s "$unit_root/strip-legacy-expected" "$unit_root/strip-indented-out" ||
+    fail "strip_devbox_ssh_block did not remove an indented block"
+
+# Malformed structure is refused.
 if strip_devbox_ssh_block "$unit_root/missing-end" "$unit_root/strip-missing-end"; then
     fail "strip_devbox_ssh_block accepted an unterminated BEGIN marker"
+fi
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/strip-orphan-end"
+if strip_devbox_ssh_block "$unit_root/strip-orphan-end" "$unit_root/strip-orphan-end-out"; then
+    fail "strip_devbox_ssh_block accepted an orphan END marker"
+fi
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n# tail\n' >"$unit_root/strip-nested"
+if strip_devbox_ssh_block "$unit_root/strip-nested" "$unit_root/strip-nested-out"; then
+    fail "strip_devbox_ssh_block accepted nested BEGIN markers"
+fi
+
+# A failed strip makes remove_devbox_ssh_config discard the destination it
+# staged and leave the original configuration untouched.
+mkdir -p "$unit_root/remove-home/.ssh"
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/remove-home/.ssh/config"
+cp "$unit_root/remove-home/.ssh/config" "$unit_root/remove-home/config-original"
+if (HOME="$unit_root/remove-home" remove_devbox_ssh_config) 2>"$unit_root/remove-failure.log"; then
+    fail "remove_devbox_ssh_config accepted an orphan END marker"
+fi
+cmp -s "$unit_root/remove-home/config-original" "$unit_root/remove-home/.ssh/config" ||
+    fail "remove_devbox_ssh_config modified the config after a failed strip"
+if compgen -G "$unit_root/remove-home/.ssh/.config.*" >/dev/null; then
+    fail "remove_devbox_ssh_config left a discarded destination behind"
 fi
 
 # The legacy mirror is removed only when it is a devbox-managed regular file,
