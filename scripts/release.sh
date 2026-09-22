@@ -340,8 +340,9 @@ verify_release() {
 # path. The source is the versioned release directory itself; the activation
 # symlink is never consulted.
 migrate_release_env() {
-    local source_dir="$1" stable="$HOME/.config/devbox/env" config_root legacy
+    local source_dir="$1" stable config_root legacy
 
+    stable="$(devbox_host_env_file)"
     legacy="$source_dir/.env"
     [ -f "$legacy" ] && [ ! -L "$legacy" ] || return 0
     if [ -e "$stable" ] || [ -L "$stable" ]; then

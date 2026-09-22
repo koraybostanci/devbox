@@ -513,10 +513,54 @@ if "$ROOT/scripts/release.sh" build 9.9.9 >/dev/null 2>&1; then
 fi
 
 tar -tzf "$release_archive" >"$release_root/archive.list"
-for release_entry in .env.example VERSION scripts/release.sh; do
-    grep -qx "devbox-$release_version/$release_entry" "$release_root/archive.list" ||
-        fail "release archive is missing $release_entry"
-done
+
+# Every tracked top-level file must ship in the archive unless it is explicitly
+# excluded: AGENTS.md and .gitignore are repository/contributor files that mean
+# nothing in an extracted release tree, and release-signing-key.pub.pem is
+# distributed out of band (the assertion below also keeps it out of archives).
+release_excluded_top_level=" AGENTS.md .gitignore release-signing-key.pub.pem "
+release_top_level_excluded() {
+    case "$release_excluded_top_level" in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+# Assert that every path on stdin is present in the archive list. The negative
+# test below drives this same loop with a fabricated path list.
+check_release_top_level_paths() {
+    local archive_list="$1" version="$2" path
+
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        release_top_level_excluded "$path" && continue
+        grep -qx "devbox-$version/$path" "$archive_list" ||
+            fail "release archive is missing tracked top-level file: $path"
+    done
+}
+
+release_tracked_top_level="$(git ls-files | awk -F/ 'NF == 1')"
+[ -n "$release_tracked_top_level" ] ||
+    fail "git ls-files reported no tracked top-level files"
+printf '%s\n' "$release_tracked_top_level" |
+    check_release_top_level_paths "$release_root/archive.list" "$release_version" ||
+    fail "release archive is missing a tracked top-level file"
+# scripts/release.sh is not a top-level file, so it stays an explicit assertion.
+grep -qx "devbox-$release_version/scripts/release.sh" "$release_root/archive.list" ||
+    fail "release archive is missing scripts/release.sh"
+
+# The guard must reject a tracked top-level file that is not in the archive.
+# Drive the same loop with a fabricated path list instead of adding a file to
+# the repository, and confirm the failure names the missing path.
+guard_error="$(
+    printf '%s\n' 'new-top-level.md' |
+        check_release_top_level_paths "$release_root/archive.list" "$release_version" 2>&1
+)" || true
+printf '%s\n' "$guard_error" | grep -q 'new-top-level.md' ||
+    fail "release completeness guard did not reject a fabricated missing top-level file"
+# The documented exclusions are accepted, so the guard is not merely always-failing.
+printf '%s\n' AGENTS.md .gitignore release-signing-key.pub.pem |
+    check_release_top_level_paths "$release_root/archive.list" "$release_version" ||
+    fail "release completeness guard did not honor the documented exclusions"
 if grep -q 'release-signing-key' "$release_root/archive.list"; then
     fail "release archive must not ship the release public key"
 fi
@@ -757,13 +801,13 @@ mkdir -p "$replace_home"
 printf 'export GIT_NAME="Legacy Replace"\nexport GIT_EMAIL="legacy@example.com"\n' \
     >"$legacy_env"
 chmod 600 "$legacy_env"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "seed release installation for the replacement test failed"
 cp "$legacy_env" "$replace_data/releases/$release_version/.env"
 chmod 600 "$replace_data/releases/$release_version/.env"
 printf 'corrupt\n' >>"$replace_data/releases/$release_version/README.md"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "replacement install with a legacy in-tree .env failed"
 cmp -s "$replace_home/.config/devbox/env" "$legacy_env" ||
@@ -774,7 +818,7 @@ cmp -s "$replace_home/.config/devbox/env" "$legacy_env" ||
     fail "replacement kept the legacy in-tree .env"
 
 # --force replaces an existing release directory even when it is intact.
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" --force \
     >/dev/null || fail "--force release installation failed"
 [ "$(readlink "$replace_data/current")" = "$(physical_path "$replace_data/releases/$release_version")" ] ||
@@ -887,7 +931,7 @@ printf 'export GIT_NAME="Upgrade Test"\nexport GIT_EMAIL="upgrade@example.com"\n
     >"$upgrade_data/releases/0.0.1-rc1/.env"
 chmod 600 "$upgrade_data/releases/0.0.1-rc1/.env"
 ln -s "$upgrade_data/releases/0.0.1-rc1" "$upgrade_data/current"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$upgrade_home" XDG_DATA_HOME="$upgrade_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$upgrade_home" XDG_DATA_HOME="$upgrade_home/.local/share" \
     PATH="$upgrade_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "upgrade release installation failed"
 [ -f "$upgrade_home/.config/devbox/env" ] ||
@@ -911,7 +955,7 @@ env_unit_home="$release_root/env-unit/home"
 env_unit_release="$env_unit_home/.local/share/devbox/releases/$release_version"
 mkdir -p "$env_unit_release"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -921,7 +965,7 @@ env_output="$(
 [ "$env_output" = "$(physical_path "$ROOT")/.env" ] ||
     fail "devbox_env_file did not return the checkout .env"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$env_unit_release" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -931,7 +975,7 @@ env_output="$(
 [ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
     fail "devbox_env_file did not return the stable release configuration"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$(physical_path "$env_unit_release")" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -941,7 +985,7 @@ env_output="$(
 [ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
     fail "devbox_env_file did not return the stable release configuration for a physical DEVBOX_DIR"
 env_output="$(
-    HOME="$env_unit_home" DEVBOX_ENV_FILE="$release_root/override.env" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" DEVBOX_ENV_FILE="$release_root/override.env" \
         XDG_DATA_HOME="$env_unit_home/.local/share" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -951,13 +995,30 @@ env_output="$(
 [ "$env_output" = "$release_root/override.env" ] ||
     fail "DEVBOX_ENV_FILE did not override the configuration path"
 
+# XDG_CONFIG_HOME selects the host configuration directory for release trees.
+# The path is used literally (never canonicalized, never created), so a
+# sandboxed XDG_CONFIG_HOME stays exactly as written.
+env_output="$(
+    HOME="$env_unit_home" XDG_CONFIG_HOME="$release_root/xdg-config" \
+        XDG_DATA_HOME="$env_unit_home/.local/share" \
+        DEVBOX_DIR="$env_unit_release" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        devbox_env_file
+    '
+)" || fail "devbox_env_file failed with XDG_CONFIG_HOME set"
+[ "$env_output" = "$release_root/xdg-config/devbox/env" ] ||
+    fail "devbox_env_file ignored XDG_CONFIG_HOME: $env_output"
+[ ! -e "$release_root/xdg-config" ] ||
+    fail "devbox_env_file created the XDG configuration directory"
+
 # VM resource values are rendered into the Colima configuration and passed as
 # `colima start` flags, so a typo must fail before it can reach the VM.
 resource_env="$release_root/resources.env"
 printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_CPU=four\n' \
     >"$resource_env"
 chmod 600 "$resource_env"
-if HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+if XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
     DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
@@ -974,7 +1035,7 @@ grep -qF "$resource_env" "$release_root/resources.err" ||
 printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_DISK=0\n' \
     >"$resource_env"
 chmod 600 "$resource_env"
-if HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+if XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
     DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
@@ -986,7 +1047,7 @@ printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"
     >"$resource_env"
 chmod 600 "$resource_env"
 resource_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -1174,7 +1235,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     init_launcher="$install_data/current/devbox"
     init_env="$install_home/.config/devbox/env"
     init_status=0
-    HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
+    XDG_CONFIG_HOME= HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
         "$init_launcher" init >"$release_root/init.log" 2>&1 || init_status=$?
     [ "$init_status" -eq 1 ] ||
         fail "devbox init did not require configuration edits before succeeding"
@@ -1185,7 +1246,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         fail "devbox init did not seed the host configuration from .env.example"
     printf 'export GIT_NAME="Devbox Test"\nexport GIT_EMAIL="devbox@example.com"\n' >"$init_env"
     chmod 600 "$init_env"
-    HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
+    XDG_CONFIG_HOME= HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
         "$init_launcher" init >/dev/null ||
         fail "devbox init did not complete after configuration"
 else

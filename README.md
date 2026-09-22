@@ -142,8 +142,8 @@ DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
 `${XDG_DATA_HOME:-$HOME/.local/share}/devbox/releases/<version>`, activates
 `${XDG_DATA_HOME:-$HOME/.local/share}/devbox/current`, and links `devbox` onto
 your `PATH`. Release installs keep host configuration at
-`~/.config/devbox/env` (mode 0600): run `devbox init`, edit it, and run
-`devbox init` again.
+`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600): run `devbox init`,
+edit it, and run `devbox init` again.
 
 Upgrades install alongside the old version and keep your configuration. If the
 VM was created by a checkout or an earlier release, claim it while stopped:

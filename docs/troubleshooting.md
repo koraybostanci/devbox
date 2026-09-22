@@ -16,12 +16,17 @@ Install Colima from <https://colima.run>. No other host tooling is required.
 
 `.env` must be mode 0600 and contain only supported `KEY=value` assignments
 (single or double quotes are stripped). Release installs keep this file at
-`~/.config/devbox/env` instead of the versioned release directory:
+`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` instead of the versioned release
+directory:
 
 ```sh
 chmod 600 .env            # checkout
-chmod 600 ~/.config/devbox/env   # release install
+chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env"   # release install
 ```
+
+The release configuration is resolved through `XDG_CONFIG_HOME` (falling back
+to `~/.config`); changing `XDG_CONFIG_HOME` later means moving the file to the
+new directory yourself.
 
 Supported keys: `GIT_NAME`, `GIT_EMAIL`, `POSTGRES_USER`, `POSTGRES_DB`,
 `POSTGRES_PORT`, `DEVBOX_CPU`, `DEVBOX_MEMORY`, `DEVBOX_DISK`. Unsupported keys
@@ -47,6 +52,43 @@ ssh -G devbox | grep -i forwardagent
 If provisioning fails before direct SSH is authorized, `devbox connect` is
 unavailable; inspect the VM with `colima ssh -p devbox`, which uses Colima's
 generated administrative account.
+
+## SSH configuration conflicts
+
+`devbox start` rewrites the managed block in `~/.ssh/config` (and its
+`~/.ssh/config.d/devbox` copy) and refuses a configuration it cannot reconcile,
+with one of:
+
+- `contains malformed devbox markers`
+- `generated devbox SSH configuration has conflicting effective settings`
+- `generated SSH host 'devbox' is not reachable`
+
+Malformed markers mean the `# BEGIN devbox`/`# END devbox` pair is duplicated
+or unbalanced; remove the extra markers. Conflicting effective settings mean an
+option that precedes the managed block wins: the block is inserted before the
+first `Host`/`Match` line (or appended at the end when there is none), and
+OpenSSH keeps the first obtained value, so a later `Host *` or `Host devbox`
+block cannot override the generated values. The cause is a bare global option
+above the block, or a block pulled in by an `Include` above it; the validator
+names the option in its `devbox SSH effective <option> is ...` message, so
+remove or relocate that override. Then rerun `devbox start`, which rewrites the
+managed block, and inspect the effective result with:
+
+```sh
+ssh -G devbox
+```
+
+## Another command is running
+
+Mutating commands serialize on a lock, so a concurrent command fails with:
+
+```text
+another devbox command is running (PID ...)
+```
+
+Wait for the running command to finish, or stop it if it is stuck. A stale lock
+is removed automatically when the recorded process no longer exists; do not
+delete the lock directory by hand.
 
 ## Provisioning failure
 
@@ -108,8 +150,9 @@ A failed install leaves the previous release active, and `--force` replaces an
 existing version directory. Installed releases live below
 `${XDG_DATA_HOME:-$HOME/.local/share}/devbox`, are activated through `current`,
 and are managed with the shipped `list`, `use`, and `prune` commands. Release
-installs keep host configuration at `~/.config/devbox/env` (mode 0600), so a
-`.env` inside an installed release tree is ignored with a warning.
+installs keep host configuration at
+`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600), so a `.env` inside
+an installed release tree is ignored with a warning.
 
 See [docs/release-checklist.md](release-checklist.md) for release operations
 and [docs/architecture.md](architecture.md) for installer and prune internals.

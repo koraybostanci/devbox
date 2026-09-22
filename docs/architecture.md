@@ -6,8 +6,9 @@ except the repository and your Colima installation on the guest.
 ## Host / guest boundary
 
 - The host owns the repository or the installed release, the host
-  configuration (`.env` in a checkout, `~/.config/devbox/env` for release
-  installs), the Colima profile, and a marked OpenSSH host alias for `devbox`.
+  configuration (`.env` in a checkout,
+  `${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` for release installs), the
+  Colima profile, and a marked OpenSSH host alias for `devbox`.
   It needs only Colima and the OpenSSH client.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
@@ -107,7 +108,7 @@ place; an existing version directory is replaced only when its tree no longer
 matches its `MANIFEST`, or when `install --force` is passed. A legacy in-tree
 `.env` is copied to the stable host configuration path before its release
 directory is replaced. Release installs keep host configuration at
-`~/.config/devbox/env` (mode 0600) instead of inside the
+`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600) instead of inside the
 versioned tree, and the Colima ownership marker records the install root (the
 data root for releases, the checkout directory for checkouts), so a release
 upgrade does not invalidate it. `scripts/release.sh prune [--keep N]` bounds

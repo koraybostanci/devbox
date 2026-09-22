@@ -100,12 +100,12 @@ Confirm:
 - The download-directory invocation works with relative arguments: the shipped
   `scripts/release.sh` resolves the archive and `DEVBOX_RELEASE_PUBKEY` against
   the directory it was invoked from.
-- `devbox init` creates `~/.config/devbox/env` (mode 0600) from the archive's
-  `.env.example`; edit it and rerun.
+- `devbox init` creates `${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode
+  0600) from the archive's `.env.example`; edit it and rerun.
 - `devbox start` claims the VM; if the VM predates the release, `devbox stop`
   then `devbox install --adopt` claims the existing profile.
-- Installing the next release keeps `~/.config/devbox/env` and does not
-  invalidate the Colima profile.
+- Installing the next release keeps `${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env`
+  and does not invalidate the Colima profile.
 
 ## Teardown
 

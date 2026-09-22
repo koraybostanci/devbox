@@ -61,7 +61,7 @@ devbox_env_file() {
     directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
     data_root="$(devbox_data_root)"
     case "$directory" in
-        "$data_root"/releases/*) printf '%s\n' "$HOME/.config/devbox/env" ;;
+        "$data_root"/releases/*) devbox_host_env_file ;;
         *) printf '%s\n' "$directory/.env" ;;
     esac
 }
@@ -77,7 +77,7 @@ devbox_warn_legacy_env_file() {
         "$data_root"/releases/*) ;;
         *) return 0 ;;
     esac
-    release_env="$HOME/.config/devbox/env"
+    release_env="$(devbox_host_env_file)"
     if [ -f "$release_env" ] && [ -f "$directory/.env" ]; then
         DEVBOX_ENV_FILE_WARNED=true
         warn "ignoring legacy $directory/.env; release configurations live at $release_env"

@@ -110,26 +110,37 @@ devbox_data_root() {
     canonicalize_path "${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
 }
 
+# Host configuration file shared by release installs. XDG_CONFIG_HOME overrides
+# ~/.config, mirroring devbox_data_root's XDG_DATA_HOME handling. The path is
+# deliberately not canonicalized so callers and tests can compare it literally.
+devbox_host_env_file() {
+    printf '%s/devbox/env\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
 choose_install_bin() {
     local candidate
+    local -a path_dirs
 
     if command -v devbox >/dev/null 2>&1; then
         candidate="$(dirname "$(command -v devbox)")"
         [ -w "$candidate" ] && printf '%s\n' "$candidate" && return
     fi
 
-    while IFS= read -r candidate; do
-        [ -n "$candidate" ] || continue
-        if [ ! -d "$candidate" ] || [ ! -w "$candidate" ]; then
-            continue
-        fi
-        case "$candidate" in
-            "$HOME"/*)
-                printf '%s\n' "$candidate"
-                return
-                ;;
-        esac
-    done < <(printf '%s' "$PATH" | tr ':' '\n')
+    IFS=: read -r -a path_dirs <<<"$PATH"
+    if [ "${#path_dirs[@]}" -gt 0 ]; then
+        for candidate in "${path_dirs[@]}"; do
+            [ -n "$candidate" ] || continue
+            if [ ! -d "$candidate" ] || [ ! -w "$candidate" ]; then
+                continue
+            fi
+            case "$candidate" in
+                "$HOME"/*)
+                    printf '%s\n' "$candidate"
+                    return
+                    ;;
+            esac
+        done
+    fi
 
     printf '%s/.local/bin\n' "$HOME"
 }
