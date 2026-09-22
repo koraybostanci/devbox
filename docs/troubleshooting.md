@@ -55,9 +55,8 @@ generated administrative account.
 
 ## SSH configuration conflicts
 
-`devbox start` rewrites the managed block in `~/.ssh/config` (and its
-`~/.ssh/config.d/devbox` copy) and refuses a configuration it cannot reconcile,
-with one of:
+`devbox start` rewrites the managed block in `~/.ssh/config` and refuses a
+configuration it cannot reconcile, with one of:
 
 - `contains malformed devbox markers`
 - `generated devbox SSH configuration has conflicting effective settings`

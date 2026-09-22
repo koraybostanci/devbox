@@ -362,6 +362,209 @@ HOME="$devbox_home" DEVBOX_IDENTITY="$devbox_identity_script" ROOT="$ROOT" DEVBO
     fail "devbox identity payload capture produced no output"
 bash -n "$devbox_identity_script" || fail "devbox identity validator is not valid Bash"
 
+# --- devbox SSH config staging and stripping --------------------------------
+# stage_devbox_host_ssh_config is a pure renderer and strip_devbox_ssh_block is
+# a pure extractor: exercise both directly, outside any VM.
+ssh_config_unit_root="$validation_root/ssh-config-unit"
+mkdir -p "$ssh_config_unit_root"
+cat >"$validation_root/ssh-config-unit.sh" <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+
+unit_root="$1"
+source "$ROOT/lib/common.sh"
+source "$ROOT/lib/devbox.sh"
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+begin_count() { grep -Fxc '# BEGIN devbox' "$1" || true; }
+end_count() { grep -Fxc '# END devbox' "$1" || true; }
+assert_single_pair() {
+    [ "$(begin_count "$1")" -eq 1 ] || fail "expected exactly one BEGIN marker in $1"
+    [ "$(end_count "$1")" -eq 1 ] || fail "expected exactly one END marker in $1"
+}
+
+managed="$unit_root/managed.conf"
+cat >"$managed" <<'CONFIG'
+Host devbox
+  HostName 127.0.0.1
+  User devbox
+  Port 51234
+  IdentityFile /tmp/devbox-key
+  IdentitiesOnly yes
+  ForwardAgent no
+  ControlMaster no
+  ControlPath none
+CONFIG
+
+# A config that does not exist yet is created with the managed content wrapped
+# in exactly one marker pair.
+stage_devbox_host_ssh_config "$managed" "$unit_root/new/config" "$unit_root/staged-new" ||
+    fail "staging a new config failed"
+assert_single_pair "$unit_root/staged-new"
+[ "$(sed -n '1p' "$unit_root/staged-new")" = "# BEGIN devbox" ] ||
+    fail "new config does not start with the BEGIN marker"
+[ "$(sed -n '$p' "$unit_root/staged-new")" = "# END devbox" ] ||
+    fail "new config does not end with the END marker"
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-new" |
+    sed '1d;$d' >"$unit_root/staged-new.block"
+cmp -s "$managed" "$unit_root/staged-new.block" ||
+    fail "new config did not embed the managed content"
+
+# An existing config without Host/Match entries keeps its content and gets the
+# block appended.
+printf '# user config\nSetEnv KEEP=1\n' >"$unit_root/existing-plain"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-plain" "$unit_root/staged-append" ||
+    fail "staging an existing config failed"
+assert_single_pair "$unit_root/staged-append"
+[ "$(sed -n '1p' "$unit_root/staged-append")" = "# user config" ] ||
+    fail "existing content was not preserved ahead of the appended block"
+grep -qx 'SetEnv KEEP=1' "$unit_root/staged-append" ||
+    fail "existing content was not preserved in the appended config"
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-append" |
+    sed '1d;$d' >"$unit_root/staged-append.block"
+cmp -s "$managed" "$unit_root/staged-append.block" ||
+    fail "appended config did not embed the managed content"
+
+# An existing managed block is replaced in place, exactly once.
+printf '# user config\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/existing-block"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-block" "$unit_root/staged-replace" ||
+    fail "replacing an existing block failed"
+assert_single_pair "$unit_root/staged-replace"
+[ "$(sed -n '1p' "$unit_root/staged-replace")" = "# user config" ] ||
+    fail "content before the replaced block was lost"
+grep -qx 'Host other' "$unit_root/staged-replace" ||
+    fail "content after the replaced block was lost"
+[ "$(sed -n '$p' "$unit_root/staged-replace")" = "  HostName other.example.com" ] ||
+    fail "content after the replaced block was reordered"
+if grep -qx '  Port 1' "$unit_root/staged-replace"; then
+    fail "the stale managed block survived replacement"
+fi
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-replace" |
+    sed '1d;$d' >"$unit_root/staged-replace.block"
+cmp -s "$managed" "$unit_root/staged-replace.block" ||
+    fail "replacement did not embed the managed content"
+
+# The block is inserted before the first Host or Match entry.
+printf 'Host first\n  HostName first.example.com\nMatch host second\n  User second\n' \
+    >"$unit_root/existing-host-match"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-host-match" "$unit_root/staged-insert" ||
+    fail "inserting before the first Host/Match entry failed"
+assert_single_pair "$unit_root/staged-insert"
+awk '
+    /^# BEGIN devbox$/ { inserted = 1 }
+    /^Host first$/ { exit !inserted }
+' "$unit_root/staged-insert" ||
+    fail "the managed block was not inserted before the first Host entry"
+[ "$(grep -c '^Host first$' "$unit_root/staged-insert")" -eq 1 ] ||
+    fail "the first Host entry was duplicated"
+
+# A config whose first entry is a Match is handled the same way.
+printf 'Match host second\n  User second\nHost first\n  HostName first.example.com\n' \
+    >"$unit_root/existing-match-first"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-match-first" "$unit_root/staged-match" ||
+    fail "inserting before the first Match entry failed"
+assert_single_pair "$unit_root/staged-match"
+awk '
+    /^# BEGIN devbox$/ { inserted = 1 }
+    /^Match host second$/ { exit !inserted }
+' "$unit_root/staged-match" ||
+    fail "the managed block was not inserted before the first Match entry"
+
+# Malformed markers are refused.
+printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/missing-end"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/missing-end" "$unit_root/staged-missing-end"; then
+    fail "a missing END marker was accepted"
+fi
+printf '# BEGIN devbox\n# END devbox\n# BEGIN devbox\nHost devbox\n# END devbox\n' \
+    >"$unit_root/duplicate-begin"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/duplicate-begin" "$unit_root/staged-duplicate"; then
+    fail "duplicate BEGIN markers were accepted"
+fi
+
+# strip_devbox_ssh_block removes only the managed block.
+printf 'Host keep\n  HostName keep.example.com\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-source"
+strip_devbox_ssh_block "$unit_root/strip-source" "$unit_root/strip-out" ||
+    fail "strip_devbox_ssh_block rejected a well-formed block"
+printf 'Host keep\n  HostName keep.example.com\nHost tail\n' >"$unit_root/strip-expected"
+cmp -s "$unit_root/strip-expected" "$unit_root/strip-out" ||
+    fail "strip_devbox_ssh_block did not preserve every other line"
+if strip_devbox_ssh_block "$unit_root/missing-end" "$unit_root/strip-missing-end"; then
+    fail "strip_devbox_ssh_block accepted an unterminated BEGIN marker"
+fi
+
+# The legacy mirror is removed only when it is a devbox-managed regular file,
+# and config.d is only removed when it becomes empty.
+mirror_home="$unit_root/mirror-home"
+mkdir -p "$mirror_home/.ssh/config.d"
+printf 'Host devbox\n  Port 1\n' >"$mirror_home/.ssh/config.d/devbox"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ ! -e "$mirror_home/.ssh/config.d/devbox" ] || fail "the legacy mirror was not removed"
+[ ! -d "$mirror_home/.ssh/config.d" ] || fail "an emptied config.d was not removed"
+
+mkdir -p "$mirror_home/.ssh/config.d"
+printf 'Host other\n  Port 2\n' >"$mirror_home/.ssh/config.d/devbox"
+printf 'Host devbox\n' >"$mirror_home/.ssh/config.d/keep"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ -f "$mirror_home/.ssh/config.d/devbox" ] ||
+    fail "a config.d/devbox file without the devbox Host entry was removed"
+[ -f "$mirror_home/.ssh/config.d/keep" ] || fail "unrelated config.d content was removed"
+
+command rm -f "$mirror_home/.ssh/config.d/devbox"
+ln -s keep "$mirror_home/.ssh/config.d/devbox"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ -L "$mirror_home/.ssh/config.d/devbox" ] || fail "a symlinked mirror was removed"
+EOF
+ROOT="$ROOT" /bin/bash "$validation_root/ssh-config-unit.sh" "$ssh_config_unit_root" ||
+    fail "devbox SSH config staging and stripping tests failed"
+
+# --- devbox start flags and Colima config validation ------------------------
+start_unit_root="$validation_root/devbox-start-unit"
+mkdir -p "$start_unit_root"
+cat >"$validation_root/start-unit.sh" <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+
+unit_root="$1"
+source "$ROOT/lib/common.sh"
+source "$ROOT/lib/config.sh"
+source "$ROOT/lib/devbox.sh"
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# start_devbox_vm must trust the rendered colima.yaml for profile settings and
+# pass only --save-config=false to the Colima runner.
+render_devbox_colima_config() { :; }
+devbox_state() { printf 'Stopped\n'; }
+devbox_colima() { printf '%s\n' "$*" >>"$unit_root/colima.log"; }
+wait_for_devbox_ssh() { :; }
+
+start_devbox_vm || fail "start_devbox_vm failed with a stopped profile"
+[ "$(awk 'END { print NR }' "$unit_root/colima.log")" -eq 1 ] ||
+    fail "start_devbox_vm did not invoke the Colima runner exactly once"
+[ "$(cat "$unit_root/colima.log")" = "start devbox --save-config=false" ] ||
+    fail "unexpected colima start arguments: $(cat "$unit_root/colima.log")"
+
+# The validator keeps the non-negotiable invariants and accepts the rendered
+# template values.
+rendered="$unit_root/colima.yaml"
+sed -e 's/{{CPU}}/4/' -e 's/{{MEMORY}}/4/' -e 's/{{DISK}}/60/' \
+    "$ROOT/colima.yaml" >"$rendered"
+validate_devbox_colima_config "$rendered" ||
+    fail "the rendered colima.yaml was rejected"
+printf 'mounts:\n  - location: /tmp\n' >>"$rendered"
+if validate_devbox_colima_config "$rendered"; then
+    fail "validate_devbox_colima_config accepted a mounts: entry"
+fi
+sed 's/^runtime: docker$//' "$unit_root/colima.yaml" >"$unit_root/colima-no-runtime.yaml"
+if validate_devbox_colima_config "$unit_root/colima-no-runtime.yaml"; then
+    fail "validate_devbox_colima_config accepted a config without runtime: docker"
+fi
+EOF
+ROOT="$ROOT" /bin/bash "$validation_root/start-unit.sh" "$start_unit_root" ||
+    fail "devbox start flag tests failed"
+
 # --- managed services -------------------------------------------------------
 compose_command=()
 if docker compose version >/dev/null 2>&1; then

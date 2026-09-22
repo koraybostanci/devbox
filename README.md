@@ -75,9 +75,9 @@ stop/start and is removed only by `devbox destroy`.
 ### Remote access
 
 `devbox start` adds a marked `Host devbox` entry to your OpenSSH config
-(`~/.ssh/config`, plus a copy under `~/.ssh/config.d/devbox`). Point editors,
-`git`, and other tools at host `devbox` to work with the guest files directly
-over SSH; `devbox destroy` removes the entry.
+(`~/.ssh/config`). Point editors, `git`, and other tools at host `devbox` to
+work with the guest files directly over SSH; `devbox destroy` removes the
+entry.
 
 ## Services
 
