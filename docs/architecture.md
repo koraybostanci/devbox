@@ -12,8 +12,10 @@ except the repository and your Colima installation on the guest.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
-  `~/.colima/_lima`. The devbox profile disables Docker auto-activation,
-  automatic SSH config edits, and agent forwarding, and sets `sshConfig: false`.
+  `~/.colima/_lima`. The devbox profile disables automatic Docker context
+  activation and agent forwarding, and tells Colima to leave the OpenSSH
+  configuration alone (`sshConfig: false`); the marked `devbox` host alias is
+  written by devbox itself.
 
 ## Identity
 
@@ -59,9 +61,11 @@ root-owned Compose project (`devbox`) defined by
 
 Provisioning installs a small guest-local `devbox` companion at
 `/usr/local/bin/devbox`. It reports optional provider authentication state
-(`devbox auth status`), starts provider logins inside the guest
-(`devbox auth login <provider>`), and prints PostgreSQL connection settings
-(`devbox db info`). It never reads host credentials.
+(`devbox auth status`), starts GitHub and OpenCode logins inside the guest
+(`devbox auth login github|opencode`), prints next-step instructions for
+Claude Code and Databricks (`devbox auth login claude|databricks`), and prints
+PostgreSQL connection settings (`devbox db info`). It never reads host
+credentials.
 
 ## Release distribution
 
@@ -75,21 +79,16 @@ draft release targeting that commit with the archive, `SHA256SUMS`, and
 prereleases. Publishing the draft creates the `v<version>` tag, so an open draft
 usually has no tag yet. The draft is the approval gate: a maintainer reviews the
 notes and assets and publishes it from the GitHub UI, and the workflow never
-publishes a release on its own. A `workflow_dispatch` run is recovery-only and
-must match the version already in `VERSION`: it rebuilds the commit that last
-changed `VERSION` and completes a partial draft by uploading the missing assets
-in place, leaving the draft unpublished.
-Recovery requires the draft to target the release commit: a tagged draft needs
-its tag at that commit, and an untagged draft needs its target commit to match
-it. A draft whose tag is at another commit, or whose target commit does not
-match, cannot be recovered, and a published release is never overwritten. After
-`VERSION` moves on, an older incomplete draft can no longer be recovered by
-dispatch; release a new version instead.
+publishes a release on its own. A `workflow_dispatch` run is recovery-only: its
+input must match the version already in `VERSION`, and it completes a partial
+draft in place without publishing it. Operational recovery rules are in
+[docs/release-checklist.md](release-checklist.md).
 
-`scripts/release.sh` builds `dist/devbox-<version>/devbox-<version>.tar.gz`
-with a per-file `MANIFEST` and sibling `SHA256SUMS`, signs `SHA256SUMS`, and
-verifies fail-closed before extracting into the install root: checksum,
-signature
+`scripts/release.sh build` produces
+`dist/devbox-<version>/devbox-<version>.tar.gz` with a per-file `MANIFEST` and
+sibling `SHA256SUMS`; signing is a separate
+`scripts/release.sh sign <archive> --key <key>` invocation. `install` verifies
+fail-closed before extracting into the install root: checksum, signature
 (against the committed `release-signing-key.pub.pem`, overridable with
 `DEVBOX_RELEASE_PUBKEY`), exactly one `devbox-<version>` top-level directory,
 regular-file/directory entry types, and every MANIFEST path and hash. The
@@ -120,5 +119,8 @@ symlink.
 
 ## Lifecycle
 
-A PID-bearing `mkdir` lock serializes mutating commands. Stale locks are removed
-only when their recorded process no longer exists.
+Mutating lifecycle commands serialize on a PID-bearing `mkdir` lock: `start`,
+`provision`, `stop`, and `destroy` (`run_devbox`), plus `install --adopt`,
+which writes the ownership marker. `init`, `install`, and the read-only
+commands do not take the lock. Stale locks are removed only when their recorded
+process no longer exists.

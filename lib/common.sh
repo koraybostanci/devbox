@@ -41,23 +41,6 @@ file_mode() {
     fi
 }
 
-resolve_path() {
-    local path="$1"
-    local directory
-
-    while [ -L "$path" ]; do
-        directory="$(cd -P "$(dirname "$path")" && pwd)"
-        path="$(readlink "$path")"
-        case "$path" in
-            /*) ;;
-            *) path="$directory/$path" ;;
-        esac
-    done
-
-    directory="$(cd -P "$(dirname "$path")" && pwd)"
-    printf '%s/%s\n' "$directory" "$(basename "$path")"
-}
-
 shell_quote() {
     printf '%q' "$1"
 }
@@ -218,23 +201,17 @@ acquire_lock() {
     local owner_pid=""
 
     mkdir -p "$DEVBOX_LOCK_DIR"
-    if mkdir "$lock_path" 2>/dev/null; then
-        printf '%s\n' "$$" >"$lock_path/pid"
-        DEVBOX_ACTIVE_LOCK="$lock_path"
-        trap release_lock EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        return
+    if ! mkdir "$lock_path" 2>/dev/null; then
+        [ -f "$lock_path/pid" ] && read -r owner_pid <"$lock_path/pid"
+        if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+            die "another devbox command is running (PID $owner_pid)"
+        fi
+
+        warn "removing stale lock $lock_path"
+        command rm -rf "$lock_path"
+        mkdir "$lock_path" || die "could not acquire lock $lock_path"
     fi
 
-    [ -f "$lock_path/pid" ] && read -r owner_pid <"$lock_path/pid"
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
-        die "another devbox command is running (PID $owner_pid)"
-    fi
-
-    warn "removing stale lock $lock_path"
-    command rm -rf "$lock_path"
-    mkdir "$lock_path" || die "could not acquire lock $lock_path"
     printf '%s\n' "$$" >"$lock_path/pid"
     DEVBOX_ACTIVE_LOCK="$lock_path"
     trap release_lock EXIT

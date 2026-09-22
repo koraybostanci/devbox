@@ -25,7 +25,7 @@ fi
 shell_files=()
 while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
-done < <(find . \( -type f -name '*.sh' -o -path './devbox' \) | sort)
+done < <(find . -path ./dist -prune -o \( -type f -name '*.sh' -o -path './devbox' \) -print | sort)
 bash -n "${shell_files[@]}"
 
 # --- the legacy mounted profile is gone ------------------------------------
@@ -39,15 +39,16 @@ if grep -q 'migrate' lib/devbox.sh; then
 fi
 
 # --- .env.example -----------------------------------------------------------
-grep -q '^export GIT_NAME=' .env.example
-grep -q '^export GIT_EMAIL=' .env.example
+grep -q '^export GIT_NAME=' .env.example || fail ".env.example must export GIT_NAME"
+grep -q '^export GIT_EMAIL=' .env.example || fail ".env.example must export GIT_EMAIL"
 if grep -q 'POSTGRES_PASSWORD' .env.example; then
     fail ".env.example must not carry POSTGRES_PASSWORD (it is generated in the guest)"
 fi
 
 # --- launcher ---------------------------------------------------------------
-[ -x devbox ]
-"$ROOT/devbox" help | grep -q 'Usage: devbox <command>'
+[ -x devbox ] || fail "devbox launcher must be executable"
+"$ROOT/devbox" help | grep -q 'Usage: devbox <command>' ||
+    fail "devbox help must print 'Usage: devbox <command>'"
 if "$ROOT/devbox" bogus >/dev/null 2>&1; then
     fail "unknown command was accepted"
 fi
@@ -211,14 +212,25 @@ printf '%s\n' "$companion_db" | grep -q 'postgres port: 15432' ||
     fail "companion did not report PostgreSQL settings"
 
 # --- devbox must not need host jq or yq ----------------------------------------
+# The scans below must fail closed when a target disappears: without these
+# checks a missing file would make grep exit 2 and trip the wrong assertion.
+for scan_target in lib/devbox.sh lib/config.sh devbox; do
+    [ -f "$scan_target" ] || fail "scan target is missing: $scan_target"
+done
 if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/devbox.sh lib/config.sh; then
     fail "devbox must not require host jq or yq"
 fi
 
 # --- prohibited provisioning patterns --------------------------------------
+# Fail closed on a missing scan target: grep -R exits 2 for a missing path,
+# which would silently satisfy the non-match test below.
+for scan_target in \
+    devbox lib provision/scripts provision/config/zsh provision/config/guest; do
+    [ -e "$scan_target" ] || fail "scan target is missing: $scan_target"
+done
 if grep -R -E -- \
     '^[[:space:]]*eval[[:space:]]|curl[^|]*\|[[:space:]]*(ba)?sh|SSH_AUTH_SOCK=/run/host-services|chmod 0777|rm -rf "\$HOME/(projects|data)|/etc/environment|readlink -f' \
-    devbox lib provision/scripts provision/config/zsh; then
+    devbox lib provision/scripts provision/config/zsh provision/config/guest; then
     fail "prohibited provisioning pattern found"
 fi
 
@@ -249,6 +261,16 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
     }
     devbox_admin_guest() { capture_payloads "$@"; }
     devbox_as_guest() { capture_payloads "$@"; }
+    # Fail loudly instead of capturing nothing: a future payload sent through
+    # these transports must be given an explicit capture path above.
+    devbox_colima() {
+        printf "ERROR: devbox_colima payload was not captured for syntax checking\n" >&2
+        exit 1
+    }
+    devbox_guest() {
+        printf "ERROR: devbox_guest payload was not captured for syntax checking\n" >&2
+        exit 1
+    }
     authorize_devbox_host_key || true
     validate_devbox_guest_identity || true
     validate_devbox_guest_privileges || true
@@ -256,10 +278,12 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
 ' || fail "devbox remote payload capture failed"
 payload_count=0
 for payload in "$payloads_dir"/payload.*; do
-    [ -f "$payload" ] || continue
+    [ -s "$payload" ] || continue
     payload_count=$((payload_count + 1))
     bash -n "$payload" || fail "a devbox remote payload is not valid Bash: $payload"
 done
+# The floor is coupled to the number of remote payload sites in lib/devbox.sh;
+# update it when a payload site is added or removed.
 [ "$payload_count" -ge 3 ] || fail "expected at least 3 devbox remote payloads, captured $payload_count"
 
 # --- devbox privilege parser behavior ------------------------------------------
@@ -328,19 +352,32 @@ HOME="$devbox_home" DEVBOX_IDENTITY="$devbox_identity_script" ROOT="$ROOT" DEVBO
     devbox_admin_guest() {
         [ "$1" = bash ] && [ "$2" = -c ] || exit 1
         printf "%s" "$3" >"$DEVBOX_IDENTITY"
+        # The validator consumes its guest output; emit a canonical safe
+        # identity so this run only exercises payload capture.
+        printf "1000:1000:devbox:1000::devbox:1:1\n"
     }
     validate_devbox_guest_identity
-' || true
+' || fail "devbox identity payload capture failed"
+[ -s "$devbox_identity_script" ] ||
+    fail "devbox identity payload capture produced no output"
 bash -n "$devbox_identity_script" || fail "devbox identity validator is not valid Bash"
 
 # --- managed services -------------------------------------------------------
+compose_command=()
 if docker compose version >/dev/null 2>&1; then
+    compose_command=(docker compose)
+elif docker-compose version >/dev/null 2>&1; then
+    compose_command=(docker-compose)
+fi
+if [ "${#compose_command[@]}" -gt 0 ]; then
     POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
         VALKEY_PASSWORD=test VALKEY_PORT=16379 \
-        docker compose -f provision/config/services/compose.yaml config -q ||
+        "${compose_command[@]}" -f provision/config/services/compose.yaml config -q ||
         fail "devbox service definition is invalid"
     grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
         fail "devbox services must publish to loopback only"
+elif [ -n "${CI:-}" ]; then
+    fail "docker compose is required in CI"
 else
     printf 'WARN: docker compose is unavailable; skipping service-definition validation\n' >&2
 fi
@@ -459,14 +496,17 @@ data_root_output="$(
 [ ! -e "$data_root_real/nested" ] ||
     fail "devbox_data_root created a missing data root"
 
+# Build into the validation root so the gate never writes into the repo's
+# dist/ and cannot clobber a maintainer's signed artifacts.
+export DEVBOX_DIST_ROOT="$validation_root/dist"
 release_version="$(cat "$ROOT/VERSION")"
-release_archive="$ROOT/dist/devbox-$release_version/devbox-$release_version.tar.gz"
+release_archive="$DEVBOX_DIST_ROOT/devbox-$release_version/devbox-$release_version.tar.gz"
 
 # A fresh build drops any signature left by a previous build.
-mkdir -p "$ROOT/dist/devbox-$release_version"
-printf 'stale\n' >"$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+mkdir -p "$DEVBOX_DIST_ROOT/devbox-$release_version"
+printf 'stale\n' >"$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 "$ROOT/scripts/release.sh" build >/dev/null || fail "release build failed"
-[ ! -e "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig" ] ||
+[ ! -e "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig" ] ||
     fail "fresh release build kept a stale signature"
 if "$ROOT/scripts/release.sh" build 9.9.9 >/dev/null 2>&1; then
     fail "release build accepted a version that does not match VERSION"
@@ -514,8 +554,8 @@ relative_path="$relative_root/path:/usr/bin:/bin"
 mkdir -p "$relative_root" "$relative_home"
 tar -xzf "$release_archive" -C "$relative_root"
 cp "$release_archive" "$relative_root/devbox-$release_version.tar.gz"
-cp "$ROOT/dist/devbox-$release_version/SHA256SUMS" "$relative_root/SHA256SUMS"
-cp "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig" "$relative_root/SHA256SUMS.sig"
+cp "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS" "$relative_root/SHA256SUMS"
+cp "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig" "$relative_root/SHA256SUMS.sig"
 cp "$release_root/signing-key.pub.pem" "$relative_root/release-signing-key.pub.pem"
 (
     cd "$relative_root"
@@ -530,12 +570,12 @@ cp "$release_root/signing-key.pub.pem" "$relative_root/release-signing-key.pub.p
 [ "$(readlink "$relative_data/current")" = "$(physical_path "$relative_data/releases/$release_version")" ] ||
     fail "relative-path installation did not activate the release"
 
-printf 'tampered\n' >"$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+printf 'tampered\n' >"$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 if DEVBOX_RELEASE_PUBKEY="$release_root/signing-key.pub.pem" \
     "$ROOT/scripts/release.sh" verify "$release_archive" >/dev/null 2>&1; then
     fail "tampered release signature was accepted"
 fi
-command rm -f "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+command rm -f "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 
 # A tampered archive with recomputed checksums and a valid signature must still
 # fail on its MANIFEST.
@@ -911,6 +951,52 @@ env_output="$(
 [ "$env_output" = "$release_root/override.env" ] ||
     fail "DEVBOX_ENV_FILE did not override the configuration path"
 
+# VM resource values are rendered into the Colima configuration and passed as
+# `colima start` flags, so a typo must fail before it can reach the VM.
+resource_env="$release_root/resources.env"
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_CPU=four\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+if HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    load_env
+' 2>"$release_root/resources.err"; then
+    fail "load_env accepted a non-numeric DEVBOX_CPU"
+fi
+grep -q 'DEVBOX_CPU' "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the key"
+grep -q 'four' "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the value"
+grep -qF "$resource_env" "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the configuration file"
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_DISK=0\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+if HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    load_env
+' 2>/dev/null; then
+    fail "load_env accepted a zero DEVBOX_DISK"
+fi
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_CPU=8\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+resource_output="$(
+    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+        DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        load_env
+        printf "%s\n" "$DEVBOX_CPU"
+    '
+)" || fail "load_env rejected a valid DEVBOX_CPU"
+[ "$resource_output" = "8" ] ||
+    fail "load_env did not load the valid DEVBOX_CPU"
+
 # Ownership marker v2: accept the install root (data root for releases).
 owner_home="$release_root/owner/home"
 owner_data="$owner_home/.local/share/devbox"
@@ -1022,6 +1108,46 @@ stop_status="$(
 )" || fail "devbox status failed for a profile owned by another install root"
 [ "$stop_status" = "devbox: Running" ] ||
     fail "devbox status did not report the foreign profile state"
+
+# A multi-column `colima list` record must be parsed consistently: the gated
+# state lookup reports the second column while status keeps the full record.
+record_home="$stop_root/record-home"
+mkdir -p "$record_home/.colima/devbox"
+printf 'devbox-profile-v2\n%s\n' "$(physical_path "$ROOT")" \
+    >"$record_home/.colima/devbox/.devbox-owner"
+cat >"$stop_bin/colima" <<'EOF'
+#!/bin/bash
+if [ "$1" = list ]; then
+    printf 'devbox Running aarch64 4 4 60\n'
+    printf 'other Stopped aarch64 2 2 30\n'
+fi
+exit 0
+EOF
+chmod +x "$stop_bin/colima"
+record_state="$(
+    HOME="$record_home" XDG_DATA_HOME="$record_home/.local/share" COLIMA_HOME= LIMA_HOME= \
+        PATH="$stop_bin:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        configure_devbox_paths
+        devbox_state
+    '
+)" || fail "devbox_state failed for an owned profile"
+[ "$record_state" = "Running" ] ||
+    fail "devbox_state did not report the second record field: $record_state"
+record_status="$(
+    HOME="$record_home" XDG_DATA_HOME="$record_home/.local/share" COLIMA_HOME= LIMA_HOME= \
+        PATH="$stop_bin:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        configure_devbox_paths
+        show_devbox_status
+    '
+)" || fail "devbox status failed for an owned profile"
+[ "$record_status" = "devbox: Running aarch64 4 4 60" ] ||
+    fail "devbox status did not report the full record: $record_status"
 
 # A failing state query explains itself instead of exiting 1 silently.
 cat >"$stop_bin/colima" <<'EOF'

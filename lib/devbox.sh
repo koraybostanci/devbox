@@ -39,12 +39,11 @@ configure_devbox_paths() {
     esac
     DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
     DEVBOX_INSTALL_ROOT="$(devbox_install_root_for "$DEVBOX_DIR")"
-    DEVBOX_SHARED_LOCK_DIR="$(devbox_data_root)/locks"
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
     DEVBOX_COLIMA_OWNER="$DEVBOX_COLIMA_PROFILE/.devbox-owner"
     DEVBOX_DOCKER_CONFIG="$DEVBOX_CONFIG_ROOT/docker"
-    DEVBOX_LOCK_DIR="$DEVBOX_SHARED_LOCK_DIR"
+    DEVBOX_LOCK_DIR="$(devbox_data_root)/locks"
     export DEVBOX_LOCK_DIR
 }
 
@@ -137,6 +136,9 @@ adopt_devbox_profile() {
 
     check_host_platform
     check_devbox_dependencies
+    # The ownership marker is protocol state shared with start/provision, so
+    # write it under the same lock those commands hold.
+    acquire_lock lifecycle
     devbox_profile_exists ||
         die "devbox VM profile does not exist yet; run 'devbox start' first"
     state="$(devbox_state_raw)"
@@ -149,27 +151,34 @@ adopt_devbox_profile() {
     log "Adopted Colima profile '$DEVBOX_PROFILE' for $DEVBOX_INSTALL_ROOT"
 }
 
-# Ownership-gated state lookup for commands that must belong to this install.
-devbox_state() {
-    local state
+# Print the `colima list` record for the devbox profile, read through the given
+# runner: devbox_colima applies the ownership gate, devbox_colima_raw does not.
+devbox_profile_record() {
+    local runner="$1"
 
-    state="$(devbox_colima list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
+    "$runner" list |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }'
+}
+
+# Print the state (the second list column) read through the given runner.
+devbox_profile_state() {
+    local record
+
+    record="$(devbox_profile_record "$1")" || {
         die "could not determine the devbox VM state"
     }
-    printf '%s\n' "$state"
+    awk '{ print $2 }' <<<"$record"
+}
+
+# Ownership-gated state lookup for commands that must belong to this install.
+devbox_state() {
+    devbox_profile_state devbox_colima
 }
 
 # Ownership-free state lookup, for reporting and for stopping a profile whose
 # marker still names another install root (`devbox stop; devbox install --adopt`).
 devbox_state_raw() {
-    local state
-
-    state="$(devbox_colima_raw list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
-        die "could not determine the devbox VM state"
-    }
-    printf '%s\n' "$state"
+    devbox_profile_state devbox_colima_raw
 }
 
 validate_devbox_colima_config() {
@@ -586,18 +595,10 @@ run_devbox_guest_provisioning() {
             DEVBOX_GUEST_USER=devbox \
             bash "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
     ' _ "$digest"; then
-        validate_devbox_guest_preflight || {
-            revoke_devbox_guest_ssh_access ||
-                die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-        }
+        require_devbox_guest_preflight
         return 1
     fi
-    validate_devbox_guest_preflight || {
-        revoke_devbox_guest_ssh_access ||
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-    }
+    require_devbox_guest_preflight
     run_devbox_root_apps "$digest" || return
     stage_devbox_guest_provisioning_input "$digest" || return
     sync_devbox_guest_config || return
@@ -698,16 +699,20 @@ stage_devbox_guest_provisioning_input() {
     ' _ "$digest"
 }
 
-devbox_host_public_key() {
-    local identity_file
+# Print the value of an SSH configuration directive from Colima's devbox SSH
+# configuration. The directive matches case-insensitively, a quoted value may
+# only be followed by whitespace or a comment, and the first match wins.
+# Fails when the directive is absent.
+devbox_colima_ssh_config_value() {
+    local directive="$1" value
 
-    identity_file="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
+    value="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk -v wanted="$directive" '
         {
             line = $0
             sub(/^[[:space:]]+/, "", line)
-            directive = line
-            sub(/[[:space:]].*$/, "", directive)
-            if (tolower(directive) != "identityfile") next
+            field = line
+            sub(/[[:space:]].*$/, "", field)
+            if (tolower(field) != tolower(wanted)) next
             if (line !~ /^[^[:space:]]+[[:space:]]+/) next
             sub(/^[^[:space:]]+[[:space:]]+/, "", line)
             if (substr(line, 1, 1) == "\"") {
@@ -725,7 +730,15 @@ devbox_host_public_key() {
                 exit
             }
         }
-    ')"
+    ')" || return
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+}
+
+devbox_host_public_key() {
+    local identity_file
+
+    identity_file="$(devbox_colima_ssh_config_value identityfile)" || true
     [ -n "$identity_file" ] && [ -r "$identity_file" ] ||
         die "Colima SSH configuration has no readable identity file for $DEVBOX_PROFILE"
     ssh-keygen -y -f "$identity_file"
@@ -734,31 +747,7 @@ devbox_host_public_key() {
 devbox_host_ssh_user() {
     local user
 
-    user="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
-        {
-            line = $0
-            sub(/^[[:space:]]+/, "", line)
-            directive = line
-            sub(/[[:space:]].*$/, "", directive)
-            if (tolower(directive) != "user") next
-            if (line !~ /^[^[:space:]]+[[:space:]]+/) next
-            sub(/^[^[:space:]]+[[:space:]]+/, "", line)
-            if (substr(line, 1, 1) == "\"") {
-                line = substr(line, 2)
-                closing_quote = index(line, "\"")
-                if (closing_quote == 0) next
-                suffix = substr(line, closing_quote + 1)
-                if (suffix !~ /^[[:space:]]*(#.*)?$/) next
-                print substr(line, 1, closing_quote - 1)
-                exit
-            }
-            sub(/[[:space:]].*$/, "", line)
-            if (length(line) > 0) {
-                print line
-                exit
-            }
-        }
-    ')"
+    user="$(devbox_colima_ssh_config_value user)" || true
     [ -n "$user" ] || die "Colima SSH configuration has no user for $DEVBOX_PROFILE"
     printf '%s\n' "$user"
 }
@@ -853,6 +842,16 @@ validate_devbox_guest_privileges() {
 
 validate_devbox_guest_preflight() {
     validate_devbox_guest_identity && validate_devbox_guest_privileges
+}
+
+# Fail closed when the guest identity or privileges are unsafe: revoke the
+# managed direct SSH access this installation granted before aborting.
+require_devbox_guest_preflight() {
+    validate_devbox_guest_preflight || {
+        revoke_devbox_guest_ssh_access ||
+            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
+    }
 }
 
 reconcile_devbox_guest_workspace() {
@@ -998,9 +997,6 @@ stage_devbox_host_ssh_config() {
             $0 == "# BEGIN devbox" { skipping = 1; next }
             skipping && $0 == "# END devbox" { skipping = 0; next }
             skipping { next }
-            !inserted && $0 == "# BEGIN devbox" {
-                insert_managed_config()
-            }
             !inserted && /^[[:space:]]*([Hh][Oo][Ss][Tt]|[Mm][Aa][Tt][Cc][Hh])[[:space:]]/ {
                 insert_managed_config()
             }
@@ -1220,7 +1216,7 @@ write_devbox_ssh_config() {
     managed_dir="$ssh_dir/config.d"
     managed_config="$managed_dir/devbox"
     config="$ssh_dir/config"
-    [ -L "$config" ] && config="$(resolve_path "$config")"
+    [ -L "$config" ] && config="$(canonicalize_path "$config")"
     config_dir="$(dirname "$config")"
     if ! stage_devbox_host_ssh_config "$staged_managed" "$config" "$staged_config"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
@@ -1282,7 +1278,7 @@ write_devbox_ssh_config() {
     [ -e "$managed_config" ] && managed_existed=true
     if [ -e "$config" ]; then
         config_existed=true
-        config_mode="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
+        config_mode="$(file_mode "$config")"
     else
         config_mode=600
     fi
@@ -1332,11 +1328,7 @@ write_devbox_ssh_config() {
 }
 
 ensure_devbox_guest_ssh_access() {
-    validate_devbox_guest_preflight || {
-        revoke_devbox_guest_ssh_access ||
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-    }
+    require_devbox_guest_preflight
     reconcile_devbox_guest_workspace || {
         revoke_devbox_guest_ssh_access ||
             die "devbox guest workspace is invalid; managed direct SSH access could not be fully removed"
@@ -1364,7 +1356,7 @@ remove_devbox_ssh_config() {
 
     managed_dir="$ssh_dir/config.d"
     managed_config="$managed_dir/devbox"
-    [ -L "$config" ] && config="$(resolve_path "$config")"
+    [ -L "$config" ] && config="$(canonicalize_path "$config")"
     config_dir="$(dirname "$config")"
     recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
         die "failed to recover the interrupted devbox SSH configuration update"
@@ -1388,7 +1380,7 @@ remove_devbox_ssh_config() {
         command rm -f "$temporary"
         die "failed to remove the managed devbox SSH configuration from $config"
     fi
-    config_mode="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
+    config_mode="$(file_mode "$config")"
     chmod "$config_mode" "$temporary" || {
         command rm -f "$temporary"
         die "failed to preserve the mode of $config"
@@ -1439,11 +1431,7 @@ provision_devbox_guest() (
     if [ "$force" = false ] && [ "$host_digest" = "$guest_digest" ]; then
         if devbox_guest_bundle_is_valid "$host_digest"; then
             log "devbox provisioning is current."
-            validate_devbox_guest_preflight || {
-                revoke_devbox_guest_ssh_access ||
-                    die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-                die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-            }
+            require_devbox_guest_preflight
             sync_devbox_guest_config || return
             ensure_devbox_guest_ssh_access || return
             return
@@ -1483,8 +1471,7 @@ show_devbox_status() {
         log "devbox: Not created"
         return
     fi
-    record="$(devbox_colima_raw list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }')" || {
+    record="$(devbox_profile_record devbox_colima_raw)" || {
         die "could not determine the devbox VM state"
     }
     if [ -z "$record" ]; then
@@ -1562,7 +1549,7 @@ run_devbox() {
                 return
             fi
             check_devbox_ownership
-            printf "Type '%s' to delete the devbox VM and all its container runtime data: " "$DEVBOX_PROFILE"
+            printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
             read -r confirm
             [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
             if [ "$(devbox_state)" = Running ]; then

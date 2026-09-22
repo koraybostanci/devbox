@@ -10,7 +10,6 @@ source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/runtimes.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/apps.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
-source "$DEVBOX_PROVISION_ROOT/scripts/lib/addons.sh"
 
 set -a
 source "$DEVBOX_GUEST_CONFIG_ROOT/config"
@@ -21,6 +20,5 @@ set +a
 install_runtimes
 install_apps
 configure_guest
-install_addons
 
 printf 'Guest provisioning complete.\n'

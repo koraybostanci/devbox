@@ -72,8 +72,13 @@ root-disk copy) before mounting, so it can be applied with a plain
 
 - Confirm the bind mount with `devbox exec df -h /home/devbox` (it should show
   the larger data disk, not `/dev/root`).
-- Increase `DEVBOX_DISK` in `.env` (for example `60`), then `devbox destroy`
-  and `devbox start` (resizing the data disk requires recreating it).
+- Back up anything you need first: `devbox destroy` deletes the entire VM disk,
+  including the guest workspace `/home/devbox/workspace`, installed toolchains
+  and caches, service data, and credentials. For example:
+  `devbox exec tar -C /home/devbox -czf - workspace > workspace.tgz`
+- Set `DEVBOX_DISK` in `.env` to a value larger than the current one, then
+  `devbox destroy` and `devbox start` (resizing the data disk requires
+  recreating it).
 - Clear a failed build before retrying:
   `devbox exec rm -rf '/tmp/python-build.*'`.
 
@@ -81,51 +86,33 @@ root-disk copy) before mounting, so it can be applied with a plain
 
 PostgreSQL and Valkey are root-managed and bound to `127.0.0.1` only. Check
 them with `devbox services status`. Credentials live in
-`~/.config/devbox/secrets` inside the guest. To change the PostgreSQL port,
-update `POSTGRES_PORT` in `.env` and run `devbox provision`.
+`~/.config/devbox/secrets` inside the guest. Valkey listens on
+`127.0.0.1:16379`, a guest-only port that is not published to the host.
+
+To change the PostgreSQL port, edit `~/.config/devbox/config` inside the guest
+(`devbox connect`, or `devbox exec` with a command) and run `devbox provision`.
+The guest copy is authoritative after the first provision, so `POSTGRES_PORT`
+changes in `.env` are ignored; deleting `~/.config/devbox/config` makes the
+next provision re-seed it from `.env`.
 
 ## Release installation
 
 `scripts/release.sh verify` fails closed: it requires `SHA256SUMS.sig` and a
 valid signature against the committed public key (`DEVBOX_RELEASE_PUBKEY`
-overrides the default), plus a single `devbox-<version>` top-level directory,
-regular-file/directory entry types, and a MANIFEST that matches every archived
-file. Unsigned archives are accepted only with `DEVBOX_ALLOW_UNSIGNED=1`, for
-local builds; never install an archive that does not verify.
+overrides the default), plus a single `devbox-<version>` top-level directory
+and a MANIFEST that matches every archived file. Unsigned archives are accepted
+only with `DEVBOX_ALLOW_UNSIGNED=1`, for local builds; never install an archive
+that does not verify.
 
-`scripts/release.sh install` verifies the archive before extracting it into
-the install root, then installs below
-`~/.local/share/devbox/releases/<version>` and activates
-`~/.local/share/devbox/current`. Repeat installs of the same version are
-idempotent; a failed install leaves `current` pointing at the previous
-release. Other releases are left in place, so `use` can switch back; `--force`
-replaces an existing version directory even when it still matches its
-MANIFEST.
+A failed install leaves the previous release active, and `--force` replaces an
+existing version directory. Installed releases live below
+`${XDG_DATA_HOME:-$HOME/.local/share}/devbox`, are activated through `current`,
+and are managed with the shipped `list`, `use`, and `prune` commands. Release
+installs keep host configuration at `~/.config/devbox/env` (mode 0600), so a
+`.env` inside an installed release tree is ignored with a warning.
 
-Release installs keep host configuration at `~/.config/devbox/env` (mode
-0600). A `.env` left inside a versioned release directory is ignored with a
-warning, and `scripts/release.sh install` copies it to the stable path once if
-the stable file does not exist yet, before the tree that carries it is
-replaced.
-
-Installed releases accumulate under `~/.local/share/devbox/releases`. Bound the
-tree with `scripts/release.sh prune [--keep N]`, which removes non-active
-releases, keeps the active release plus the `N` most recently modified
-non-active releases (default 0), and removes staging directories older than 24
-hours. The active release is never removed; version-named symlinks are skipped
-and a releases directory that is itself a symlink is refused.
-
-A `Release` workflow that creates a draft with missing assets is recovered by
-dispatching it again from `main` with the version already in `VERSION` (the
-input must match); recovery rebuilds the commit that last changed `VERSION` and
-uploads the missing assets into the draft, which a maintainer still publishes
-from the GitHub UI. The `v<version>` tag is created when the draft is published,
-so an untagged draft is recovered when its target commit matches the release
-commit; a tagged draft is recovered when its tag is at that commit. A draft
-whose tag is at another commit, or whose target commit does not match, cannot
-be recovered. A published release is never overwritten, so bump `VERSION` to
-release again. Once `VERSION` has moved on, an older incomplete draft can no
-longer be recovered by dispatch.
+See [docs/release-checklist.md](release-checklist.md) for release operations
+and [docs/architecture.md](architecture.md) for installer and prune internals.
 
 ## Checkout moved or renamed
 

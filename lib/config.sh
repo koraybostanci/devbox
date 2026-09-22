@@ -105,7 +105,7 @@ validate_env_file() {
 }
 
 load_env() {
-    local key line value_expression env_file
+    local key line value_expression env_file resource_key resource_value
 
     devbox_warn_legacy_env_file
     env_file="$(devbox_env_file)"
@@ -135,6 +135,15 @@ load_env() {
     POSTGRES_USER="${POSTGRES_USER:-dev}"
     POSTGRES_DB="${POSTGRES_DB:-dev}"
     POSTGRES_PORT="${POSTGRES_PORT:-15432}"
+
+    # These values are rendered straight into the Colima configuration and
+    # passed as `colima start` flags, so reject anything that is not a positive
+    # integer before it can reach the VM.
+    for resource_key in DEVBOX_CPU DEVBOX_MEMORY DEVBOX_DISK; do
+        resource_value="${!resource_key}"
+        [[ "$resource_value" =~ ^[1-9][0-9]*$ ]] ||
+            die "$env_file: $resource_key must be a positive integer (found '$resource_value')"
+    done
 }
 
 initialize_local_config() {

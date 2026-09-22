@@ -37,20 +37,12 @@ configure_opencode() {
 }
 
 configure_claude() {
-    mkdir -p "$HOME/.claude/skills"
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
-    atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/settings.json" "$HOME/.claude/settings.json"
-    if [ -d "$DEVBOX_PROVISION_ROOT/config/skills" ]; then
-        cp -R "$DEVBOX_PROVISION_ROOT/config/skills/." "$HOME/.claude/skills/"
-    fi
 }
 
 configure_shell() {
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/zsh/zshrc" "$HOME/.zshrc" 644
     zsh -n "$HOME/.zshrc"
-    if [ "$(getent passwd "$USER" | cut -d: -f7)" != "$(command -v zsh)" ]; then
-        sudo chsh -s "$(command -v zsh)" "$USER"
-    fi
 }
 
 configure_guest() {
