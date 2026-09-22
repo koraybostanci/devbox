@@ -25,7 +25,7 @@ fi
 shell_files=()
 while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
-done < <(find . \( -type f -name '*.sh' -o -path './devbox' \) | sort)
+done < <(find . -path ./dist -prune -o \( -type f -name '*.sh' -o -path './devbox' \) -print | sort)
 bash -n "${shell_files[@]}"
 
 # --- the legacy mounted profile is gone ------------------------------------
@@ -39,15 +39,16 @@ if grep -q 'migrate' lib/devbox.sh; then
 fi
 
 # --- .env.example -----------------------------------------------------------
-grep -q '^export GIT_NAME=' .env.example
-grep -q '^export GIT_EMAIL=' .env.example
+grep -q '^export GIT_NAME=' .env.example || fail ".env.example must export GIT_NAME"
+grep -q '^export GIT_EMAIL=' .env.example || fail ".env.example must export GIT_EMAIL"
 if grep -q 'POSTGRES_PASSWORD' .env.example; then
     fail ".env.example must not carry POSTGRES_PASSWORD (it is generated in the guest)"
 fi
 
 # --- launcher ---------------------------------------------------------------
-[ -x devbox ]
-"$ROOT/devbox" help | grep -q 'Usage: devbox <command>'
+[ -x devbox ] || fail "devbox launcher must be executable"
+"$ROOT/devbox" help | grep -q 'Usage: devbox <command>' ||
+    fail "devbox help must print 'Usage: devbox <command>'"
 if "$ROOT/devbox" bogus >/dev/null 2>&1; then
     fail "unknown command was accepted"
 fi
@@ -211,14 +212,25 @@ printf '%s\n' "$companion_db" | grep -q 'postgres port: 15432' ||
     fail "companion did not report PostgreSQL settings"
 
 # --- devbox must not need host jq or yq ----------------------------------------
+# The scans below must fail closed when a target disappears: without these
+# checks a missing file would make grep exit 2 and trip the wrong assertion.
+for scan_target in lib/devbox.sh lib/config.sh devbox; do
+    [ -f "$scan_target" ] || fail "scan target is missing: $scan_target"
+done
 if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/devbox.sh lib/config.sh; then
     fail "devbox must not require host jq or yq"
 fi
 
 # --- prohibited provisioning patterns --------------------------------------
+# Fail closed on a missing scan target: grep -R exits 2 for a missing path,
+# which would silently satisfy the non-match test below.
+for scan_target in \
+    devbox lib provision/scripts provision/config/zsh provision/config/guest; do
+    [ -e "$scan_target" ] || fail "scan target is missing: $scan_target"
+done
 if grep -R -E -- \
     '^[[:space:]]*eval[[:space:]]|curl[^|]*\|[[:space:]]*(ba)?sh|SSH_AUTH_SOCK=/run/host-services|chmod 0777|rm -rf "\$HOME/(projects|data)|/etc/environment|readlink -f' \
-    devbox lib provision/scripts provision/config/zsh; then
+    devbox lib provision/scripts provision/config/zsh provision/config/guest; then
     fail "prohibited provisioning pattern found"
 fi
 
@@ -249,6 +261,16 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
     }
     devbox_admin_guest() { capture_payloads "$@"; }
     devbox_as_guest() { capture_payloads "$@"; }
+    # Fail loudly instead of capturing nothing: a future payload sent through
+    # these transports must be given an explicit capture path above.
+    devbox_colima() {
+        printf "ERROR: devbox_colima payload was not captured for syntax checking\n" >&2
+        exit 1
+    }
+    devbox_guest() {
+        printf "ERROR: devbox_guest payload was not captured for syntax checking\n" >&2
+        exit 1
+    }
     authorize_devbox_host_key || true
     validate_devbox_guest_identity || true
     validate_devbox_guest_privileges || true
@@ -256,10 +278,12 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
 ' || fail "devbox remote payload capture failed"
 payload_count=0
 for payload in "$payloads_dir"/payload.*; do
-    [ -f "$payload" ] || continue
+    [ -s "$payload" ] || continue
     payload_count=$((payload_count + 1))
     bash -n "$payload" || fail "a devbox remote payload is not valid Bash: $payload"
 done
+# The floor is coupled to the number of remote payload sites in lib/devbox.sh;
+# update it when a payload site is added or removed.
 [ "$payload_count" -ge 3 ] || fail "expected at least 3 devbox remote payloads, captured $payload_count"
 
 # --- devbox privilege parser behavior ------------------------------------------
@@ -328,19 +352,449 @@ HOME="$devbox_home" DEVBOX_IDENTITY="$devbox_identity_script" ROOT="$ROOT" DEVBO
     devbox_admin_guest() {
         [ "$1" = bash ] && [ "$2" = -c ] || exit 1
         printf "%s" "$3" >"$DEVBOX_IDENTITY"
+        # The validator consumes its guest output; emit a canonical safe
+        # identity so this run only exercises payload capture.
+        printf "1000:1000:devbox:1000::devbox:1:1\n"
     }
     validate_devbox_guest_identity
-' || true
+' || fail "devbox identity payload capture failed"
+[ -s "$devbox_identity_script" ] ||
+    fail "devbox identity payload capture produced no output"
 bash -n "$devbox_identity_script" || fail "devbox identity validator is not valid Bash"
 
+# --- devbox SSH config staging and stripping --------------------------------
+# stage_devbox_host_ssh_config is a pure renderer and strip_devbox_ssh_block is
+# a pure extractor: exercise both directly, outside any VM.
+ssh_config_unit_root="$validation_root/ssh-config-unit"
+mkdir -p "$ssh_config_unit_root"
+cat >"$validation_root/ssh-config-unit.sh" <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+
+unit_root="$1"
+source "$ROOT/lib/common.sh"
+source "$ROOT/lib/devbox.sh"
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+begin_count() { grep -Fxc '# BEGIN devbox' "$1" || true; }
+end_count() { grep -Fxc '# END devbox' "$1" || true; }
+assert_single_pair() {
+    [ "$(begin_count "$1")" -eq 1 ] || fail "expected exactly one BEGIN marker in $1"
+    [ "$(end_count "$1")" -eq 1 ] || fail "expected exactly one END marker in $1"
+}
+assert_managed_content() {
+    local staged="$1" description="$2"
+
+    sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$staged" | sed '1d;$d' >"$staged.block"
+    cmp -s "$managed" "$staged.block" || fail "$description did not embed the managed content"
+}
+
+managed="$unit_root/managed.conf"
+cat >"$managed" <<'CONFIG'
+Host devbox
+  HostName 127.0.0.1
+  User devbox
+  Port 51234
+  IdentityFile /tmp/devbox-key
+  IdentitiesOnly yes
+  ForwardAgent no
+  ControlMaster no
+  ControlPath none
+CONFIG
+
+# A config that does not exist yet is created with the managed content wrapped
+# in exactly one marker pair.
+stage_devbox_host_ssh_config "$managed" "$unit_root/new/config" "$unit_root/staged-new" ||
+    fail "staging a new config failed"
+assert_single_pair "$unit_root/staged-new"
+[ "$(sed -n '1p' "$unit_root/staged-new")" = "# BEGIN devbox" ] ||
+    fail "new config does not start with the BEGIN marker"
+[ "$(sed -n '$p' "$unit_root/staged-new")" = "# END devbox" ] ||
+    fail "new config does not end with the END marker"
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-new" |
+    sed '1d;$d' >"$unit_root/staged-new.block"
+cmp -s "$managed" "$unit_root/staged-new.block" ||
+    fail "new config did not embed the managed content"
+
+# An existing config without Host/Match entries keeps its content and gets the
+# block appended.
+printf '# user config\nSetEnv KEEP=1\n' >"$unit_root/existing-plain"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-plain" "$unit_root/staged-append" ||
+    fail "staging an existing config failed"
+assert_single_pair "$unit_root/staged-append"
+[ "$(sed -n '1p' "$unit_root/staged-append")" = "# user config" ] ||
+    fail "existing content was not preserved ahead of the appended block"
+grep -qx 'SetEnv KEEP=1' "$unit_root/staged-append" ||
+    fail "existing content was not preserved in the appended config"
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-append" |
+    sed '1d;$d' >"$unit_root/staged-append.block"
+cmp -s "$managed" "$unit_root/staged-append.block" ||
+    fail "appended config did not embed the managed content"
+
+# An existing managed block is replaced in place, exactly once.
+printf '# user config\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/existing-block"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-block" "$unit_root/staged-replace" ||
+    fail "replacing an existing block failed"
+assert_single_pair "$unit_root/staged-replace"
+[ "$(sed -n '1p' "$unit_root/staged-replace")" = "# user config" ] ||
+    fail "content before the replaced block was lost"
+grep -qx 'Host other' "$unit_root/staged-replace" ||
+    fail "content after the replaced block was lost"
+[ "$(sed -n '$p' "$unit_root/staged-replace")" = "  HostName other.example.com" ] ||
+    fail "content after the replaced block was reordered"
+if grep -qx '  Port 1' "$unit_root/staged-replace"; then
+    fail "the stale managed block survived replacement"
+fi
+sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$unit_root/staged-replace" |
+    sed '1d;$d' >"$unit_root/staged-replace.block"
+cmp -s "$managed" "$unit_root/staged-replace.block" ||
+    fail "replacement did not embed the managed content"
+
+# The block is inserted before the first Host or Match entry.
+printf 'Host first\n  HostName first.example.com\nMatch host second\n  User second\n' \
+    >"$unit_root/existing-host-match"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-host-match" "$unit_root/staged-insert" ||
+    fail "inserting before the first Host/Match entry failed"
+assert_single_pair "$unit_root/staged-insert"
+awk '
+    /^# BEGIN devbox$/ { inserted = 1 }
+    /^Host first$/ { exit !inserted }
+' "$unit_root/staged-insert" ||
+    fail "the managed block was not inserted before the first Host entry"
+[ "$(grep -c '^Host first$' "$unit_root/staged-insert")" -eq 1 ] ||
+    fail "the first Host entry was duplicated"
+
+# A config whose first entry is a Match is handled the same way.
+printf 'Match host second\n  User second\nHost first\n  HostName first.example.com\n' \
+    >"$unit_root/existing-match-first"
+stage_devbox_host_ssh_config "$managed" "$unit_root/existing-match-first" "$unit_root/staged-match" ||
+    fail "inserting before the first Match entry failed"
+assert_single_pair "$unit_root/staged-match"
+awk '
+    /^# BEGIN devbox$/ { inserted = 1 }
+    /^Match host second$/ { exit !inserted }
+' "$unit_root/staged-match" ||
+    fail "the managed block was not inserted before the first Match entry"
+
+# Duplicate blocks and legacy marker spellings (indented, extra '#', trailing
+# whitespace, a `devbox-v<digits>` name) are normalized to exactly one managed
+# block.
+printf '# head\n# BEGIN devbox\nHost stale-one\n# END devbox\n# middle\n# BEGIN devbox\nHost stale-two\n# END devbox\n# tail\n' \
+    >"$unit_root/two-blocks"
+printf '# head\n  # BEGIN devbox\nHost stale\n\t# END devbox\n# tail\n' >"$unit_root/indented-markers"
+printf '# head\n# BEGIN devbox \nHost stale\n# END devbox\t\n# tail\n' >"$unit_root/trailing-space"
+printf '# head\n## BEGIN devbox\nHost stale\n## END devbox\n# tail\n' >"$unit_root/double-hash"
+printf '# head\n## BEGIN devbox \nHost stale\n  # END devbox\n# tail\n' >"$unit_root/mixed-markers"
+
+for normalize_case in two-blocks indented-markers trailing-space double-hash mixed-markers; do
+    stage_devbox_host_ssh_config "$managed" "$unit_root/$normalize_case" \
+        "$unit_root/staged-$normalize_case" ||
+        fail "normalizing $normalize_case markers failed"
+    assert_single_pair "$unit_root/staged-$normalize_case"
+    assert_managed_content "$unit_root/staged-$normalize_case" "$normalize_case"
+    grep -qx '# head' "$unit_root/staged-$normalize_case" ||
+        fail "$normalize_case did not preserve the leading line"
+    grep -qx '# tail' "$unit_root/staged-$normalize_case" ||
+        fail "$normalize_case did not preserve the trailing line"
+    if grep -q 'Host stale' "$unit_root/staged-$normalize_case"; then
+        fail "$normalize_case kept the stale managed content"
+    fi
+done
+grep -qx '# middle' "$unit_root/staged-two-blocks" ||
+    fail "two-block normalization did not preserve the line between the blocks"
+
+# The reported shape: a legacy `devbox-v2` span wraps a current block, so the
+# spans are nested rather than sequential. Everything from the outermost BEGIN
+# through its matching END is removed, the written markers stay `devbox`, and
+# all content outside the span survives.
+printf '# top\nHost before\n  HostName before.example.com\n# BEGIN devbox-v2\nHost legacy-outer\n  HostName legacy-outer.example.com\n# BEGIN devbox\nHost stale\n  Port 1\n# END devbox\n# middle-inside\nHost legacy-inner\n# END devbox-v2\n# bottom\nHost after\n  HostName after.example.com\n' \
+    >"$unit_root/nested-v2"
+stage_devbox_host_ssh_config "$managed" "$unit_root/nested-v2" "$unit_root/staged-nested-v2" ||
+    fail "normalizing a nested devbox-v2 span failed"
+assert_single_pair "$unit_root/staged-nested-v2"
+assert_managed_content "$unit_root/staged-nested-v2" "nested devbox-v2"
+if grep -q 'devbox-v2' "$unit_root/staged-nested-v2"; then
+    fail "nested devbox-v2 markers survived normalization"
+fi
+if grep -qE 'legacy-outer|legacy-inner|^Host stale$' "$unit_root/staged-nested-v2"; then
+    fail "nested devbox-v2 span content survived normalization"
+fi
+for nested_v2_kept in '# top' 'Host before' '  HostName before.example.com' '# bottom' 'Host after' '  HostName after.example.com'; do
+    grep -Fxq "$nested_v2_kept" "$unit_root/staged-nested-v2" ||
+        fail "nested devbox-v2 normalization dropped: $nested_v2_kept"
+done
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host before$/ { exit !inside }
+' "$unit_root/staged-nested-v2" ||
+    fail "the normalized block was not inserted before the first Host entry"
+
+# A sequential legacy `devbox-v2` block followed by a current block collapses
+# to the same single managed block.
+printf '# head\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# middle\n# BEGIN devbox\nHost stale\n# END devbox\n# tail\n' \
+    >"$unit_root/sequential-v2"
+stage_devbox_host_ssh_config "$managed" "$unit_root/sequential-v2" "$unit_root/staged-sequential-v2" ||
+    fail "normalizing a sequential devbox-v2 block failed"
+assert_single_pair "$unit_root/staged-sequential-v2"
+assert_managed_content "$unit_root/staged-sequential-v2" "sequential devbox-v2"
+if grep -q 'devbox-v2' "$unit_root/staged-sequential-v2"; then
+    fail "sequential devbox-v2 markers survived normalization"
+fi
+grep -qx '# middle' "$unit_root/staged-sequential-v2" ||
+    fail "sequential devbox-v2 normalization did not preserve the middle line"
+grep -qx '# tail' "$unit_root/staged-sequential-v2" ||
+    fail "sequential devbox-v2 normalization did not preserve the trailing line"
+if grep -q 'Host stale' "$unit_root/staged-sequential-v2"; then
+    fail "sequential devbox-v2 normalization kept stale content"
+fi
+
+# A legacy `devbox-v2` block that precedes a Host entry is normalized like any
+# other block: the managed block lands before the first Host entry.
+printf '# head\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# BEGIN devbox\nHost stale\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/v2-before-host"
+stage_devbox_host_ssh_config "$managed" "$unit_root/v2-before-host" "$unit_root/staged-v2-before-host" ||
+    fail "normalizing a devbox-v2 block before a Host entry failed"
+assert_single_pair "$unit_root/staged-v2-before-host"
+if grep -q 'devbox-v2' "$unit_root/staged-v2-before-host"; then
+    fail "devbox-v2 markers before a Host entry survived normalization"
+fi
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host other$/ { exit !inside }
+' "$unit_root/staged-v2-before-host" ||
+    fail "the normalized block was not inserted before the first Host entry"
+[ "$(grep -c '^Host other$' "$unit_root/staged-v2-before-host")" -eq 1 ] ||
+    fail "the first Host entry was duplicated during devbox-v2 normalization"
+
+# Near-miss names are not markers: `devboxx` and `devbox-v2x` lines and their
+# content are left untouched.
+printf '# head\n# BEGIN devboxx\nHost near-miss-one\n# END devboxx\n# BEGIN devbox-v2x\nHost near-miss-two\n# END devbox-v2x\n# tail\n' \
+    >"$unit_root/near-miss"
+stage_devbox_host_ssh_config "$managed" "$unit_root/near-miss" "$unit_root/staged-near-miss" ||
+    fail "staging a config with near-miss marker names failed"
+assert_single_pair "$unit_root/staged-near-miss"
+for near_miss_kept in '# BEGIN devboxx' '# END devboxx' '# BEGIN devbox-v2x' '# END devbox-v2x' 'Host near-miss-one' 'Host near-miss-two' '# tail'; do
+    grep -Fxq "$near_miss_kept" "$unit_root/staged-near-miss" ||
+        fail "a near-miss marker line was not left untouched: $near_miss_kept"
+done
+
+# A single managed block is still inserted before the first Host/Match entry
+# when the normalized blocks precede one.
+printf '# head\n# BEGIN devbox\nHost stale\n# END devbox\n# BEGIN devbox\nHost stale\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/two-blocks-host"
+stage_devbox_host_ssh_config "$managed" "$unit_root/two-blocks-host" "$unit_root/staged-two-blocks-host" ||
+    fail "normalizing two blocks before a Host entry failed"
+assert_single_pair "$unit_root/staged-two-blocks-host"
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host other$/ { exit !inside }
+' "$unit_root/staged-two-blocks-host" ||
+    fail "the normalized block was not inserted before the first Host entry"
+[ "$(grep -c '^Host other$' "$unit_root/staged-two-blocks-host")" -eq 1 ] ||
+    fail "the first Host entry was duplicated during normalization"
+
+# A balanced nested span is normalized like any other span: the depth counter
+# pairs every BEGIN with an END and everything inside the outermost span is
+# removed.
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\nHost stale\n  # END devbox\n# END devbox\n# tail\n' \
+    >"$unit_root/nested-begin"
+stage_devbox_host_ssh_config "$managed" "$unit_root/nested-begin" "$unit_root/staged-nested-begin" ||
+    fail "normalizing a balanced nested BEGIN marker failed"
+assert_single_pair "$unit_root/staged-nested-begin"
+assert_managed_content "$unit_root/staged-nested-begin" "nested BEGIN"
+grep -qx '# head' "$unit_root/staged-nested-begin" ||
+    fail "nested BEGIN normalization did not preserve the leading line"
+grep -qx '# tail' "$unit_root/staged-nested-begin" ||
+    fail "nested BEGIN normalization did not preserve the trailing line"
+if grep -q 'Host stale' "$unit_root/staged-nested-begin"; then
+    fail "nested BEGIN normalization kept the stale managed content"
+fi
+
+# Genuinely malformed structure is still refused: an orphan END and an
+# unterminated BEGIN.
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/orphan-end"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/orphan-end" "$unit_root/staged-orphan-end"; then
+    fail "an orphan END marker was accepted"
+fi
+printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/missing-end"
+if stage_devbox_host_ssh_config "$managed" "$unit_root/missing-end" "$unit_root/staged-missing-end"; then
+    fail "a missing END marker was accepted"
+fi
+
+# strip_devbox_ssh_block removes only the managed block.
+printf 'Host keep\n  HostName keep.example.com\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-source"
+strip_devbox_ssh_block "$unit_root/strip-source" "$unit_root/strip-out" ||
+    fail "strip_devbox_ssh_block rejected a well-formed block"
+printf 'Host keep\n  HostName keep.example.com\nHost tail\n' >"$unit_root/strip-expected"
+cmp -s "$unit_root/strip-expected" "$unit_root/strip-out" ||
+    fail "strip_devbox_ssh_block did not preserve every other line"
+
+# Every well-formed block is removed, including duplicates and legacy marker
+# spellings.
+printf 'Host keep\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost middle\n# BEGIN devbox\nHost devbox\n  Port 2\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-duplicate"
+strip_devbox_ssh_block "$unit_root/strip-duplicate" "$unit_root/strip-duplicate-out" ||
+    fail "strip_devbox_ssh_block rejected duplicate well-formed blocks"
+printf 'Host keep\nHost middle\nHost tail\n' >"$unit_root/strip-duplicate-expected"
+cmp -s "$unit_root/strip-duplicate-expected" "$unit_root/strip-duplicate-out" ||
+    fail "strip_devbox_ssh_block did not remove every duplicate block"
+printf 'Host keep\n \t## BEGIN devbox \nHost devbox\n## END devbox\t\nHost tail\n' >"$unit_root/strip-legacy"
+strip_devbox_ssh_block "$unit_root/strip-legacy" "$unit_root/strip-legacy-out" ||
+    fail "strip_devbox_ssh_block rejected legacy marker spellings"
+printf 'Host keep\nHost tail\n' >"$unit_root/strip-legacy-expected"
+cmp -s "$unit_root/strip-legacy-expected" "$unit_root/strip-legacy-out" ||
+    fail "strip_devbox_ssh_block did not remove a legacy-spelled block"
+printf 'Host keep\n  # BEGIN devbox\nHost devbox\n# END devbox \nHost tail\n' >"$unit_root/strip-indented"
+strip_devbox_ssh_block "$unit_root/strip-indented" "$unit_root/strip-indented-out" ||
+    fail "strip_devbox_ssh_block rejected an indented marker"
+cmp -s "$unit_root/strip-legacy-expected" "$unit_root/strip-indented-out" ||
+    fail "strip_devbox_ssh_block did not remove an indented block"
+
+# Legacy `devbox-v2` names and nested or overlapping spans are normalized the
+# same way: everything from the outermost BEGIN through its matching END is
+# removed, including a current block wrapped in a legacy span.
+printf 'Host keep\n# BEGIN devbox-v2\nHost legacy-outer\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost legacy-inner\n# END devbox-v2\nHost tail\n' \
+    >"$unit_root/strip-nested-v2"
+strip_devbox_ssh_block "$unit_root/strip-nested-v2" "$unit_root/strip-nested-v2-out" ||
+    fail "strip_devbox_ssh_block rejected a nested devbox-v2 span"
+printf 'Host keep\nHost tail\n' >"$unit_root/strip-nested-v2-expected"
+cmp -s "$unit_root/strip-nested-v2-expected" "$unit_root/strip-nested-v2-out" ||
+    fail "strip_devbox_ssh_block did not remove a nested devbox-v2 span"
+printf 'Host keep\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# middle\n# BEGIN devbox\nHost devbox\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-sequential-v2"
+strip_devbox_ssh_block "$unit_root/strip-sequential-v2" "$unit_root/strip-sequential-v2-out" ||
+    fail "strip_devbox_ssh_block rejected a sequential devbox-v2 block"
+printf 'Host keep\n# middle\nHost tail\n' >"$unit_root/strip-sequential-v2-expected"
+cmp -s "$unit_root/strip-sequential-v2-expected" "$unit_root/strip-sequential-v2-out" ||
+    fail "strip_devbox_ssh_block did not remove a sequential devbox-v2 block"
+
+# Near-miss names are content, not markers: `devboxx` and `devbox-v2x` lines
+# are left untouched.
+printf '# head\n# BEGIN devboxx\nHost near-miss\n# END devboxx\n# BEGIN devbox-v2x\nHost near-miss-two\n# END devbox-v2x\n# tail\n' \
+    >"$unit_root/strip-near-miss"
+strip_devbox_ssh_block "$unit_root/strip-near-miss" "$unit_root/strip-near-miss-out" ||
+    fail "strip_devbox_ssh_block rejected near-miss marker names"
+cmp -s "$unit_root/strip-near-miss" "$unit_root/strip-near-miss-out" ||
+    fail "strip_devbox_ssh_block removed near-miss marker content"
+
+# Malformed structure is refused.
+if strip_devbox_ssh_block "$unit_root/missing-end" "$unit_root/strip-missing-end"; then
+    fail "strip_devbox_ssh_block accepted an unterminated BEGIN marker"
+fi
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/strip-orphan-end"
+if strip_devbox_ssh_block "$unit_root/strip-orphan-end" "$unit_root/strip-orphan-end-out"; then
+    fail "strip_devbox_ssh_block accepted an orphan END marker"
+fi
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n  # END devbox\n# tail\n' >"$unit_root/strip-nested"
+strip_devbox_ssh_block "$unit_root/strip-nested" "$unit_root/strip-nested-out" ||
+    fail "strip_devbox_ssh_block rejected balanced nested BEGIN markers"
+printf '# head\n# tail\n' >"$unit_root/strip-nested-expected"
+cmp -s "$unit_root/strip-nested-expected" "$unit_root/strip-nested-out" ||
+    fail "strip_devbox_ssh_block did not remove a balanced nested span"
+
+# A failed strip makes remove_devbox_ssh_config discard the destination it
+# staged and leave the original configuration untouched.
+mkdir -p "$unit_root/remove-home/.ssh"
+printf '# head\n# END devbox\n# tail\n' >"$unit_root/remove-home/.ssh/config"
+cp "$unit_root/remove-home/.ssh/config" "$unit_root/remove-home/config-original"
+if (HOME="$unit_root/remove-home" remove_devbox_ssh_config) 2>"$unit_root/remove-failure.log"; then
+    fail "remove_devbox_ssh_config accepted an orphan END marker"
+fi
+cmp -s "$unit_root/remove-home/config-original" "$unit_root/remove-home/.ssh/config" ||
+    fail "remove_devbox_ssh_config modified the config after a failed strip"
+if compgen -G "$unit_root/remove-home/.ssh/.config.*" >/dev/null; then
+    fail "remove_devbox_ssh_config left a discarded destination behind"
+fi
+
+# The legacy mirror is removed only when it is a devbox-managed regular file,
+# and config.d is only removed when it becomes empty.
+mirror_home="$unit_root/mirror-home"
+mkdir -p "$mirror_home/.ssh/config.d"
+printf 'Host devbox\n  Port 1\n' >"$mirror_home/.ssh/config.d/devbox"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ ! -e "$mirror_home/.ssh/config.d/devbox" ] || fail "the legacy mirror was not removed"
+[ ! -d "$mirror_home/.ssh/config.d" ] || fail "an emptied config.d was not removed"
+
+mkdir -p "$mirror_home/.ssh/config.d"
+printf 'Host other\n  Port 2\n' >"$mirror_home/.ssh/config.d/devbox"
+printf 'Host devbox\n' >"$mirror_home/.ssh/config.d/keep"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ -f "$mirror_home/.ssh/config.d/devbox" ] ||
+    fail "a config.d/devbox file without the devbox Host entry was removed"
+[ -f "$mirror_home/.ssh/config.d/keep" ] || fail "unrelated config.d content was removed"
+
+command rm -f "$mirror_home/.ssh/config.d/devbox"
+ln -s keep "$mirror_home/.ssh/config.d/devbox"
+HOME="$mirror_home" cleanup_devbox_ssh_config_mirror
+[ -L "$mirror_home/.ssh/config.d/devbox" ] || fail "a symlinked mirror was removed"
+EOF
+ROOT="$ROOT" /bin/bash "$validation_root/ssh-config-unit.sh" "$ssh_config_unit_root" ||
+    fail "devbox SSH config staging and stripping tests failed"
+
+# --- devbox start flags and Colima config validation ------------------------
+start_unit_root="$validation_root/devbox-start-unit"
+mkdir -p "$start_unit_root"
+cat >"$validation_root/start-unit.sh" <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+
+unit_root="$1"
+source "$ROOT/lib/common.sh"
+source "$ROOT/lib/config.sh"
+source "$ROOT/lib/devbox.sh"
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# start_devbox_vm must trust the rendered colima.yaml for profile settings and
+# pass only --save-config=false to the Colima runner.
+render_devbox_colima_config() { :; }
+devbox_state() { printf 'Stopped\n'; }
+devbox_colima() { printf '%s\n' "$*" >>"$unit_root/colima.log"; }
+wait_for_devbox_ssh() { :; }
+
+start_devbox_vm || fail "start_devbox_vm failed with a stopped profile"
+[ "$(awk 'END { print NR }' "$unit_root/colima.log")" -eq 1 ] ||
+    fail "start_devbox_vm did not invoke the Colima runner exactly once"
+[ "$(cat "$unit_root/colima.log")" = "start devbox --save-config=false" ] ||
+    fail "unexpected colima start arguments: $(cat "$unit_root/colima.log")"
+
+# The validator keeps the non-negotiable invariants and accepts the rendered
+# template values.
+rendered="$unit_root/colima.yaml"
+sed -e 's/{{CPU}}/4/' -e 's/{{MEMORY}}/4/' -e 's/{{DISK}}/60/' \
+    "$ROOT/colima.yaml" >"$rendered"
+validate_devbox_colima_config "$rendered" ||
+    fail "the rendered colima.yaml was rejected"
+printf 'mounts:\n  - location: /tmp\n' >>"$rendered"
+if validate_devbox_colima_config "$rendered"; then
+    fail "validate_devbox_colima_config accepted a mounts: entry"
+fi
+sed 's/^runtime: docker$//' "$unit_root/colima.yaml" >"$unit_root/colima-no-runtime.yaml"
+if validate_devbox_colima_config "$unit_root/colima-no-runtime.yaml"; then
+    fail "validate_devbox_colima_config accepted a config without runtime: docker"
+fi
+EOF
+ROOT="$ROOT" /bin/bash "$validation_root/start-unit.sh" "$start_unit_root" ||
+    fail "devbox start flag tests failed"
+
 # --- managed services -------------------------------------------------------
+compose_command=()
 if docker compose version >/dev/null 2>&1; then
+    compose_command=(docker compose)
+elif docker-compose version >/dev/null 2>&1; then
+    compose_command=(docker-compose)
+fi
+if [ "${#compose_command[@]}" -gt 0 ]; then
     POSTGRES_PASSWORD=test POSTGRES_USER=test POSTGRES_DB=test POSTGRES_PORT=15432 \
         VALKEY_PASSWORD=test VALKEY_PORT=16379 \
-        docker compose -f provision/config/services/compose.yaml config -q ||
+        "${compose_command[@]}" -f provision/config/services/compose.yaml config -q ||
         fail "devbox service definition is invalid"
     grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
         fail "devbox services must publish to loopback only"
+elif [ -n "${CI:-}" ]; then
+    fail "docker compose is required in CI"
 else
     printf 'WARN: docker compose is unavailable; skipping service-definition validation\n' >&2
 fi
@@ -459,24 +913,71 @@ data_root_output="$(
 [ ! -e "$data_root_real/nested" ] ||
     fail "devbox_data_root created a missing data root"
 
+# Build into the validation root so the gate never writes into the repo's
+# dist/ and cannot clobber a maintainer's signed artifacts.
+export DEVBOX_DIST_ROOT="$validation_root/dist"
 release_version="$(cat "$ROOT/VERSION")"
-release_archive="$ROOT/dist/devbox-$release_version/devbox-$release_version.tar.gz"
+release_archive="$DEVBOX_DIST_ROOT/devbox-$release_version/devbox-$release_version.tar.gz"
 
 # A fresh build drops any signature left by a previous build.
-mkdir -p "$ROOT/dist/devbox-$release_version"
-printf 'stale\n' >"$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+mkdir -p "$DEVBOX_DIST_ROOT/devbox-$release_version"
+printf 'stale\n' >"$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 "$ROOT/scripts/release.sh" build >/dev/null || fail "release build failed"
-[ ! -e "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig" ] ||
+[ ! -e "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig" ] ||
     fail "fresh release build kept a stale signature"
 if "$ROOT/scripts/release.sh" build 9.9.9 >/dev/null 2>&1; then
     fail "release build accepted a version that does not match VERSION"
 fi
 
 tar -tzf "$release_archive" >"$release_root/archive.list"
-for release_entry in .env.example VERSION scripts/release.sh; do
-    grep -qx "devbox-$release_version/$release_entry" "$release_root/archive.list" ||
-        fail "release archive is missing $release_entry"
-done
+
+# Every tracked top-level file must ship in the archive unless it is explicitly
+# excluded: AGENTS.md and .gitignore are repository/contributor files that mean
+# nothing in an extracted release tree, and release-signing-key.pub.pem is
+# distributed out of band (the assertion below also keeps it out of archives).
+release_excluded_top_level=" AGENTS.md .gitignore release-signing-key.pub.pem "
+release_top_level_excluded() {
+    case "$release_excluded_top_level" in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+# Assert that every path on stdin is present in the archive list. The negative
+# test below drives this same loop with a fabricated path list.
+check_release_top_level_paths() {
+    local archive_list="$1" version="$2" path
+
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        release_top_level_excluded "$path" && continue
+        grep -qx "devbox-$version/$path" "$archive_list" ||
+            fail "release archive is missing tracked top-level file: $path"
+    done
+}
+
+release_tracked_top_level="$(git ls-files | awk -F/ 'NF == 1')"
+[ -n "$release_tracked_top_level" ] ||
+    fail "git ls-files reported no tracked top-level files"
+printf '%s\n' "$release_tracked_top_level" |
+    check_release_top_level_paths "$release_root/archive.list" "$release_version" ||
+    fail "release archive is missing a tracked top-level file"
+# scripts/release.sh is not a top-level file, so it stays an explicit assertion.
+grep -qx "devbox-$release_version/scripts/release.sh" "$release_root/archive.list" ||
+    fail "release archive is missing scripts/release.sh"
+
+# The guard must reject a tracked top-level file that is not in the archive.
+# Drive the same loop with a fabricated path list instead of adding a file to
+# the repository, and confirm the failure names the missing path.
+guard_error="$(
+    printf '%s\n' 'new-top-level.md' |
+        check_release_top_level_paths "$release_root/archive.list" "$release_version" 2>&1
+)" || true
+printf '%s\n' "$guard_error" | grep -q 'new-top-level.md' ||
+    fail "release completeness guard did not reject a fabricated missing top-level file"
+# The documented exclusions are accepted, so the guard is not merely always-failing.
+printf '%s\n' AGENTS.md .gitignore release-signing-key.pub.pem |
+    check_release_top_level_paths "$release_root/archive.list" "$release_version" ||
+    fail "release completeness guard did not honor the documented exclusions"
 if grep -q 'release-signing-key' "$release_root/archive.list"; then
     fail "release archive must not ship the release public key"
 fi
@@ -514,8 +1015,8 @@ relative_path="$relative_root/path:/usr/bin:/bin"
 mkdir -p "$relative_root" "$relative_home"
 tar -xzf "$release_archive" -C "$relative_root"
 cp "$release_archive" "$relative_root/devbox-$release_version.tar.gz"
-cp "$ROOT/dist/devbox-$release_version/SHA256SUMS" "$relative_root/SHA256SUMS"
-cp "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig" "$relative_root/SHA256SUMS.sig"
+cp "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS" "$relative_root/SHA256SUMS"
+cp "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig" "$relative_root/SHA256SUMS.sig"
 cp "$release_root/signing-key.pub.pem" "$relative_root/release-signing-key.pub.pem"
 (
     cd "$relative_root"
@@ -530,12 +1031,12 @@ cp "$release_root/signing-key.pub.pem" "$relative_root/release-signing-key.pub.p
 [ "$(readlink "$relative_data/current")" = "$(physical_path "$relative_data/releases/$release_version")" ] ||
     fail "relative-path installation did not activate the release"
 
-printf 'tampered\n' >"$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+printf 'tampered\n' >"$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 if DEVBOX_RELEASE_PUBKEY="$release_root/signing-key.pub.pem" \
     "$ROOT/scripts/release.sh" verify "$release_archive" >/dev/null 2>&1; then
     fail "tampered release signature was accepted"
 fi
-command rm -f "$ROOT/dist/devbox-$release_version/SHA256SUMS.sig"
+command rm -f "$DEVBOX_DIST_ROOT/devbox-$release_version/SHA256SUMS.sig"
 
 # A tampered archive with recomputed checksums and a valid signature must still
 # fail on its MANIFEST.
@@ -717,13 +1218,13 @@ mkdir -p "$replace_home"
 printf 'export GIT_NAME="Legacy Replace"\nexport GIT_EMAIL="legacy@example.com"\n' \
     >"$legacy_env"
 chmod 600 "$legacy_env"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "seed release installation for the replacement test failed"
 cp "$legacy_env" "$replace_data/releases/$release_version/.env"
 chmod 600 "$replace_data/releases/$release_version/.env"
 printf 'corrupt\n' >>"$replace_data/releases/$release_version/README.md"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "replacement install with a legacy in-tree .env failed"
 cmp -s "$replace_home/.config/devbox/env" "$legacy_env" ||
@@ -734,7 +1235,7 @@ cmp -s "$replace_home/.config/devbox/env" "$legacy_env" ||
     fail "replacement kept the legacy in-tree .env"
 
 # --force replaces an existing release directory even when it is intact.
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$replace_home" XDG_DATA_HOME="$replace_home/.local/share" \
     PATH="$replace_path" "$ROOT/scripts/release.sh" install "$release_archive" --force \
     >/dev/null || fail "--force release installation failed"
 [ "$(readlink "$replace_data/current")" = "$(physical_path "$replace_data/releases/$release_version")" ] ||
@@ -847,7 +1348,7 @@ printf 'export GIT_NAME="Upgrade Test"\nexport GIT_EMAIL="upgrade@example.com"\n
     >"$upgrade_data/releases/0.0.1-rc1/.env"
 chmod 600 "$upgrade_data/releases/0.0.1-rc1/.env"
 ln -s "$upgrade_data/releases/0.0.1-rc1" "$upgrade_data/current"
-DEVBOX_ALLOW_UNSIGNED=1 HOME="$upgrade_home" XDG_DATA_HOME="$upgrade_home/.local/share" \
+DEVBOX_ALLOW_UNSIGNED=1 XDG_CONFIG_HOME= HOME="$upgrade_home" XDG_DATA_HOME="$upgrade_home/.local/share" \
     PATH="$upgrade_path" "$ROOT/scripts/release.sh" install "$release_archive" >/dev/null ||
     fail "upgrade release installation failed"
 [ -f "$upgrade_home/.config/devbox/env" ] ||
@@ -871,7 +1372,7 @@ env_unit_home="$release_root/env-unit/home"
 env_unit_release="$env_unit_home/.local/share/devbox/releases/$release_version"
 mkdir -p "$env_unit_release"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -881,7 +1382,7 @@ env_output="$(
 [ "$env_output" = "$(physical_path "$ROOT")/.env" ] ||
     fail "devbox_env_file did not return the checkout .env"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$env_unit_release" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -891,7 +1392,7 @@ env_output="$(
 [ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
     fail "devbox_env_file did not return the stable release configuration"
 env_output="$(
-    HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
         DEVBOX_DIR="$(physical_path "$env_unit_release")" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -901,7 +1402,7 @@ env_output="$(
 [ "$env_output" = "$env_unit_home/.config/devbox/env" ] ||
     fail "devbox_env_file did not return the stable release configuration for a physical DEVBOX_DIR"
 env_output="$(
-    HOME="$env_unit_home" DEVBOX_ENV_FILE="$release_root/override.env" \
+    XDG_CONFIG_HOME= HOME="$env_unit_home" DEVBOX_ENV_FILE="$release_root/override.env" \
         XDG_DATA_HOME="$env_unit_home/.local/share" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
         source "$ROOT/lib/common.sh"
         source "$ROOT/lib/config.sh"
@@ -910,6 +1411,69 @@ env_output="$(
 )" || fail "devbox_env_file failed with DEVBOX_ENV_FILE"
 [ "$env_output" = "$release_root/override.env" ] ||
     fail "DEVBOX_ENV_FILE did not override the configuration path"
+
+# XDG_CONFIG_HOME selects the host configuration directory for release trees.
+# The path is used literally (never canonicalized, never created), so a
+# sandboxed XDG_CONFIG_HOME stays exactly as written.
+env_output="$(
+    HOME="$env_unit_home" XDG_CONFIG_HOME="$release_root/xdg-config" \
+        XDG_DATA_HOME="$env_unit_home/.local/share" \
+        DEVBOX_DIR="$env_unit_release" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        devbox_env_file
+    '
+)" || fail "devbox_env_file failed with XDG_CONFIG_HOME set"
+[ "$env_output" = "$release_root/xdg-config/devbox/env" ] ||
+    fail "devbox_env_file ignored XDG_CONFIG_HOME: $env_output"
+[ ! -e "$release_root/xdg-config" ] ||
+    fail "devbox_env_file created the XDG configuration directory"
+
+# VM resource values are rendered into the Colima configuration and passed as
+# `colima start` flags, so a typo must fail before it can reach the VM.
+resource_env="$release_root/resources.env"
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_CPU=four\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+if XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    load_env
+' 2>"$release_root/resources.err"; then
+    fail "load_env accepted a non-numeric DEVBOX_CPU"
+fi
+grep -q 'DEVBOX_CPU' "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the key"
+grep -q 'four' "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the value"
+grep -qF "$resource_env" "$release_root/resources.err" ||
+    fail "invalid DEVBOX_CPU rejection did not name the configuration file"
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_DISK=0\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+if XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+    DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    load_env
+' 2>/dev/null; then
+    fail "load_env accepted a zero DEVBOX_DISK"
+fi
+printf 'export GIT_NAME="Resource Test"\nexport GIT_EMAIL="resource@example.com"\nexport DEVBOX_CPU=8\n' \
+    >"$resource_env"
+chmod 600 "$resource_env"
+resource_output="$(
+    XDG_CONFIG_HOME= HOME="$env_unit_home" XDG_DATA_HOME="$env_unit_home/.local/share" \
+        DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" ROOT="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        load_env
+        printf "%s\n" "$DEVBOX_CPU"
+    '
+)" || fail "load_env rejected a valid DEVBOX_CPU"
+[ "$resource_output" = "8" ] ||
+    fail "load_env did not load the valid DEVBOX_CPU"
 
 # Ownership marker v2: accept the install root (data root for releases).
 owner_home="$release_root/owner/home"
@@ -1023,6 +1587,46 @@ stop_status="$(
 [ "$stop_status" = "devbox: Running" ] ||
     fail "devbox status did not report the foreign profile state"
 
+# A multi-column `colima list` record must be parsed consistently: the gated
+# state lookup reports the second column while status keeps the full record.
+record_home="$stop_root/record-home"
+mkdir -p "$record_home/.colima/devbox"
+printf 'devbox-profile-v2\n%s\n' "$(physical_path "$ROOT")" \
+    >"$record_home/.colima/devbox/.devbox-owner"
+cat >"$stop_bin/colima" <<'EOF'
+#!/bin/bash
+if [ "$1" = list ]; then
+    printf 'devbox Running aarch64 4 4 60\n'
+    printf 'other Stopped aarch64 2 2 30\n'
+fi
+exit 0
+EOF
+chmod +x "$stop_bin/colima"
+record_state="$(
+    HOME="$record_home" XDG_DATA_HOME="$record_home/.local/share" COLIMA_HOME= LIMA_HOME= \
+        PATH="$stop_bin:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        configure_devbox_paths
+        devbox_state
+    '
+)" || fail "devbox_state failed for an owned profile"
+[ "$record_state" = "Running" ] ||
+    fail "devbox_state did not report the second record field: $record_state"
+record_status="$(
+    HOME="$record_home" XDG_DATA_HOME="$record_home/.local/share" COLIMA_HOME= LIMA_HOME= \
+        PATH="$stop_bin:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DIR="$ROOT" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        configure_devbox_paths
+        show_devbox_status
+    '
+)" || fail "devbox status failed for an owned profile"
+[ "$record_status" = "devbox: Running aarch64 4 4 60" ] ||
+    fail "devbox status did not report the full record: $record_status"
+
 # A failing state query explains itself instead of exiting 1 silently.
 cat >"$stop_bin/colima" <<'EOF'
 #!/bin/bash
@@ -1048,7 +1652,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     init_launcher="$install_data/current/devbox"
     init_env="$install_home/.config/devbox/env"
     init_status=0
-    HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
+    XDG_CONFIG_HOME= HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
         "$init_launcher" init >"$release_root/init.log" 2>&1 || init_status=$?
     [ "$init_status" -eq 1 ] ||
         fail "devbox init did not require configuration edits before succeeding"
@@ -1059,7 +1663,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         fail "devbox init did not seed the host configuration from .env.example"
     printf 'export GIT_NAME="Devbox Test"\nexport GIT_EMAIL="devbox@example.com"\n' >"$init_env"
     chmod 600 "$init_env"
-    HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
+    XDG_CONFIG_HOME= HOME="$install_home" XDG_DATA_HOME="$install_home/.local/share" PATH="/usr/bin:/bin" \
         "$init_launcher" init >/dev/null ||
         fail "devbox init did not complete after configuration"
 else

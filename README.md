@@ -3,9 +3,12 @@
 A disposable, isolated Ubuntu development VM on macOS, powered by Colima.
 
 Your editors and SSH clients run on macOS; the project files, shells,
-compilers, CLIs, Docker, and project processes all live inside the VM. The
-guest is fully self-contained — there are no host filesystem mounts — so you
-can rebuild or destroy it without touching your Mac.
+compilers, CLIs, and project processes all live inside the VM, and the managed
+PostgreSQL and Valkey containers run there under root. The guest is fully
+self-contained — there are no host filesystem mounts — so you can rebuild or
+destroy it without touching your Mac.
+
+Design and internals are in [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
@@ -26,6 +29,13 @@ Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 
 `./devbox install` puts `devbox` on your `PATH` (a symlink to this checkout).
 
+### What's provisioned
+
+Node.js and npm (via nvm), Python and pyenv, uv, Go, Rust, Java 21, Claude
+Code, OpenCode, the Databricks CLI, `yq`, `gh`, `jq`, and zsh with oh-my-zsh.
+[`provision/versions.env`](provision/versions.env) is the source of truth for
+pinned versions; `gh` and `jq` come from Ubuntu packages.
+
 ### Configuration
 
 `.env` (mode 0600, gitignored) holds only non-secret defaults:
@@ -40,6 +50,11 @@ export DEVBOX_CPU="4"
 export DEVBOX_MEMORY="4"
 export DEVBOX_DISK="60"
 ```
+
+The identity and PostgreSQL keys are seeded into the guest on first provision
+and maintained in the guest at `~/.config/devbox/config` afterwards; the
+`DEVBOX_*` resource keys size the VM and changing them requires recreating it.
+See [docs/troubleshooting.md](docs/troubleshooting.md) to change either group.
 
 Secrets are never taken from the host: the guest generates its own service
 credentials.
@@ -60,9 +75,9 @@ stop/start and is removed only by `devbox destroy`.
 ### Remote access
 
 `devbox start` adds a marked `Host devbox` entry to your OpenSSH config
-(`~/.ssh/config`, plus a copy under `~/.ssh/config.d/devbox`). Point editors,
-`git`, and other tools at host `devbox` to work with the guest files directly
-over SSH; `devbox destroy` removes the entry.
+(`~/.ssh/config`). Point editors, `git`, and other tools at host `devbox` to
+work with the guest files directly over SSH; `devbox destroy` removes the
+entry.
 
 ## Services
 
@@ -82,9 +97,15 @@ credentials are used or stored.
 
 ```sh
 devbox auth status                 # github, claude, opencode, databricks
-devbox auth login github           # also: claude, opencode, databricks
+devbox auth login github           # starts `gh auth login` inside the guest
+devbox auth login opencode         # starts `opencode auth login` in the guest
+devbox auth login claude           # prints the steps to finish Claude login
+devbox auth login databricks       # prints the databricks login command
 devbox db info                     # PostgreSQL connection settings
 ```
+
+`claude` and `databricks` cannot be scripted from the companion, so those
+commands print the next step instead of starting a login.
 
 Credentials are written inside the guest and survive stop/start; they are
 removed only by `devbox destroy`.
@@ -118,10 +139,11 @@ DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
 ```
 
 `install` verifies the archive before touching the install root, installs under
-`~/.local/share/devbox/releases/<version>`, activates
-`~/.local/share/devbox/current`, and links `devbox` onto your `PATH`. Release
-installs keep host configuration at `~/.config/devbox/env` (mode 0600): run
-`devbox init`, edit it, and run `devbox init` again.
+`${XDG_DATA_HOME:-$HOME/.local/share}/devbox/releases/<version>`, activates
+`${XDG_DATA_HOME:-$HOME/.local/share}/devbox/current`, and links `devbox` onto
+your `PATH`. Release installs keep host configuration at
+`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600): run `devbox init`,
+edit it, and run `devbox init` again.
 
 Upgrades install alongside the old version and keep your configuration. If the
 VM was created by a checkout or an earlier release, claim it while stopped:
@@ -134,22 +156,18 @@ devbox install --adopt
 Manage installed versions with the shipped tooling:
 
 ```sh
-~/.local/share/devbox/current/scripts/release.sh list
-~/.local/share/devbox/current/scripts/release.sh use <version>
-~/.local/share/devbox/current/scripts/release.sh prune [--keep N]
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
+"$data_root/current/scripts/release.sh" list
+"$data_root/current/scripts/release.sh" use <version>
+"$data_root/current/scripts/release.sh" prune [--keep N]
 ```
 
 ### Publish a release (maintainer)
 
-`VERSION` is the source of truth. Bump it in a PR and merge to `main`; the
-`Release` workflow runs the checks, builds and signs the archive from that
-commit, and opens a **draft** release. Review the notes and assets, then click
-**Publish release** — the workflow never publishes on its own. Bump `VERSION`
-for the next release.
-
-Details, recovery, and the local equivalents of the workflow are in
-[docs/release-checklist.md](docs/release-checklist.md); installer behavior is in
-[docs/troubleshooting.md](docs/troubleshooting.md).
+`VERSION` is the source of truth: bump it in a PR and merge to `main`; the
+`Release` workflow builds and signs the archive from that commit and opens a
+**draft** release for a maintainer to publish. See
+[docs/release-checklist.md](docs/release-checklist.md) for the full process.
 
 ## Security
 

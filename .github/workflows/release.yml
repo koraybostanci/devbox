@@ -13,10 +13,11 @@ on:
           Recovery re-run only: must match the version already in VERSION.
         required: true
 
-# Group by commit so a newer commit never cancels a pending release of a
-# different version.
+# Group by release, not by commit, so runs of the same version from different
+# main tips cannot race `gh release upload --clobber`; pending runs queue
+# instead of cancelling the active one.
 concurrency:
-  group: release-${{ github.sha }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -91,6 +92,7 @@ jobs:
           state=create
           tag_exists=false
           release_exists=false
+          tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
           if gh release view "v$version" >/dev/null 2>&1; then
             release_exists=true
           fi
@@ -99,14 +101,11 @@ jobs:
             # "not a draft". Treating it as empty would classify a complete
             # published release as an incomplete draft and clobber it during
             # recovery.
-            if ! release_view="$(gh release view "v$version" --json isDraft,assets,targetCommitish --jq '.isDraft, .targetCommitish, (.assets[].name)')"; then
-              printf 'ERROR: release v%s exists but its state could not be queried; retry once the GitHub API is available.\n' \
+            if ! is_draft="$(gh release view "v$version" --json isDraft --jq .isDraft)"; then
+              printf 'ERROR: release v%s exists but its draft state could not be queried; retry once the GitHub API is available.\n' \
                 "$version" >&2
               exit 1
             fi
-            # The jq output line order is fixed: isDraft, targetCommitish, then
-            # one asset name per line.
-            is_draft="$(printf '%s\n' "$release_view" | sed -n '1p')"
             case "$is_draft" in
               true|false) ;;
               *)
@@ -115,7 +114,11 @@ jobs:
                 exit 1
                 ;;
             esac
-            target_commitish="$(printf '%s\n' "$release_view" | sed -n '2p')"
+            if ! target_commitish="$(gh release view "v$version" --json targetCommitish --jq .targetCommitish)"; then
+              printf 'ERROR: release v%s exists but its target commit could not be queried; retry once the GitHub API is available.\n' \
+                "$version" >&2
+              exit 1
+            fi
             case "$target_commitish" in
               ""|null)
                 printf 'ERROR: release v%s did not report a usable target commit; refusing to continue.\n' \
@@ -123,20 +126,24 @@ jobs:
                 exit 1
                 ;;
             esac
-            assets="$(printf '%s\n' "$release_view" | sed -n '3,$p')"
+            if ! assets="$(gh release view "v$version" --json assets --jq '.assets[].name')"; then
+              printf 'ERROR: release v%s exists but its assets could not be queried; retry once the GitHub API is available.\n' \
+                "$version" >&2
+              exit 1
+            fi
             missing=""
             for expected in "devbox-$version.tar.gz" SHA256SUMS SHA256SUMS.sig; do
               if ! printf '%s\n' "$assets" | grep -qx "$expected"; then
                 missing="$missing $expected"
               fi
             done
-            tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
             if [ "$is_draft" = true ]; then
               if [ -z "$missing" ]; then
-                # Complete draft: never rebuild or upload, just hand the
-                # maintainer the publish instruction.
-                state=ready
-                printf 'Draft release v%s already has all assets; the publish step only points at the GitHub UI.\n' \
+                # Complete draft: verify the existing assets before trusting
+                # them; a draft is never rebuilt or uploaded just because its
+                # asset names look complete.
+                state=verify
+                printf 'Draft release v%s already has all asset names; the assets will be downloaded and verified.\n' \
                   "$version"
               elif [ -n "$tag_commit" ]; then
                 # The tag already points at the release commit; the release
@@ -171,7 +178,6 @@ jobs:
               exit 1
             fi
           else
-            tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
             if [ -n "$tag_commit" ]; then
               if [ "$tag_commit" != "$version_commit" ]; then
                 printf 'ERROR: tag v%s exists at %s, not at the release commit %s; bump VERSION to release again.\n' \
@@ -187,12 +193,66 @@ jobs:
       - name: Check out the release commit
         run: git checkout --detach "$version_commit"
 
+      - name: Verify existing draft assets
+        if: env.release_state == 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          download_dir="$(mktemp -d)"
+          trap 'command rm -rf "$download_dir"' EXIT
+          if ! gh release download "v$version" --dir "$download_dir" --pattern '*'; then
+            printf 'ERROR: could not download the assets of draft release v%s; refusing to rebuild or overwrite it.\n' \
+              "$version" >&2
+            exit 1
+          fi
+          if scripts/release.sh verify "$download_dir/devbox-$version.tar.gz"; then
+            printf 'release_state=ready\n' >>"$GITHUB_ENV"
+            printf 'Draft release v%s assets verified against the committed public key.\n' \
+              "$version"
+          else
+            # The assets do not verify. Recover only when the draft is tied to
+            # the release commit: tag v$version exists at $version_commit, or
+            # no tag exists and the draft's target commit is $version_commit.
+            # A failed query is not recoverable; fail closed.
+            if ! target_commitish="$(gh release view "v$version" --json targetCommitish --jq .targetCommitish)"; then
+              printf 'ERROR: draft release v%s failed verification and its target commit could not be queried; retry once the GitHub API is available.\n' \
+                "$version" >&2
+              exit 1
+            fi
+            case "$target_commitish" in
+              ""|null)
+                printf 'ERROR: draft release v%s failed verification and did not report a usable target commit; refusing to continue.\n' \
+                  "$version" >&2
+                exit 1
+                ;;
+            esac
+            tag_commit="$(git rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null || true)"
+            if [ -n "$tag_commit" ]; then
+              if [ "$tag_commit" != "$version_commit" ]; then
+                printf 'ERROR: draft release v%s failed verification but tag v%s is at %s, not at the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
+                  "$version" "$version" "$tag_commit" "$version_commit" >&2
+                exit 1
+              fi
+              printf 'release_state=recover\n' >>"$GITHUB_ENV"
+              printf 'Recovering draft release v%s (assets failed verification; tag v%s is at the release commit)\n' \
+                "$version" "$version"
+            elif [ "$target_commitish" = "$version_commit" ]; then
+              printf 'release_state=recover\n' >>"$GITHUB_ENV"
+              printf 'Recovering untagged draft release v%s (assets failed verification; target commit %s is the release commit)\n' \
+                "$version" "$target_commitish"
+            else
+              printf 'ERROR: draft release v%s failed verification but tag v%s does not exist and its target commit %s is not the release commit %s; this draft cannot be recovered. Delete the draft and bump VERSION to release again.\n' \
+                "$version" "$version" "$target_commitish" "$version_commit" >&2
+              exit 1
+            fi
+          fi
+
       - name: Build release
-        if: env.release_state != 'ready'
+        if: env.release_state == 'create' || env.release_state == 'recover'
         run: scripts/release.sh build
 
       - name: Sign release
-        if: env.release_state != 'ready'
+        if: env.release_state == 'create' || env.release_state == 'recover'
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -207,7 +267,7 @@ jobs:
           scripts/release.sh sign "dist/devbox-$version/devbox-$version.tar.gz" --key "$key"
 
       - name: Verify release
-        if: env.release_state != 'ready'
+        if: env.release_state == 'create' || env.release_state == 'recover'
         run: scripts/release.sh verify "dist/devbox-$version/devbox-$version.tar.gz"
 
       - name: Publish release
@@ -217,6 +277,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           draft_url="$SERVER_URL/$REPOSITORY/releases/edit/v$version"
+          if [ "$release_state" = "verify" ]; then
+            printf 'ERROR: internal error: draft verification did not complete\n' >&2
+            exit 1
+          fi
           if [ "$release_state" = "ready" ]; then
             printf 'Draft release v%s is already prepared with all assets; nothing was rebuilt or uploaded.\n' \
               "$version"

@@ -1,21 +1,12 @@
 # Release Checklist
 
-Run this on supported and current macOS, both on Apple Silicon.
+Run this on current macOS; Apple Silicon (arm64) is the only supported
+platform.
 
 ## Static gate
 
 - Run `scripts/check.sh`; confirm all checks pass.
 - Confirm CI passes on the proposed revision.
-
-## Host baseline
-
-Record before setup:
-
-```sh
-git config --global --list
-ssh-add -l
-ssh -G github.com
-```
 
 ## Clean install
 
@@ -28,22 +19,14 @@ On an account without devbox state:
 ./devbox status
 ./devbox connect        # workspace at /home/devbox/workspace
 ./devbox exec id -un    # devbox
+./devbox auth status
+./devbox db info
 ./devbox services status
 ./devbox stop
 ```
 
 Confirm the host has no devbox mounts and that `devbox` on the guest cannot
 run Docker or read `/var/lib/devbox/services/env`.
-
-## Acceptance
-
-Confirm on macOS:
-
-- `scripts/check.sh` passes and CI is green.
-- `devbox start`, `devbox status`, `devbox connect`, `devbox services status`
-  work from a clean account with only Colima/OpenSSH/macOS built-ins.
-- `devbox auth status` and `devbox db info` report correctly.
-- `devbox destroy` removes the VM and its runtime data.
 
 ## Release artifacts
 
@@ -73,26 +56,28 @@ published release is never overwritten; bump `VERSION` for the next release
 instead. After `VERSION` has moved on, an older incomplete draft cannot be
 recovered by dispatch; release a new version.
 
-Mirror the build locally:
+Mirror the build locally. `build` writes the archive and its `SHA256SUMS` and
+leaves signing to a separate command:
 
 ```sh
 scripts/release.sh build
-scripts/release.sh verify "dist/devbox-<version>/devbox-<version>.tar.gz"
+scripts/release.sh sign "dist/devbox-<version>/devbox-<version>.tar.gz" \
+    --key <private-key.pem>
+DEVBOX_RELEASE_PUBKEY=<public-key.pem> \
+    scripts/release.sh verify "dist/devbox-<version>/devbox-<version>.tar.gz"
 ```
 
-Old installs accumulate under `~/.local/share/devbox/releases`; prune them
-while keeping the active release:
+`DEVBOX_ALLOW_UNSIGNED=1` skips the signature check for local-only builds; never
+install or publish an archive that does not verify.
+
+Old installs accumulate under
+`${XDG_DATA_HOME:-$HOME/.local/share}/devbox/releases`; prune them while keeping
+the active release:
 
 ```sh
-~/.local/share/devbox/current/scripts/release.sh prune --keep 1
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
+"$data_root/current/scripts/release.sh" prune --keep 1
 ```
-
-Confirm the workflow refuses a dispatch input that does not match `VERSION`,
-fails when the tag exists at another commit, when an untagged draft's target
-commit does not match the release commit, or when the release is already
-published, drafts rather than publishes the release, signs with the
-`RELEASE_SIGNING_KEY` secret, and verifies against the committed public key
-before attaching the archive, `SHA256SUMS`, and `SHA256SUMS.sig`.
 
 ## Published-release round trip
 
@@ -110,20 +95,20 @@ DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
 
 Confirm:
 
-- `~/.local/share/devbox/current/scripts/release.sh list` marks the installed
-  version active and `~/.local/share/devbox/current` points at it.
+- `${XDG_DATA_HOME:-$HOME/.local/share}/devbox/current/scripts/release.sh list`
+  marks the installed version active and `current` points at it.
 - The download-directory invocation works with relative arguments: the shipped
   `scripts/release.sh` resolves the archive and `DEVBOX_RELEASE_PUBKEY` against
   the directory it was invoked from.
-- `devbox init` creates `~/.config/devbox/env` (mode 0600) from the archive's
-  `.env.example`; edit it and rerun.
+- `devbox init` creates `${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode
+  0600) from the archive's `.env.example`; edit it and rerun.
 - `devbox start` claims the VM; if the VM predates the release, `devbox stop`
   then `devbox install --adopt` claims the existing profile.
-- Installing the next release keeps `~/.config/devbox/env` and does not
-  invalidate the Colima profile.
+- Installing the next release keeps `${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env`
+  and does not invalidate the Colima profile.
 
-## Destructive recovery
+## Teardown
 
-`devbox destroy` removes the VM and its container runtime data. Back up
-anything on the guest disk you still need first; host files are untouched
-(devbox has no host mounts).
+`devbox destroy` removes the VM, its container runtime data, and the managed
+SSH configuration. Back up anything on the guest disk you still need first;
+host files are untouched (devbox has no host mounts).

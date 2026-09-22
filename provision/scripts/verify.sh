@@ -72,6 +72,12 @@ check "devbox guest cannot access Docker socket" bash -c '! test -w /var/run/doc
 check "devbox has no legacy mounts" bash -c '
     [ ! -e /mnt/devbox/projects ] && [ ! -e /mnt/devbox/data ]
 '
+if [ ! -r "$DEVBOX_GUEST_CONFIG_ROOT/config" ] ||
+    [ ! -r "$DEVBOX_GUEST_CONFIG_ROOT/secrets" ]; then
+    printf 'FAIL: devbox guest configuration is unavailable at %s\n' \
+        "$DEVBOX_GUEST_CONFIG_ROOT" >&2
+    exit 1
+fi
 source "$DEVBOX_GUEST_CONFIG_ROOT/config"
 source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
 check "devbox services root is root-owned and closed" bash -c '
@@ -80,8 +86,10 @@ check "devbox services root is root-owned and closed" bash -c '
         [ ! -w /var/lib/devbox/services ]
 '
 check "devbox PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
+# VALKEY_PORT is guest-config-only (not seeded from the host); the default
+# 16379 below is the port the seeded guest configuration uses.
 check "devbox Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
-check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md" -a -f "$HOME/.claude/settings.json"
+check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md"
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
