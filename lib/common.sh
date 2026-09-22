@@ -41,23 +41,6 @@ file_mode() {
     fi
 }
 
-resolve_path() {
-    local path="$1"
-    local directory
-
-    while [ -L "$path" ]; do
-        directory="$(cd -P "$(dirname "$path")" && pwd)"
-        path="$(readlink "$path")"
-        case "$path" in
-            /*) ;;
-            *) path="$directory/$path" ;;
-        esac
-    done
-
-    directory="$(cd -P "$(dirname "$path")" && pwd)"
-    printf '%s/%s\n' "$directory" "$(basename "$path")"
-}
-
 shell_quote() {
     printf '%q' "$1"
 }
@@ -127,26 +110,37 @@ devbox_data_root() {
     canonicalize_path "${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
 }
 
+# Host configuration file shared by release installs. XDG_CONFIG_HOME overrides
+# ~/.config, mirroring devbox_data_root's XDG_DATA_HOME handling. The path is
+# deliberately not canonicalized so callers and tests can compare it literally.
+devbox_host_env_file() {
+    printf '%s/devbox/env\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
 choose_install_bin() {
     local candidate
+    local -a path_dirs
 
     if command -v devbox >/dev/null 2>&1; then
         candidate="$(dirname "$(command -v devbox)")"
         [ -w "$candidate" ] && printf '%s\n' "$candidate" && return
     fi
 
-    while IFS= read -r candidate; do
-        [ -n "$candidate" ] || continue
-        if [ ! -d "$candidate" ] || [ ! -w "$candidate" ]; then
-            continue
-        fi
-        case "$candidate" in
-            "$HOME"/*)
-                printf '%s\n' "$candidate"
-                return
-                ;;
-        esac
-    done < <(printf '%s' "$PATH" | tr ':' '\n')
+    IFS=: read -r -a path_dirs <<<"$PATH"
+    if [ "${#path_dirs[@]}" -gt 0 ]; then
+        for candidate in "${path_dirs[@]}"; do
+            [ -n "$candidate" ] || continue
+            if [ ! -d "$candidate" ] || [ ! -w "$candidate" ]; then
+                continue
+            fi
+            case "$candidate" in
+                "$HOME"/*)
+                    printf '%s\n' "$candidate"
+                    return
+                    ;;
+            esac
+        done
+    fi
 
     printf '%s/.local/bin\n' "$HOME"
 }
@@ -218,23 +212,17 @@ acquire_lock() {
     local owner_pid=""
 
     mkdir -p "$DEVBOX_LOCK_DIR"
-    if mkdir "$lock_path" 2>/dev/null; then
-        printf '%s\n' "$$" >"$lock_path/pid"
-        DEVBOX_ACTIVE_LOCK="$lock_path"
-        trap release_lock EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        return
+    if ! mkdir "$lock_path" 2>/dev/null; then
+        [ -f "$lock_path/pid" ] && read -r owner_pid <"$lock_path/pid"
+        if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+            die "another devbox command is running (PID $owner_pid)"
+        fi
+
+        warn "removing stale lock $lock_path"
+        command rm -rf "$lock_path"
+        mkdir "$lock_path" || die "could not acquire lock $lock_path"
     fi
 
-    [ -f "$lock_path/pid" ] && read -r owner_pid <"$lock_path/pid"
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
-        die "another devbox command is running (PID $owner_pid)"
-    fi
-
-    warn "removing stale lock $lock_path"
-    command rm -rf "$lock_path"
-    mkdir "$lock_path" || die "could not acquire lock $lock_path"
     printf '%s\n' "$$" >"$lock_path/pid"
     DEVBOX_ACTIVE_LOCK="$lock_path"
     trap release_lock EXIT

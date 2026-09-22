@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build, verify, and install versioned devbox release archives.
 #
-#   scripts/release.sh build [version]
+#   scripts/release.sh build [version]   # VERSION is the source of truth
 #   scripts/release.sh sign <archive.tar.gz> --key <private.pem>
 #   scripts/release.sh verify <archive.tar.gz>
 #   scripts/release.sh install <archive.tar.gz> [--force]
@@ -9,38 +9,15 @@
 #   scripts/release.sh list
 #   scripts/release.sh prune [--keep N]
 #
-# `build` with no argument uses the VERSION file, which is the source of
-# truth; an explicit version must match it. Build output lands in
-# dist/devbox-<version>/devbox-<version>.tar.gz with sibling SHA256SUMS and
-# SHA256SUMS.sig. Each command reads checksums and signatures from the
-# archive's own directory, so flat downloads (archive + SHA256SUMS next to it)
-# verify and install too.
+# Invariants:
+# - Verification fails closed: an archive needs a SHA256SUMS.sig signed by the
+#   committed public key (DEVBOX_RELEASE_PUBKEY overrides it); unsigned
+#   archives are accepted only for local testing with DEVBOX_ALLOW_UNSIGNED=1.
+# - Installations live under the canonical data root's releases/ and activate
+#   through its current symlink (${XDG_DATA_HOME:-$HOME/.local/share}/devbox).
+# - prune never removes the active release.
 #
-# Archive, signing-key, and DEVBOX_RELEASE_PUBKEY paths are resolved against
-# the directory the command was invoked from, so the documented flat-download
-# invocation installs with relative arguments:
-#
-#   DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
-#       ./devbox-<version>/scripts/release.sh install devbox-<version>.tar.gz
-#
-# Verification fails closed: a release must carry a SHA256SUMS.sig signed by
-# the committed public key (override with DEVBOX_RELEASE_PUBKEY). Unsigned
-# archives are accepted only for local testing with DEVBOX_ALLOW_UNSIGNED=1.
-# `install` reuses an installed release whose tree still matches its MANIFEST
-# and replaces one that does not; `--force` replaces an existing release
-# directory even when it is intact.
-#
-# Installations live at <data root>/releases/<version> and are activated
-# through <data root>/current, where <data root> is
-# ${XDG_DATA_HOME:-$HOME/.local/share}/devbox. Release installs keep host
-# configuration at $HOME/.config/devbox/env so upgrades preserve it.
-#
-# `prune` bounds the releases tree: it removes version-named release
-# directories that are not active, keeping the active release plus the N most
-# recently modified non-active releases (default 0, selected by directory
-# mtime), and removes stale staging directories (releases/.install.*,
-# releases/.replace.*, <data root>/.activate.*) older than 24 hours. The
-# active release is never removed.
+# Internals: docs/architecture.md. Operations: docs/release-checklist.md.
 
 set -Eeuo pipefail
 
@@ -105,11 +82,12 @@ release_version() {
 
 build_release() {
     local requested="${1:-}" version dist staging payload path
+    local DEVBOX_DIST_ROOT="${DEVBOX_DIST_ROOT:-$ROOT/dist}"
     version="$(release_version)"
     if [ -n "$requested" ] && [ "$requested" != "$version" ]; then
         die "requested version $requested does not match VERSION ($version); bump VERSION before tagging"
     fi
-    dist="$ROOT/dist/devbox-$version"
+    dist="$DEVBOX_DIST_ROOT/devbox-$version"
     staging="$(mktemp -d)"
     CLEANUP_PATHS+=("$staging")
     payload="$staging/devbox-$version"
@@ -203,10 +181,13 @@ archive_version() {
     printf '%s\n' "$version"
 }
 
-# Validate an extracted release tree against its MANIFEST. Dies on failure.
+# Validate an extracted release tree against its MANIFEST. Runs in a subshell
+# with its own temporary directory so callers that only need a yes/no answer can
+# suppress its diagnostics without leaking temporary files. Dies on failure.
 # VERSION is optional (legacy archives such as v0.0.1-rc1 predate it) but is
 # checked against the release version whenever it is present.
-validate_release_tree() {
+validate_release_tree() (
+    set -Eeuo pipefail
     local tree="$1" version="$2" temporary manifest paths_file files_file archive_files
     local line line_number=0 checksum path rest duplicate entry unexpected
 
@@ -216,7 +197,7 @@ validate_release_tree() {
     [ -z "$unexpected" ] ||
         die "archive contains an unsupported entry: ${unexpected#"$tree"/}"
     temporary="$(mktemp -d)"
-    CLEANUP_PATHS+=("$temporary")
+    trap 'command rm -rf "$temporary"' EXIT
     paths_file="$temporary/paths"
     files_file="$temporary/files.sorted"
     archive_files="$temporary/files"
@@ -233,8 +214,12 @@ validate_release_tree() {
             die "MANIFEST:$line_number has an invalid checksum"
         case "$path" in
             /*) die "MANIFEST:$line_number has an absolute path: $path" ;;
-            *..*) die "MANIFEST:$line_number has a parent path: $path" ;;
             MANIFEST) die "MANIFEST:$line_number lists MANIFEST itself" ;;
+        esac
+        # A `..` path component, not a substring: names such as lib/a..b are
+        # legitimate, while lib/../etc/passwd escapes the release tree.
+        case "/$path/" in
+            */../*) die "MANIFEST:$line_number has a parent path: $path" ;;
         esac
         [ -f "$tree/$path" ] && [ ! -L "$tree/$path" ] ||
             die "manifest lists a missing file: $path"
@@ -244,7 +229,7 @@ validate_release_tree() {
     done <"$manifest"
 
     [ -s "$paths_file" ] || die "MANIFEST lists no files"
-    duplicate="$(LC_ALL=C sort "$paths_file" | uniq -d | head -n 1)"
+    duplicate="$(awk -F'\t' '{ if (seen[$2]++) { print $2; exit } }' "$manifest")"
     [ -z "$duplicate" ] || die "MANIFEST lists a path more than once: $duplicate"
 
     (
@@ -262,52 +247,11 @@ validate_release_tree() {
         [ "$(cat "$tree/VERSION")" = "$version" ] ||
             die "VERSION in the release tree does not match version $version"
     fi
-}
+)
 
 # Quietly return 0 when an installed release tree still matches its MANIFEST.
 installed_release_is_valid() {
-    local target="$1" version="$2" problem checksum path entry
-
-    [ -d "$target" ] && [ ! -L "$target" ] || return 1
-    [ -f "$target/MANIFEST" ] && [ ! -L "$target/MANIFEST" ] || return 1
-    [ -z "$(find "$target" ! -type f ! -type d -print -quit)" ] || return 1
-
-    problem="$(
-        awk -F'\t' '
-            NR == FNR {
-                if ($2 == "" || $2 ~ /^\// || $2 ~ /\.\./ || $2 == "MANIFEST") {
-                    print "invalid manifest path: " $2
-                    next
-                }
-                if ($2 in manifest) print "duplicate manifest path: " $2
-                manifest[$2] = 1
-                next
-            }
-            {
-                if (!($0 in manifest)) print "not listed: " $0
-                files[$0] = 1
-            }
-            END {
-                for (path in manifest) if (!(path in files)) print "missing: " path
-            }
-        ' "$target/MANIFEST" <(
-            cd "$target" || exit 1
-            find . -type f ! -path './MANIFEST' -print |
-                while IFS= read -r entry; do printf '%s\n' "${entry#./}"; done
-        )
-    )" || return 1
-    [ -z "$problem" ] || return 1
-
-    while IFS=$'\t' read -r checksum path || [ -n "${path:-}" ]; do
-        [ -n "$path" ] || continue
-        [ -f "$target/$path" ] && [ ! -L "$target/$path" ] || return 1
-        [ "$(hash_of "$target/$path")" = "$checksum" ] || return 1
-    done <"$target/MANIFEST"
-
-    if [ -f "$target/VERSION" ]; then
-        [ "$(cat "$target/VERSION")" = "$version" ] || return 1
-    fi
-    return 0
+    ( validate_release_tree "$1" "$2" ) >/dev/null 2>&1
 }
 
 release_public_key() {
@@ -318,15 +262,31 @@ release_public_key() {
     fi
 }
 
+# Print the checksum that $2 has in the SHA256SUMS file $1. The optional prefix
+# contextualizes the failure for the caller (sign/verify).
+sums_entry_for() {
+    local sums="$1" file="$2" prefix="${3:-}" expected
+
+    expected="$(awk -v f="$file" '$2 == f {print $1; exit}' "$sums")"
+    [ -n "$expected" ] || die "${prefix}SHA256SUMS has no entry for $file"
+    printf '%s\n' "$expected"
+}
+
 sign_release() {
-    local archive="$1" key="$2" dir sums
+    local archive="$1" key="$2" dir sums file expected
     archive="$(resolve_user_path "$archive")"
     key="$(resolve_user_path "$key")"
     [ -f "$archive" ] || die "archive not found: $archive"
     [ -f "$key" ] || die "signing key not found: $key"
     dir="$(cd "$(dirname "$archive")" && pwd)"
+    file="$(basename "$archive")"
     sums="$dir/SHA256SUMS"
-    [ -f "$sums" ] || die "missing SHA256SUMS next to $(basename "$archive")"
+    [ -f "$sums" ] || die "missing SHA256SUMS next to $file"
+    # Sign only checksums that actually cover this archive and its current
+    # bytes, so a stray or stale SHA256SUMS can never produce a valid signature.
+    expected="$(sums_entry_for "$sums" "$file" "refusing to sign: ")"
+    [ "$expected" = "$(hash_of "$archive")" ] ||
+        die "refusing to sign: checksum mismatch for $file"
     openssl dgst -sha256 -sign "$key" -out "$sums.sig" "$sums" ||
         die "signing failed"
     printf 'Signed %s\n' "$sums.sig"
@@ -342,8 +302,7 @@ verify_release() {
     file="$(basename "$archive")"
     sums="$dir/SHA256SUMS"
     [ -f "$sums" ] || die "missing SHA256SUMS next to $file"
-    expected="$(awk -v f="$file" '$2 == f {print $1}' "$sums" | head -n 1)"
-    [ -n "$expected" ] || die "SHA256SUMS has no entry for $file"
+    expected="$(sums_entry_for "$sums" "$file")"
     actual="$(hash_of "$archive")"
     [ "$expected" = "$actual" ] || die "checksum mismatch for $file"
 
@@ -361,8 +320,8 @@ verify_release() {
     fi
 
     archive_entry_types "$archive"
-    top="$(archive_top_dir "$archive")" || exit 1
-    version="$(archive_version "$top")" || exit 1
+    top="$(archive_top_dir "$archive")"
+    version="$(archive_version "$top")"
 
     extract="$(mktemp -d)"
     CLEANUP_PATHS+=("$extract")
@@ -371,6 +330,9 @@ verify_release() {
     [ -d "$tree" ] && [ ! -L "$tree" ] || die "archive has no $top directory"
     validate_release_tree "$tree" "$version"
     VERIFY_TOP="$top"
+    # install_release extracts the archive a second time; record the hash of the
+    # bytes that were verified so it can re-check them before that extraction.
+    VERIFY_ARCHIVE_SHA256="$actual"
 }
 
 # Before switching releases, keep a legacy in-tree .env (from an install that
@@ -378,8 +340,9 @@ verify_release() {
 # path. The source is the versioned release directory itself; the activation
 # symlink is never consulted.
 migrate_release_env() {
-    local source_dir="$1" stable="$HOME/.config/devbox/env" config_root legacy
+    local source_dir="$1" stable config_root legacy
 
+    stable="$(devbox_host_env_file)"
     legacy="$source_dir/.env"
     [ -f "$legacy" ] && [ ! -L "$legacy" ] || return 0
     if [ -e "$stable" ] || [ -L "$stable" ]; then
@@ -401,12 +364,12 @@ migrate_release_env() {
 }
 
 # Point <data root>/current at a release without leaving it dangling, then
-# refresh the devbox command on PATH.
+# refresh the devbox command on PATH. Legacy .env migration is install-only;
+# `use` must not resurrect an old in-tree configuration.
 activate_release() {
     local root="$1" target="$2" current="$1/current" temporary previous
 
     [ -d "$root" ] && [ ! -L "$root" ] || die "invalid release root: $root"
-    migrate_release_env "$target"
     if [ -e "$current" ] && [ ! -L "$current" ]; then
         die "$current is not a symlink; remove it and rerun the install"
     fi
@@ -462,10 +425,15 @@ install_release() {
 
     staging="$(mktemp -d "$releases/.install.XXXXXX")"
     CLEANUP_PATHS+=("$staging")
+    # verify_release validated an earlier extraction and recorded the archive
+    # hash; re-check the bytes now so the staged tree comes from exactly the
+    # verified archive.
+    [ "$(hash_of "$archive")" = "$VERIFY_ARCHIVE_SHA256" ] ||
+        die "refusing to install: archive changed after verification: $(basename "$archive")"
     tar -xzf "$archive" -C "$staging"
     [ -d "$staging/$top" ] && [ ! -L "$staging/$top" ] || die "archive has no $top directory"
-    # verify_release validated an earlier extraction; re-validate the exact
-    # bytes staged for installation so the installed tree is the checked tree.
+    # The staged tree is re-validated here and the archive bytes were re-checked
+    # above, so the installed tree is the tree verify_release checked.
     validate_release_tree "$staging/$top" "$version"
 
     # Keep a legacy in-tree .env at the stable host configuration path before

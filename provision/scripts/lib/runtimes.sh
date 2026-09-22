@@ -5,8 +5,9 @@ install_node() {
     stage "Node.js $NODE_VERSION"
     export NVM_DIR="$HOME/.nvm"
     installer="$(mktemp)"
-    curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-        https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh -o "$installer"
+    download_verified \
+        "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" \
+        "$NVM_INSTALL_SHA256" "$installer"
     PROFILE=/dev/null bash "$installer"
     rm -f "$installer"
     source "$NVM_DIR/nvm.sh"
@@ -25,14 +26,18 @@ install_python() {
     export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
     if [ ! -x "$PYENV_ROOT/bin/pyenv" ]; then
         installer="$(mktemp)"
-        curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-            https://pyenv.run -o "$installer"
+        download_verified \
+            "https://raw.githubusercontent.com/pyenv/pyenv-installer/$PYENV_INSTALLER_COMMIT/bin/pyenv-installer" \
+            "$PYENV_INSTALLER_SHA256" "$installer"
         bash "$installer"
         rm -f "$installer"
-    else
-        git -C "$PYENV_ROOT" pull --ff-only --quiet
     fi
-    pyenv versions --bare | grep -qx "$PYTHON_VERSION" || pyenv install "$PYTHON_VERSION"
+    # Refresh the definitions only when the requested interpreter is missing;
+    # a converged guest must not depend on network access to the git remote.
+    if ! pyenv versions --bare | grep -qx "$PYTHON_VERSION"; then
+        git -C "$PYENV_ROOT" pull --ff-only --quiet
+        pyenv install "$PYTHON_VERSION"
+    fi
     pyenv global "$PYTHON_VERSION"
     pyenv rehash
     version_equals "$(python --version | awk '{print $2}')" "$PYTHON_VERSION"
@@ -44,19 +49,11 @@ install_uv() {
     mkdir -p "$HOME/.local/bin"
     installer="$(mktemp)"
     curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+        --retry 3 --retry-connrefused --retry-all-errors \
         "https://astral.sh/uv/$UV_VERSION/install.sh" -o "$installer"
     UV_INSTALL_DIR="$HOME/.local/bin" UV_NO_MODIFY_PATH=1 sh "$installer"
     rm -f "$installer"
     version_equals "$(uv --version | awk '{print $2}')" "$UV_VERSION"
-}
-
-install_java() {
-    local major
-    major="${JAVA_VERSION%%.*}"
-    stage "Java $JAVA_VERSION"
-    export JAVA_HOME=/usr/lib/jvm/java-${major}-openjdk-arm64
-    export PATH="$JAVA_HOME/bin:$PATH"
-    java -version 2>&1 | grep -qF "version \"${major}."
 }
 
 install_go() {
@@ -68,7 +65,7 @@ install_go() {
         return
     fi
     mkdir -p "$HOME/.local/bin"
-    GOBIN="$HOME/.local/bin" /usr/bin/go install "golang.org/dl/go$GO_VERSION@latest"
+    GOBIN="$HOME/.local/bin" /usr/bin/go install "golang.org/dl/go$GO_VERSION@$GO_DL_VERSION"
     "$launcher" download
     ln -sfn "go$GO_VERSION" "$HOME/.local/bin/go"
     version_equals "$(go version | awk '{print $3}' | sed 's/^go//')" "$GO_VERSION"
@@ -87,7 +84,6 @@ install_runtimes() {
     install_node
     install_python
     install_uv
-    install_java
     install_go
     install_rust
 }

@@ -39,12 +39,11 @@ configure_devbox_paths() {
     esac
     DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
     DEVBOX_INSTALL_ROOT="$(devbox_install_root_for "$DEVBOX_DIR")"
-    DEVBOX_SHARED_LOCK_DIR="$(devbox_data_root)/locks"
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
     DEVBOX_COLIMA_OWNER="$DEVBOX_COLIMA_PROFILE/.devbox-owner"
     DEVBOX_DOCKER_CONFIG="$DEVBOX_CONFIG_ROOT/docker"
-    DEVBOX_LOCK_DIR="$DEVBOX_SHARED_LOCK_DIR"
+    DEVBOX_LOCK_DIR="$(devbox_data_root)/locks"
     export DEVBOX_LOCK_DIR
 }
 
@@ -137,6 +136,9 @@ adopt_devbox_profile() {
 
     check_host_platform
     check_devbox_dependencies
+    # The ownership marker is protocol state shared with start/provision, so
+    # write it under the same lock those commands hold.
+    acquire_lock lifecycle
     devbox_profile_exists ||
         die "devbox VM profile does not exist yet; run 'devbox start' first"
     state="$(devbox_state_raw)"
@@ -149,38 +151,44 @@ adopt_devbox_profile() {
     log "Adopted Colima profile '$DEVBOX_PROFILE' for $DEVBOX_INSTALL_ROOT"
 }
 
-# Ownership-gated state lookup for commands that must belong to this install.
-devbox_state() {
-    local state
+# Print the `colima list` record for the devbox profile, read through the given
+# runner: devbox_colima applies the ownership gate, devbox_colima_raw does not.
+devbox_profile_record() {
+    local runner="$1"
 
-    state="$(devbox_colima list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
+    "$runner" list |
+        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }'
+}
+
+# Print the state (the second list column) read through the given runner.
+devbox_profile_state() {
+    local record
+
+    record="$(devbox_profile_record "$1")" || {
         die "could not determine the devbox VM state"
     }
-    printf '%s\n' "$state"
+    awk '{ print $2 }' <<<"$record"
+}
+
+# Ownership-gated state lookup for commands that must belong to this install.
+devbox_state() {
+    devbox_profile_state devbox_colima
 }
 
 # Ownership-free state lookup, for reporting and for stopping a profile whose
 # marker still names another install root (`devbox stop; devbox install --adopt`).
 devbox_state_raw() {
-    local state
-
-    state="$(devbox_colima_raw list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print $2; exit }')" || {
-        die "could not determine the devbox VM state"
-    }
-    printf '%s\n' "$state"
+    devbox_profile_state devbox_colima_raw
 }
 
 validate_devbox_colima_config() {
     local file="$1"
 
+    # The rendered colima.yaml is the single source of truth for the remaining
+    # profile settings (autoActivate, sshConfig, forwardAgent, portForwarder);
+    # only the invariants that must never drift are asserted here.
     grep -qE '^runtime:[[:space:]]*docker$' "$file" &&
         grep -qE '^vmType:[[:space:]]*vz$' "$file" &&
-        grep -qE '^autoActivate:[[:space:]]*false$' "$file" &&
-        grep -qE '^sshConfig:[[:space:]]*false$' "$file" &&
-        grep -qE '^forwardAgent:[[:space:]]*false$' "$file" &&
-        grep -qE '^portForwarder:[[:space:]]*none$' "$file" &&
         ! grep -qE '^mounts:' "$file"
 }
 
@@ -264,12 +272,10 @@ start_devbox_vm() {
     case "$state" in
         Running) ;;
         '' | Stopped)
-            devbox_colima start "$DEVBOX_PROFILE" \
-                --activate=false \
-                --ssh-config=false \
-                --ssh-agent=false \
-                --port-forwarder=none \
-                --save-config=false
+            # Every profile setting is rendered into colima.yaml before the
+            # start; only --save-config stays a flag because it must keep Colima
+            # from rewriting the rendered file.
+            devbox_colima start "$DEVBOX_PROFILE" --save-config=false
             ;;
         *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
@@ -586,18 +592,10 @@ run_devbox_guest_provisioning() {
             DEVBOX_GUEST_USER=devbox \
             bash "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
     ' _ "$digest"; then
-        validate_devbox_guest_preflight || {
-            revoke_devbox_guest_ssh_access ||
-                die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-        }
+        require_devbox_guest_preflight
         return 1
     fi
-    validate_devbox_guest_preflight || {
-        revoke_devbox_guest_ssh_access ||
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-    }
+    require_devbox_guest_preflight
     run_devbox_root_apps "$digest" || return
     stage_devbox_guest_provisioning_input "$digest" || return
     sync_devbox_guest_config || return
@@ -698,16 +696,20 @@ stage_devbox_guest_provisioning_input() {
     ' _ "$digest"
 }
 
-devbox_host_public_key() {
-    local identity_file
+# Print the value of an SSH configuration directive from Colima's devbox SSH
+# configuration. The directive matches case-insensitively, a quoted value may
+# only be followed by whitespace or a comment, and the first match wins.
+# Fails when the directive is absent.
+devbox_colima_ssh_config_value() {
+    local directive="$1" value
 
-    identity_file="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
+    value="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk -v wanted="$directive" '
         {
             line = $0
             sub(/^[[:space:]]+/, "", line)
-            directive = line
-            sub(/[[:space:]].*$/, "", directive)
-            if (tolower(directive) != "identityfile") next
+            field = line
+            sub(/[[:space:]].*$/, "", field)
+            if (tolower(field) != tolower(wanted)) next
             if (line !~ /^[^[:space:]]+[[:space:]]+/) next
             sub(/^[^[:space:]]+[[:space:]]+/, "", line)
             if (substr(line, 1, 1) == "\"") {
@@ -725,7 +727,15 @@ devbox_host_public_key() {
                 exit
             }
         }
-    ')"
+    ')" || return
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+}
+
+devbox_host_public_key() {
+    local identity_file
+
+    identity_file="$(devbox_colima_ssh_config_value identityfile)" || true
     [ -n "$identity_file" ] && [ -r "$identity_file" ] ||
         die "Colima SSH configuration has no readable identity file for $DEVBOX_PROFILE"
     ssh-keygen -y -f "$identity_file"
@@ -734,31 +744,7 @@ devbox_host_public_key() {
 devbox_host_ssh_user() {
     local user
 
-    user="$(devbox_colima ssh-config "$DEVBOX_PROFILE" | awk '
-        {
-            line = $0
-            sub(/^[[:space:]]+/, "", line)
-            directive = line
-            sub(/[[:space:]].*$/, "", directive)
-            if (tolower(directive) != "user") next
-            if (line !~ /^[^[:space:]]+[[:space:]]+/) next
-            sub(/^[^[:space:]]+[[:space:]]+/, "", line)
-            if (substr(line, 1, 1) == "\"") {
-                line = substr(line, 2)
-                closing_quote = index(line, "\"")
-                if (closing_quote == 0) next
-                suffix = substr(line, closing_quote + 1)
-                if (suffix !~ /^[[:space:]]*(#.*)?$/) next
-                print substr(line, 1, closing_quote - 1)
-                exit
-            }
-            sub(/[[:space:]].*$/, "", line)
-            if (length(line) > 0) {
-                print line
-                exit
-            }
-        }
-    ')"
+    user="$(devbox_colima_ssh_config_value user)" || true
     [ -n "$user" ] || die "Colima SSH configuration has no user for $DEVBOX_PROFILE"
     printf '%s\n' "$user"
 }
@@ -853,6 +839,16 @@ validate_devbox_guest_privileges() {
 
 validate_devbox_guest_preflight() {
     validate_devbox_guest_identity && validate_devbox_guest_privileges
+}
+
+# Fail closed when the guest identity or privileges are unsafe: revoke the
+# managed direct SSH access this installation granted before aborting.
+require_devbox_guest_preflight() {
+    validate_devbox_guest_preflight || {
+        revoke_devbox_guest_ssh_access ||
+            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
+        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
+    }
 }
 
 reconcile_devbox_guest_workspace() {
@@ -973,17 +969,6 @@ stage_devbox_host_ssh_config() {
     local config="$2"
     local temporary="$3"
     local begin_marker='# BEGIN devbox' end_marker='# END devbox'
-    local begin_count end_count
-
-    if [ -e "$config" ]; then
-        begin_count="$(grep -Fxc "$begin_marker" "$config" || true)"
-        end_count="$(grep -Fxc "$end_marker" "$config" || true)"
-    else
-        begin_count=0
-        end_count=0
-    fi
-    [ "$begin_count" -eq "$end_count" ] && [ "$begin_count" -le 1 ] ||
-        return 1
 
     if [ -e "$config" ]; then
         awk -v managed_config="$managed_config" '
@@ -995,18 +980,23 @@ stage_devbox_host_ssh_config() {
                 print ""
                 inserted = 1
             }
-            $0 == "# BEGIN devbox" { skipping = 1; next }
-            skipping && $0 == "# END devbox" { skipping = 0; next }
-            skipping { next }
-            !inserted && $0 == "# BEGIN devbox" {
-                insert_managed_config()
+            /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+                depth++
+                next
             }
+            /^[[:space:]]*#+[[:space:]]*END[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+                if (depth) depth--
+                else bad = 1
+                next
+            }
+            depth { next }
             !inserted && /^[[:space:]]*([Hh][Oo][Ss][Tt]|[Mm][Aa][Tt][Cc][Hh])[[:space:]]/ {
                 insert_managed_config()
             }
             { print }
             END {
-                if (skipping) exit 1
+                if (depth) bad = 1
+                if (bad) exit 1
                 if (!inserted) insert_managed_config()
             }
         ' "$config" >"$temporary" || return 1
@@ -1017,6 +1007,37 @@ stage_devbox_host_ssh_config() {
             printf '%s\n' "$end_marker"
         } >"$temporary" || return 1
     fi
+}
+
+# Remove the managed devbox block from a source configuration into a
+# destination file. Markers are recognized tolerantly (leading whitespace,
+# extra '#', an optional legacy `devbox-v<digits>` name, trailing whitespace),
+# so duplicate, legacy-spelled, nested, and overlapping spans are all removed
+# and the result is normalized. Returns nonzero when the structure is malformed
+# -- an END outside any span (orphan) or EOF while inside a span
+# (unterminated) -- or when the source cannot be read; the caller discards the
+# destination on failure.
+strip_devbox_ssh_block() {
+    local config="$1" destination="$2"
+
+    [ -e "$config" ] || return 1
+    awk '
+        /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+            depth++
+            next
+        }
+        /^[[:space:]]*#+[[:space:]]*END[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+            if (depth) depth--
+            else bad = 1
+            next
+        }
+        depth { next }
+        { print }
+        END {
+            if (depth) bad = 1
+            if (bad) exit 1
+        }
+    ' "$config" >"$destination"
 }
 
 devbox_effective_ssh_value() {
@@ -1114,73 +1135,35 @@ validate_devbox_effective_ssh_config() {
     esac
 }
 
-recover_devbox_ssh_config_transaction() {
-    local managed_config="$1" config="$2" managed_dir="$3" config_dir="$4"
-    local journal="$managed_dir/.devbox-transaction"
-    local managed_existed config_existed managed_backup config_backup extra
-    local managed_restore config_restore
+# Remove the legacy ~/.ssh/config.d/devbox mirror written by older devbox
+# versions. It is deleted only when it is a regular file that contains the
+# devbox Host entry; any other content under config.d is left untouched.
+cleanup_devbox_ssh_config_mirror() {
+    local mirror_dir="$HOME/.ssh/config.d" mirror="$HOME/.ssh/config.d/devbox"
 
-    [ ! -e "$journal" ] && [ ! -L "$journal" ] && return 0
-    [ -f "$journal" ] && [ ! -L "$journal" ] || return 1
-    {
-        IFS= read -r managed_existed
-        IFS= read -r config_existed
-        IFS= read -r managed_backup
-        IFS= read -r config_backup
-    } <"$journal" || return 1
-    if IFS= read -r extra < <(sed -n '5p' "$journal"); then
-        [ -z "$extra" ] || return 1
+    if [ -f "$mirror" ] && [ ! -L "$mirror" ] && grep -q '^Host devbox$' "$mirror"; then
+        command rm -f "$mirror"
     fi
-    case "$managed_existed:$config_existed" in
-        true:true | true:false | false:true | false:false) ;;
-        *) return 1 ;;
-    esac
-    if [ "$managed_existed" = true ]; then
-        case "$managed_backup" in "$managed_dir"/.devbox-backup.*) ;; *) return 1 ;; esac
-        [ -f "$managed_backup" ] && [ ! -L "$managed_backup" ] || return 1
-    else
-        [ -z "$managed_backup" ] || return 1
-    fi
-    if [ "$config_existed" = true ]; then
-        case "$config_backup" in "$config_dir"/.config-backup.*) ;; *) return 1 ;; esac
-        [ -f "$config_backup" ] && [ ! -L "$config_backup" ] || return 1
-    else
-        [ -z "$config_backup" ] || return 1
-    fi
-
-    if [ "$managed_existed" = true ]; then
-        managed_restore="$(mktemp "$managed_dir/.devbox-restore.XXXXXX")" || return 1
-        cp -p "$managed_backup" "$managed_restore" &&
-            mv "$managed_restore" "$managed_config" || {
-            command rm -f "$managed_restore"
-            return 1
-        }
-    else
-        command rm -f "$managed_config" || return 1
-    fi
-    if [ "$config_existed" = true ]; then
-        config_restore="$(mktemp "$config_dir/.config-restore.XXXXXX")" || return 1
-        cp -p "$config_backup" "$config_restore" &&
-            mv "$config_restore" "$config" || {
-            command rm -f "$config_restore"
-            return 1
-        }
-    else
-        command rm -f "$config" || return 1
-    fi
-    command rm -f "$managed_backup" "$config_backup" "$journal"
+    [ -d "$mirror_dir" ] && [ ! -L "$mirror_dir" ] && rmdir "$mirror_dir" 2>/dev/null || true
+    return 0
 }
 
 write_devbox_ssh_config() {
-    local staged_source staged_managed staged_config managed_temporary config_temporary
-    local managed_backup config_backup journal journal_temporary
-    local ssh_dir managed_dir managed_config config config_dir config_mode
-    local ssh_dir_existed=false managed_dir_existed=false config_dir_existed=false
-    local managed_existed=false config_existed=false source_host reachability_error
+    local staged_source staged_managed staged_config
+    local ssh_dir config config_dir temporary config_mode
+    local ssh_dir_existed=false config_dir_existed=false
+    local source_host reachability_error
 
-    staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-source.XXXXXX")"
-    staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox.XXXXXX")"
-    staged_config="$(mktemp "${TMPDIR:-/tmp}/devbox-config.XXXXXX")"
+    staged_source="$(mktemp "${TMPDIR:-/tmp}/devbox-source.XXXXXX")" ||
+        die "failed to stage the devbox SSH configuration"
+    staged_managed="$(mktemp "${TMPDIR:-/tmp}/devbox.XXXXXX")" || {
+        command rm -f "$staged_source"
+        die "failed to stage the devbox SSH configuration"
+    }
+    staged_config="$(mktemp "${TMPDIR:-/tmp}/devbox-config.XXXXXX")" || {
+        command rm -f "$staged_source" "$staged_managed"
+        die "failed to stage the devbox SSH configuration"
+    }
     if ! devbox_colima ssh-config "$DEVBOX_PROFILE" >"$staged_source"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "Colima failed to generate the devbox SSH configuration"
@@ -1213,20 +1196,23 @@ write_devbox_ssh_config() {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "Colima devbox SSH configuration has no identity file"
     fi
-    chmod 600 "$staged_source"
-    chmod 600 "$staged_managed"
+    chmod 600 "$staged_source" "$staged_managed" || {
+        command rm -f "$staged_source" "$staged_managed" "$staged_config"
+        die "failed to secure the staged devbox SSH configuration"
+    }
 
     ssh_dir="$HOME/.ssh"
-    managed_dir="$ssh_dir/config.d"
-    managed_config="$managed_dir/devbox"
     config="$ssh_dir/config"
-    [ -L "$config" ] && config="$(resolve_path "$config")"
+    [ -L "$config" ] && config="$(canonicalize_path "$config")"
     config_dir="$(dirname "$config")"
     if ! stage_devbox_host_ssh_config "$staged_managed" "$config" "$staged_config"; then
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "$config contains malformed devbox markers"
     fi
-    chmod 600 "$staged_config"
+    chmod 600 "$staged_config" || {
+        command rm -f "$staged_source" "$staged_managed" "$staged_config"
+        die "failed to secure the staged devbox SSH configuration"
+    }
     if ! ssh -F "$staged_source" -G devbox >/dev/null 2>&1 ||
         ! ssh -F "$staged_managed" -G devbox >/dev/null 2>&1 ||
         ! ssh -F "$staged_config" -G devbox >/dev/null 2>&1; then
@@ -1260,83 +1246,57 @@ write_devbox_ssh_config() {
     fi
 
     [ -d "$ssh_dir" ] && ssh_dir_existed=true
-    [ -d "$managed_dir" ] && managed_dir_existed=true
     [ -d "$config_dir" ] && config_dir_existed=true
-    mkdir -p "$ssh_dir" "$managed_dir" "$config_dir" || {
+    mkdir -p "$ssh_dir" "$config_dir" || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "failed to create the devbox SSH configuration directories"
     }
     [ -d "$ssh_dir" ] && [ ! -L "$ssh_dir" ] &&
-        [ -d "$managed_dir" ] && [ ! -L "$managed_dir" ] &&
         [ -d "$config_dir" ] && [ ! -L "$config_dir" ] || {
         command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "devbox SSH configuration directories are invalid"
     }
-    [ "$ssh_dir_existed" = true ] || chmod 700 "$ssh_dir"
-    [ "$managed_dir_existed" = true ] || chmod 700 "$managed_dir"
-    [ "$config_dir_existed" = true ] || chmod 700 "$config_dir"
-    recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" || {
-        command rm -f "$staged_source" "$staged_managed" "$staged_config"
-        die "failed to recover the interrupted devbox SSH configuration update"
-    }
-    [ -e "$managed_config" ] && managed_existed=true
+    if [ "$ssh_dir_existed" = false ]; then
+        chmod 700 "$ssh_dir" || {
+            command rm -f "$staged_source" "$staged_managed" "$staged_config"
+            die "failed to secure the devbox SSH configuration directories"
+        }
+    fi
+    if [ "$config_dir_existed" = false ]; then
+        chmod 700 "$config_dir" || {
+            command rm -f "$staged_source" "$staged_managed" "$staged_config"
+            die "failed to secure the devbox SSH configuration directories"
+        }
+    fi
     if [ -e "$config" ]; then
-        config_existed=true
-        config_mode="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
+        config_mode="$(file_mode "$config")" || {
+            command rm -f "$staged_source" "$staged_managed" "$staged_config"
+            die "failed to inspect $config"
+        }
     else
         config_mode=600
     fi
-    managed_temporary="$(mktemp "$managed_dir/.devbox.XXXXXX")"
-    config_temporary="$(mktemp "$config_dir/.config.XXXXXX")"
-    cp "$staged_managed" "$managed_temporary" && chmod 600 "$managed_temporary" &&
-        cp "$staged_config" "$config_temporary" && chmod "$config_mode" "$config_temporary" || {
-        command rm -f "$staged_source" "$staged_managed" "$staged_config" "$managed_temporary" "$config_temporary"
+    temporary="$(mktemp "$config_dir/.config.XXXXXX")" || {
+        command rm -f "$staged_source" "$staged_managed" "$staged_config"
         die "failed to stage the devbox SSH configuration update"
     }
+    # Stage next to ~/.ssh/config and rename into place, so the final update is
+    # a single atomic replacement and readers never see a partial file.
+    if ! cp "$staged_config" "$temporary" ||
+        ! chmod "$config_mode" "$temporary"; then
+        command rm -f "$staged_source" "$staged_managed" "$staged_config" "$temporary"
+        die "failed to stage the devbox SSH configuration update"
+    fi
     command rm -f "$staged_source" "$staged_managed" "$staged_config"
-    if [ "$managed_existed" = true ]; then
-        managed_backup="$(mktemp "$managed_dir/.devbox-backup.XXXXXX")"
-        cp -p "$managed_config" "$managed_backup" || {
-            command rm -f "$managed_temporary" "$config_temporary" "$managed_backup"
-            die "failed to back up the managed devbox SSH configuration"
-        }
-    fi
-    if [ "$config_existed" = true ]; then
-        config_backup="$(mktemp "$config_dir/.config-backup.XXXXXX")"
-        cp -p "$config" "$config_backup" || {
-            command rm -f "$managed_temporary" "$config_temporary" "$managed_backup" "$config_backup"
-            die "failed to back up $config"
-        }
-    fi
-    journal="$managed_dir/.devbox-transaction"
-    journal_temporary="$(mktemp "$managed_dir/.devbox-transaction.XXXXXX")"
-    printf '%s\n%s\n%s\n%s\n' \
-        "$managed_existed" "$config_existed" "$managed_backup" "$config_backup" >"$journal_temporary" &&
-        chmod 600 "$journal_temporary" &&
-        mv "$journal_temporary" "$journal" || {
-        command rm -f "$managed_temporary" "$config_temporary" "$managed_backup" "$config_backup" "$journal_temporary"
-        die "failed to journal the devbox SSH configuration update"
-    }
-    if ! mv "$managed_temporary" "$managed_config"; then
-        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the devbox SSH configuration update"
-        command rm -f "$config_temporary"
-        die "failed to update the managed devbox SSH configuration"
-    fi
-    if ! mv "$config_temporary" "$config"; then
-        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the devbox SSH configuration update"
+    if ! mv "$temporary" "$config"; then
+        command rm -f "$temporary"
         die "failed to update $config"
     fi
-    command rm -f "$managed_backup" "$config_backup" "$journal"
+    cleanup_devbox_ssh_config_mirror
 }
 
 ensure_devbox_guest_ssh_access() {
-    validate_devbox_guest_preflight || {
-        revoke_devbox_guest_ssh_access ||
-            die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-        die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-    }
+    require_devbox_guest_preflight
     reconcile_devbox_guest_workspace || {
         revoke_devbox_guest_ssh_access ||
             die "devbox guest workspace is invalid; managed direct SSH access could not be fully removed"
@@ -1355,78 +1315,34 @@ revoke_devbox_guest_ssh_access() {
 }
 
 remove_devbox_ssh_config() {
-    local ssh_dir="$HOME/.ssh" managed_dir managed_config
-    local config="$HOME/.ssh/config" config_dir temporary config_mode
-    local managed_backup config_backup journal journal_temporary
-    local begin_marker='# BEGIN devbox' end_marker='# END devbox'
-    local begin_count end_count
-    local managed_existed=false
+    local ssh_dir="$HOME/.ssh"
+    local config="$ssh_dir/config" config_dir temporary config_mode
 
-    managed_dir="$ssh_dir/config.d"
-    managed_config="$managed_dir/devbox"
-    [ -L "$config" ] && config="$(resolve_path "$config")"
+    [ -L "$config" ] && config="$(canonicalize_path "$config")"
     config_dir="$(dirname "$config")"
-    recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-        die "failed to recover the interrupted devbox SSH configuration update"
-    [ -e "$managed_config" ] && managed_existed=true
-    [ -e "$config" ] || {
-        command rm -f "$managed_config"
-        return
-    }
-    begin_count="$(grep -Fxc "$begin_marker" "$config" || true)"
-    end_count="$(grep -Fxc "$end_marker" "$config" || true)"
-    [ "$begin_count" -eq "$end_count" ] && [ "$begin_count" -le 1 ] ||
-        die "$config contains malformed devbox markers"
-    temporary="$(mktemp "$config_dir/.config.XXXXXX")"
-    if ! awk '
-        $0 == "# BEGIN devbox" { skipping = 1; next }
-        skipping && $0 == "# END devbox" { skipping = 0; next }
-        skipping { next }
-        { print }
-        END { if (skipping) exit 1 }
-    ' "$config" >"$temporary"; then
-        command rm -f "$temporary"
-        die "failed to remove the managed devbox SSH configuration from $config"
+    if [ ! -e "$config" ]; then
+        cleanup_devbox_ssh_config_mirror
+        return 0
     fi
-    config_mode="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
+    temporary="$(mktemp "$config_dir/.config.XXXXXX")" ||
+        die "failed to stage the devbox SSH configuration cleanup"
+    if ! strip_devbox_ssh_block "$config" "$temporary"; then
+        command rm -f "$temporary"
+        die "$config contains malformed devbox markers"
+    fi
+    config_mode="$(file_mode "$config")" || {
+        command rm -f "$temporary"
+        die "failed to inspect $config"
+    }
     chmod "$config_mode" "$temporary" || {
         command rm -f "$temporary"
         die "failed to preserve the mode of $config"
     }
-    if [ "$managed_existed" = false ]; then
-        mv "$temporary" "$config" || {
-            command rm -f "$temporary"
-            die "failed to update $config"
-        }
-        return
-    fi
-
-    managed_backup="$(mktemp "$managed_dir/.devbox-backup.XXXXXX")"
-    config_backup="$(mktemp "$config_dir/.config-backup.XXXXXX")"
-    cp -p "$managed_config" "$managed_backup" &&
-        cp -p "$config" "$config_backup" || {
-        command rm -f "$temporary" "$managed_backup" "$config_backup"
-        die "failed to back up the devbox SSH configuration cleanup"
-    }
-    journal="$managed_dir/.devbox-transaction"
-    journal_temporary="$(mktemp "$managed_dir/.devbox-transaction.XXXXXX")"
-    printf '%s\n%s\n%s\n%s\n' true true "$managed_backup" "$config_backup" >"$journal_temporary" &&
-        chmod 600 "$journal_temporary" &&
-        mv "$journal_temporary" "$journal" || {
-        command rm -f "$temporary" "$managed_backup" "$config_backup" "$journal_temporary"
-        die "failed to journal the devbox SSH configuration cleanup"
-    }
-    if ! mv "$temporary" "$config"; then
-        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the devbox SSH configuration cleanup"
+    mv "$temporary" "$config" || {
+        command rm -f "$temporary"
         die "failed to update $config"
-    fi
-    if ! rm -f -- "$managed_config"; then
-        recover_devbox_ssh_config_transaction "$managed_config" "$config" "$managed_dir" "$config_dir" ||
-            die "failed to roll back the devbox SSH configuration cleanup"
-        die "failed to remove the managed devbox SSH configuration"
-    fi
-    command rm -f "$managed_backup" "$config_backup" "$journal"
+    }
+    cleanup_devbox_ssh_config_mirror
 }
 
 provision_devbox_guest() (
@@ -1439,11 +1355,7 @@ provision_devbox_guest() (
     if [ "$force" = false ] && [ "$host_digest" = "$guest_digest" ]; then
         if devbox_guest_bundle_is_valid "$host_digest"; then
             log "devbox provisioning is current."
-            validate_devbox_guest_preflight || {
-                revoke_devbox_guest_ssh_access ||
-                    die "devbox guest user has unsafe identity or privileges; managed direct SSH access could not be fully removed"
-                die "devbox guest user has unsafe identity or privileges; managed direct SSH access was removed"
-            }
+            require_devbox_guest_preflight
             sync_devbox_guest_config || return
             ensure_devbox_guest_ssh_access || return
             return
@@ -1483,8 +1395,7 @@ show_devbox_status() {
         log "devbox: Not created"
         return
     fi
-    record="$(devbox_colima_raw list |
-        awk -v profile="$DEVBOX_PROFILE" '$1 == profile { print; exit }')" || {
+    record="$(devbox_profile_record devbox_colima_raw)" || {
         die "could not determine the devbox VM state"
     }
     if [ -z "$record" ]; then
@@ -1562,7 +1473,7 @@ run_devbox() {
                 return
             fi
             check_devbox_ownership
-            printf "Type '%s' to delete the devbox VM and all its container runtime data: " "$DEVBOX_PROFILE"
+            printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
             read -r confirm
             [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
             if [ "$(devbox_state)" = Running ]; then

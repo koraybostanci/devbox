@@ -1,6 +1,0 @@
-# Claude Code plugins to install at provisioning time.
-# One entry per line: <name>@<marketplace>
-# Lines starting with # are ignored.
-#
-# Example:
-# impeccable@marketplace

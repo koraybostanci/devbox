@@ -4,25 +4,9 @@ Guidance for agents working in this repository.
 
 ## What this repo is
 
-Infrastructure-as-code for a personal dev VM (Colima profile `devbox`)
-running Ubuntu 24.04 on Apple Silicon. Clone → `./devbox init` → edit `.env` →
-`./devbox start` → fully provisioned dev environment with no host mounts. The
-VM is disposable; everything that matters lives in the guest.
-
-## Commands
-
-```sh
-./devbox init              # create/validate mode-0600 .env
-./devbox install           # install a user-local CLI symlink
-./devbox start             # start and converge the VM
-./devbox connect           # open a guest zsh shell
-./devbox exec <cmd>        # run a command in the guest
-./devbox status            # VM state and resources
-./devbox services status   # managed PostgreSQL and Valkey
-./devbox provision         # force non-destructive provisioning
-./devbox stop [--force]
-./devbox destroy
-```
+Infrastructure-as-code for a personal dev VM (Colima profile `devbox`) running
+Ubuntu 24.04 on Apple Silicon. The VM is disposable; everything that matters
+lives in the guest.
 
 ## Layout
 
@@ -36,12 +20,13 @@ VM is disposable; everything that matters lives in the guest.
 - `scripts/check.sh` — static checks (the CI gate).
 - `scripts/release.sh` — build/verify/install signed releases.
 
-## Notes
+Commands are in [README.md](README.md); host/guest internals are in
+[docs/architecture.md](docs/architecture.md).
 
-- The guest generates its own secrets; `.env` holds only non-secret defaults.
-- The `devbox` guest user is unprivileged (no sudo, no Docker socket).
-- Services run as a root-owned Compose project inside the guest, loopback only.
-- Work only within this repository.
+## CI gate
+
+`bash scripts/check.sh` must end `All checks passed.`; CI runs it on macOS for
+every push and pull request. Run it before proposing a change.
 
 ## Publication
 
@@ -49,5 +34,5 @@ VM is disposable; everything that matters lives in the guest.
   pull request.
 - Open pull requests as drafts unless the user asks otherwise.
 - Do not merge a pull request without explicit approval.
-- Confirm before force-pushing, rebasing, hard-resetting, deleting branches,
-  or pushing tags.
+- Confirm before committing, pushing, creating a pull request, force-pushing,
+  rebasing, hard-resetting, or deleting branches.

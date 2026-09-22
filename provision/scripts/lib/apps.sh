@@ -32,19 +32,20 @@ install_opencode() {
     version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"
 }
 
+# Runs as root from the root provisioning payload (lib/devbox.sh); the
+# unprivileged tools.sh run cannot use sudo.
 install_databricks() {
     local installer
     stage "Databricks CLI $DATABRICKS_VERSION"
-    rm -f "$HOME/.local/bin/databricks"
     if command -v databricks >/dev/null 2>&1 && databricks version | grep -qF "v$DATABRICKS_VERSION"; then
         return
     fi
     installer="$(mktemp)"
-    curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+    download_verified \
         "https://raw.githubusercontent.com/databricks/setup-cli/v$DATABRICKS_VERSION/install.sh" \
-        -o "$installer"
-    sudo rm -f /usr/local/bin/databricks
-    sudo sh "$installer"
+        "$DATABRICKS_INSTALL_SHA256" "$installer"
+    rm -f /usr/local/bin/databricks
+    sh "$installer"
     rm -f "$installer"
     databricks version | grep -qF "v$DATABRICKS_VERSION"
 }
@@ -61,9 +62,9 @@ install_shell_sources() {
     stage "Shell framework"
     if [ ! -r "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
         installer="$(mktemp)"
-        curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-            https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh \
-            -o "$installer"
+        download_verified \
+            "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/$OH_MY_ZSH_COMMIT/tools/install.sh" \
+            "$OH_MY_ZSH_INSTALL_SHA256" "$installer"
         ZSH="$HOME/.oh-my-zsh" RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh "$installer" --unattended
         rm -f "$installer"
     fi
@@ -73,7 +74,6 @@ install_apps() {
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
     install_claude
     install_opencode
-    install_databricks
     install_yq
     install_shell_sources
 }
