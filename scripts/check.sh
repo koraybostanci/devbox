@@ -478,7 +478,8 @@ awk '
     fail "the managed block was not inserted before the first Match entry"
 
 # Duplicate blocks and legacy marker spellings (indented, extra '#', trailing
-# whitespace) are normalized to exactly one managed block.
+# whitespace, a `devbox-v<digits>` name) are normalized to exactly one managed
+# block.
 printf '# head\n# BEGIN devbox\nHost stale-one\n# END devbox\n# middle\n# BEGIN devbox\nHost stale-two\n# END devbox\n# tail\n' \
     >"$unit_root/two-blocks"
 printf '# head\n  # BEGIN devbox\nHost stale\n\t# END devbox\n# tail\n' >"$unit_root/indented-markers"
@@ -503,6 +504,81 @@ done
 grep -qx '# middle' "$unit_root/staged-two-blocks" ||
     fail "two-block normalization did not preserve the line between the blocks"
 
+# The reported shape: a legacy `devbox-v2` span wraps a current block, so the
+# spans are nested rather than sequential. Everything from the outermost BEGIN
+# through its matching END is removed, the written markers stay `devbox`, and
+# all content outside the span survives.
+printf '# top\nHost before\n  HostName before.example.com\n# BEGIN devbox-v2\nHost legacy-outer\n  HostName legacy-outer.example.com\n# BEGIN devbox\nHost stale\n  Port 1\n# END devbox\n# middle-inside\nHost legacy-inner\n# END devbox-v2\n# bottom\nHost after\n  HostName after.example.com\n' \
+    >"$unit_root/nested-v2"
+stage_devbox_host_ssh_config "$managed" "$unit_root/nested-v2" "$unit_root/staged-nested-v2" ||
+    fail "normalizing a nested devbox-v2 span failed"
+assert_single_pair "$unit_root/staged-nested-v2"
+assert_managed_content "$unit_root/staged-nested-v2" "nested devbox-v2"
+if grep -q 'devbox-v2' "$unit_root/staged-nested-v2"; then
+    fail "nested devbox-v2 markers survived normalization"
+fi
+if grep -qE 'legacy-outer|legacy-inner|^Host stale$' "$unit_root/staged-nested-v2"; then
+    fail "nested devbox-v2 span content survived normalization"
+fi
+for nested_v2_kept in '# top' 'Host before' '  HostName before.example.com' '# bottom' 'Host after' '  HostName after.example.com'; do
+    grep -Fxq "$nested_v2_kept" "$unit_root/staged-nested-v2" ||
+        fail "nested devbox-v2 normalization dropped: $nested_v2_kept"
+done
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host before$/ { exit !inside }
+' "$unit_root/staged-nested-v2" ||
+    fail "the normalized block was not inserted before the first Host entry"
+
+# A sequential legacy `devbox-v2` block followed by a current block collapses
+# to the same single managed block.
+printf '# head\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# middle\n# BEGIN devbox\nHost stale\n# END devbox\n# tail\n' \
+    >"$unit_root/sequential-v2"
+stage_devbox_host_ssh_config "$managed" "$unit_root/sequential-v2" "$unit_root/staged-sequential-v2" ||
+    fail "normalizing a sequential devbox-v2 block failed"
+assert_single_pair "$unit_root/staged-sequential-v2"
+assert_managed_content "$unit_root/staged-sequential-v2" "sequential devbox-v2"
+if grep -q 'devbox-v2' "$unit_root/staged-sequential-v2"; then
+    fail "sequential devbox-v2 markers survived normalization"
+fi
+grep -qx '# middle' "$unit_root/staged-sequential-v2" ||
+    fail "sequential devbox-v2 normalization did not preserve the middle line"
+grep -qx '# tail' "$unit_root/staged-sequential-v2" ||
+    fail "sequential devbox-v2 normalization did not preserve the trailing line"
+if grep -q 'Host stale' "$unit_root/staged-sequential-v2"; then
+    fail "sequential devbox-v2 normalization kept stale content"
+fi
+
+# A legacy `devbox-v2` block that precedes a Host entry is normalized like any
+# other block: the managed block lands before the first Host entry.
+printf '# head\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# BEGIN devbox\nHost stale\n# END devbox\nHost other\n  HostName other.example.com\n' \
+    >"$unit_root/v2-before-host"
+stage_devbox_host_ssh_config "$managed" "$unit_root/v2-before-host" "$unit_root/staged-v2-before-host" ||
+    fail "normalizing a devbox-v2 block before a Host entry failed"
+assert_single_pair "$unit_root/staged-v2-before-host"
+if grep -q 'devbox-v2' "$unit_root/staged-v2-before-host"; then
+    fail "devbox-v2 markers before a Host entry survived normalization"
+fi
+awk '
+    /^# BEGIN devbox$/ { inside = 1 }
+    /^Host other$/ { exit !inside }
+' "$unit_root/staged-v2-before-host" ||
+    fail "the normalized block was not inserted before the first Host entry"
+[ "$(grep -c '^Host other$' "$unit_root/staged-v2-before-host")" -eq 1 ] ||
+    fail "the first Host entry was duplicated during devbox-v2 normalization"
+
+# Near-miss names are not markers: `devboxx` and `devbox-v2x` lines and their
+# content are left untouched.
+printf '# head\n# BEGIN devboxx\nHost near-miss-one\n# END devboxx\n# BEGIN devbox-v2x\nHost near-miss-two\n# END devbox-v2x\n# tail\n' \
+    >"$unit_root/near-miss"
+stage_devbox_host_ssh_config "$managed" "$unit_root/near-miss" "$unit_root/staged-near-miss" ||
+    fail "staging a config with near-miss marker names failed"
+assert_single_pair "$unit_root/staged-near-miss"
+for near_miss_kept in '# BEGIN devboxx' '# END devboxx' '# BEGIN devbox-v2x' '# END devbox-v2x' 'Host near-miss-one' 'Host near-miss-two' '# tail'; do
+    grep -Fxq "$near_miss_kept" "$unit_root/staged-near-miss" ||
+        fail "a near-miss marker line was not left untouched: $near_miss_kept"
+done
+
 # A single managed block is still inserted before the first Host/Match entry
 # when the normalized blocks precede one.
 printf '# head\n# BEGIN devbox\nHost stale\n# END devbox\n# BEGIN devbox\nHost stale\n# END devbox\nHost other\n  HostName other.example.com\n' \
@@ -518,15 +594,28 @@ awk '
 [ "$(grep -c '^Host other$' "$unit_root/staged-two-blocks-host")" -eq 1 ] ||
     fail "the first Host entry was duplicated during normalization"
 
-# Genuinely malformed structure is refused: an orphan END, a nested BEGIN, and
-# an unterminated BEGIN.
+# A balanced nested span is normalized like any other span: the depth counter
+# pairs every BEGIN with an END and everything inside the outermost span is
+# removed.
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\nHost stale\n  # END devbox\n# END devbox\n# tail\n' \
+    >"$unit_root/nested-begin"
+stage_devbox_host_ssh_config "$managed" "$unit_root/nested-begin" "$unit_root/staged-nested-begin" ||
+    fail "normalizing a balanced nested BEGIN marker failed"
+assert_single_pair "$unit_root/staged-nested-begin"
+assert_managed_content "$unit_root/staged-nested-begin" "nested BEGIN"
+grep -qx '# head' "$unit_root/staged-nested-begin" ||
+    fail "nested BEGIN normalization did not preserve the leading line"
+grep -qx '# tail' "$unit_root/staged-nested-begin" ||
+    fail "nested BEGIN normalization did not preserve the trailing line"
+if grep -q 'Host stale' "$unit_root/staged-nested-begin"; then
+    fail "nested BEGIN normalization kept the stale managed content"
+fi
+
+# Genuinely malformed structure is still refused: an orphan END and an
+# unterminated BEGIN.
 printf '# head\n# END devbox\n# tail\n' >"$unit_root/orphan-end"
 if stage_devbox_host_ssh_config "$managed" "$unit_root/orphan-end" "$unit_root/staged-orphan-end"; then
     fail "an orphan END marker was accepted"
-fi
-printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n# tail\n' >"$unit_root/nested-begin"
-if stage_devbox_host_ssh_config "$managed" "$unit_root/nested-begin" "$unit_root/staged-nested-begin"; then
-    fail "a nested BEGIN marker was accepted"
 fi
 printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/missing-end"
 if stage_devbox_host_ssh_config "$managed" "$unit_root/missing-end" "$unit_root/staged-missing-end"; then
@@ -563,6 +652,33 @@ strip_devbox_ssh_block "$unit_root/strip-indented" "$unit_root/strip-indented-ou
 cmp -s "$unit_root/strip-legacy-expected" "$unit_root/strip-indented-out" ||
     fail "strip_devbox_ssh_block did not remove an indented block"
 
+# Legacy `devbox-v2` names and nested or overlapping spans are normalized the
+# same way: everything from the outermost BEGIN through its matching END is
+# removed, including a current block wrapped in a legacy span.
+printf 'Host keep\n# BEGIN devbox-v2\nHost legacy-outer\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost legacy-inner\n# END devbox-v2\nHost tail\n' \
+    >"$unit_root/strip-nested-v2"
+strip_devbox_ssh_block "$unit_root/strip-nested-v2" "$unit_root/strip-nested-v2-out" ||
+    fail "strip_devbox_ssh_block rejected a nested devbox-v2 span"
+printf 'Host keep\nHost tail\n' >"$unit_root/strip-nested-v2-expected"
+cmp -s "$unit_root/strip-nested-v2-expected" "$unit_root/strip-nested-v2-out" ||
+    fail "strip_devbox_ssh_block did not remove a nested devbox-v2 span"
+printf 'Host keep\n# BEGIN devbox-v2\nHost stale-v2\n# END devbox-v2\n# middle\n# BEGIN devbox\nHost devbox\n# END devbox\nHost tail\n' \
+    >"$unit_root/strip-sequential-v2"
+strip_devbox_ssh_block "$unit_root/strip-sequential-v2" "$unit_root/strip-sequential-v2-out" ||
+    fail "strip_devbox_ssh_block rejected a sequential devbox-v2 block"
+printf 'Host keep\n# middle\nHost tail\n' >"$unit_root/strip-sequential-v2-expected"
+cmp -s "$unit_root/strip-sequential-v2-expected" "$unit_root/strip-sequential-v2-out" ||
+    fail "strip_devbox_ssh_block did not remove a sequential devbox-v2 block"
+
+# Near-miss names are content, not markers: `devboxx` and `devbox-v2x` lines
+# are left untouched.
+printf '# head\n# BEGIN devboxx\nHost near-miss\n# END devboxx\n# BEGIN devbox-v2x\nHost near-miss-two\n# END devbox-v2x\n# tail\n' \
+    >"$unit_root/strip-near-miss"
+strip_devbox_ssh_block "$unit_root/strip-near-miss" "$unit_root/strip-near-miss-out" ||
+    fail "strip_devbox_ssh_block rejected near-miss marker names"
+cmp -s "$unit_root/strip-near-miss" "$unit_root/strip-near-miss-out" ||
+    fail "strip_devbox_ssh_block removed near-miss marker content"
+
 # Malformed structure is refused.
 if strip_devbox_ssh_block "$unit_root/missing-end" "$unit_root/strip-missing-end"; then
     fail "strip_devbox_ssh_block accepted an unterminated BEGIN marker"
@@ -571,10 +687,12 @@ printf '# head\n# END devbox\n# tail\n' >"$unit_root/strip-orphan-end"
 if strip_devbox_ssh_block "$unit_root/strip-orphan-end" "$unit_root/strip-orphan-end-out"; then
     fail "strip_devbox_ssh_block accepted an orphan END marker"
 fi
-printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n# tail\n' >"$unit_root/strip-nested"
-if strip_devbox_ssh_block "$unit_root/strip-nested" "$unit_root/strip-nested-out"; then
-    fail "strip_devbox_ssh_block accepted nested BEGIN markers"
-fi
+printf '# head\n# BEGIN devbox\n  # BEGIN devbox\n# END devbox\n  # END devbox\n# tail\n' >"$unit_root/strip-nested"
+strip_devbox_ssh_block "$unit_root/strip-nested" "$unit_root/strip-nested-out" ||
+    fail "strip_devbox_ssh_block rejected balanced nested BEGIN markers"
+printf '# head\n# tail\n' >"$unit_root/strip-nested-expected"
+cmp -s "$unit_root/strip-nested-expected" "$unit_root/strip-nested-out" ||
+    fail "strip_devbox_ssh_block did not remove a balanced nested span"
 
 # A failed strip makes remove_devbox_ssh_config discard the destination it
 # staged and leave the original configuration untouched.

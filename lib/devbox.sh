@@ -980,23 +980,22 @@ stage_devbox_host_ssh_config() {
                 print ""
                 inserted = 1
             }
-            /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+devbox[[:space:]]*$/ {
-                if (skipping) bad = 1
-                skipping = 1
+            /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+                depth++
                 next
             }
-            /^[[:space:]]*#+[[:space:]]*END[[:space:]]+devbox[[:space:]]*$/ {
-                if (!skipping) bad = 1
-                skipping = 0
+            /^[[:space:]]*#+[[:space:]]*END[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+                if (depth) depth--
+                else bad = 1
                 next
             }
-            skipping { next }
+            depth { next }
             !inserted && /^[[:space:]]*([Hh][Oo][Ss][Tt]|[Mm][Aa][Tt][Cc][Hh])[[:space:]]/ {
                 insert_managed_config()
             }
             { print }
             END {
-                if (skipping) bad = 1
+                if (depth) bad = 1
                 if (bad) exit 1
                 if (!inserted) insert_managed_config()
             }
@@ -1012,30 +1011,30 @@ stage_devbox_host_ssh_config() {
 
 # Remove the managed devbox block from a source configuration into a
 # destination file. Markers are recognized tolerantly (leading whitespace,
-# extra '#', trailing whitespace), so duplicate and legacy-spelled blocks are
-# all removed and the result is normalized. Returns nonzero when the structure
-# is malformed -- a BEGIN inside a block (nested), an END outside a block
-# (orphan), or EOF while inside a block (unterminated) -- or when the source
-# cannot be read; the caller discards the destination on failure.
+# extra '#', an optional legacy `devbox-v<digits>` name, trailing whitespace),
+# so duplicate, legacy-spelled, nested, and overlapping spans are all removed
+# and the result is normalized. Returns nonzero when the structure is malformed
+# -- an END outside any span (orphan) or EOF while inside a span
+# (unterminated) -- or when the source cannot be read; the caller discards the
+# destination on failure.
 strip_devbox_ssh_block() {
     local config="$1" destination="$2"
 
     [ -e "$config" ] || return 1
     awk '
-        /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+devbox[[:space:]]*$/ {
-            if (skipping) bad = 1
-            skipping = 1
+        /^[[:space:]]*#+[[:space:]]*BEGIN[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+            depth++
             next
         }
-        /^[[:space:]]*#+[[:space:]]*END[[:space:]]+devbox[[:space:]]*$/ {
-            if (!skipping) bad = 1
-            skipping = 0
+        /^[[:space:]]*#+[[:space:]]*END[[:space:]]+(devbox|devbox-v[0-9]+)[[:space:]]*$/ {
+            if (depth) depth--
+            else bad = 1
             next
         }
-        skipping { next }
+        depth { next }
         { print }
         END {
-            if (skipping) bad = 1
+            if (depth) bad = 1
             if (bad) exit 1
         }
     ' "$config" >"$destination"

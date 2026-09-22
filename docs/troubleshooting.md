@@ -62,9 +62,10 @@ configuration it cannot reconcile, with one of:
 - `generated devbox SSH configuration has conflicting effective settings`
 - `generated SSH host 'devbox' is not reachable`
 
-Malformed markers mean the structure is genuinely broken: a nested
-`# BEGIN devbox`, an orphan `# END devbox`, or an unterminated block. Duplicate
-well-formed blocks are normalized automatically; remove the offending markers.
+Malformed markers mean the structure is genuinely broken: an orphan
+`# END devbox` or an unterminated block. Duplicate blocks, legacy
+`devbox-v<digits>` names (such as `devbox-v2`), and nested or overlapping
+spans are normalized automatically; remove the offending markers.
 Conflicting effective settings mean an
 option that precedes the managed block wins: the block is inserted before the
 first `Host`/`Match` line (or appended at the end when there is none), and
