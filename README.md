@@ -21,13 +21,14 @@ Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 ## Quick start
 
 ```sh
-./devbox init          # create .env, then edit it and run init again
-./devbox start         # create and provision the VM
-./devbox connect       # open a zsh shell in the guest
-./devbox stop
+./devbox init          # answer the prompts; installs the devbox command
+devbox start           # create and provision the VM
+devbox connect         # open a zsh shell in the guest
+devbox stop
 ```
 
-`./devbox install` puts `devbox` on your `PATH` (a symlink to this checkout).
+`devbox init` installs a `devbox` symlink into a writable directory on your
+`PATH` (usually `~/.local/bin`), so every later command is just `devbox`.
 
 ### What's provisioned
 
@@ -38,7 +39,9 @@ pinned versions; `gh` and `jq` come from Ubuntu packages.
 
 ### Configuration
 
-`.env` (mode 0600, gitignored) holds only non-secret defaults:
+`devbox init` asks for the settings and writes `.env` (mode 0600, gitignored);
+rerun `devbox init` to change them. The defaults come from the host Git
+identity and the built-in values shown in brackets:
 
 ```sh
 export GIT_NAME="Your Name"
@@ -75,20 +78,27 @@ stop/start and is removed only by `devbox destroy`.
 ### Remote access
 
 `devbox start` adds a marked `Host devbox` entry to your OpenSSH config
-(`~/.ssh/config`). Point editors, `git`, and other tools at host `devbox` to
-work with the guest files directly over SSH; `devbox destroy` removes the
+(`~/.ssh/config`) and authorizes your Colima SSH key for the unprivileged
+`devbox` guest account. Point editors, `git`, and other tools at host `devbox`
+to work with the guest files directly over SSH; `devbox destroy` removes the
 entry.
 
 ## Services
 
-PostgreSQL and Valkey run as root-managed containers inside the guest, bound to
-`127.0.0.1` only. The unprivileged `devbox` user cannot control Docker; it
-reaches the services over loopback using credentials in
-`~/.config/devbox/secrets`.
+PostgreSQL and Valkey are provisioned inside the guest as root-managed
+containers but stay stopped until you start them:
 
 ```sh
+devbox services start
 devbox services status
+devbox services stop
 ```
+
+They are bound to `127.0.0.1` only. The unprivileged `devbox` user cannot
+control Docker; it reaches the services over loopback using credentials in
+`~/.config/devbox/secrets`. Data lives below `/var/lib/devbox/services/data`
+and survives stop/start; `devbox services start` after a VM restart brings the
+containers back.
 
 ## Authentication (optional)
 
@@ -118,61 +128,12 @@ devbox destroy               # remove the VM and its container runtime data
 devbox uninstall             # remove the devbox symlink
 ```
 
-## Releases
-
-### Install a published release
-
-Releases are on the [Releases page](https://github.com/koraybostanci/devbox/releases).
-Download the assets, verify the checksum and signature against the committed
-key, then install (requires an authenticated `gh`):
-
-```sh
-gh release download --repo koraybostanci/devbox --pattern '*'
-shasum -a 256 -c SHA256SUMS
-gh api -H 'Accept: application/vnd.github.raw' \
-    repos/koraybostanci/devbox/contents/release-signing-key.pub.pem > release-signing-key.pub.pem
-openssl dgst -sha256 -verify release-signing-key.pub.pem \
-    -signature SHA256SUMS.sig SHA256SUMS
-tar -xzf devbox-<version>.tar.gz
-DEVBOX_RELEASE_PUBKEY=release-signing-key.pub.pem \
-    ./devbox-<version>/scripts/release.sh install devbox-<version>.tar.gz
-```
-
-`install` verifies the archive before touching the install root, installs under
-`${XDG_DATA_HOME:-$HOME/.local/share}/devbox/releases/<version>`, activates
-`${XDG_DATA_HOME:-$HOME/.local/share}/devbox/current`, and links `devbox` onto
-your `PATH`. Release installs keep host configuration at
-`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600): run `devbox init`,
-edit it, and run `devbox init` again.
-
-Upgrades install alongside the old version and keep your configuration. If the
-VM was created by a checkout or an earlier release, claim it while stopped:
-
-```sh
-devbox stop
-devbox install --adopt
-```
-
-Manage installed versions with the shipped tooling:
-
-```sh
-data_root="${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
-"$data_root/current/scripts/release.sh" list
-"$data_root/current/scripts/release.sh" use <version>
-"$data_root/current/scripts/release.sh" prune [--keep N]
-```
-
-### Publish a release (maintainer)
-
-`VERSION` is the source of truth: bump it in a PR and merge to `main`; the
-`Release` workflow builds and signs the archive from that commit and opens a
-**draft** release for a maintainer to publish. See
-[docs/release-checklist.md](docs/release-checklist.md) for the full process.
-
 ## Security
 
 - The guest has no host filesystem mounts and does not reuse the host SSH agent.
 - The daily identity is the unprivileged `devbox` account (no sudo, no Docker
   group, no Docker socket).
 - Service secrets are generated in the guest and never stored on the host.
-- Releases are signed; verification fails closed.
+- Provisioning scripts are streamed over SSH, checksum-verified inside the
+  guest, and run from a root-owned read-only copy; direct SSH is only
+  authorized after the guest passes its readiness checks.

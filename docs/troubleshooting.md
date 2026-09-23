@@ -14,19 +14,13 @@ Install Colima from <https://colima.run>. No other host tooling is required.
 
 ## `.env` rejected
 
-`.env` must be mode 0600 and contain only supported `KEY=value` assignments
-(single or double quotes are stripped). Release installs keep this file at
-`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` instead of the versioned release
-directory:
+Run `devbox init` to rewrite the configuration interactively; it keeps the
+current values as defaults. `.env` must be mode 0600 and contain only supported
+`KEY=value` assignments (single or double quotes are stripped):
 
 ```sh
-chmod 600 .env            # checkout
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env"   # release install
+chmod 600 .env
 ```
-
-The release configuration is resolved through `XDG_CONFIG_HOME` (falling back
-to `~/.config`); changing `XDG_CONFIG_HOME` later means moving the file to the
-new directory yourself.
 
 Supported keys: `GIT_NAME`, `GIT_EMAIL`, `POSTGRES_USER`, `POSTGRES_DB`,
 `POSTGRES_PORT`, `DEVBOX_CPU`, `DEVBOX_MEMORY`, `DEVBOX_DISK`. Unsupported keys
@@ -42,8 +36,8 @@ ssh devbox true
 ```
 
 The IDE/CLI host is `devbox`; Colima assigns its localhost port dynamically.
-`devbox start` refreshes the managed SSH configuration. Agent forwarding is
-disabled by design:
+`devbox start` refreshes the managed SSH configuration and re-authorizes the
+host key for the guest account. Agent forwarding is disabled by design:
 
 ```sh
 ssh -G devbox | grep -i forwardagent
@@ -55,30 +49,25 @@ generated administrative account.
 
 ## SSH configuration conflicts
 
-`devbox start` rewrites the managed block in `~/.ssh/config` and refuses a
-configuration it cannot reconcile, with one of:
+`devbox start` rewrites the marked `# BEGIN devbox`/`# END devbox` block in
+`~/.ssh/config` and refuses a configuration it cannot reconcile, with one of:
 
 - `contains malformed devbox markers`
-- `generated devbox SSH configuration has conflicting effective settings`
 - `generated SSH host 'devbox' is not reachable`
 
 Malformed markers mean the structure is genuinely broken: an orphan
-`# END devbox` or an unterminated block. Duplicate blocks, legacy
-`devbox-v<digits>` names (such as `devbox-v2`), and nested or overlapping
-spans are normalized automatically; remove the offending markers.
-Conflicting effective settings mean an
-option that precedes the managed block wins: the block is inserted before the
-first `Host`/`Match` line (or appended at the end when there is none), and
-OpenSSH keeps the first obtained value, so a later `Host *` or `Host devbox`
-block cannot override the generated values. The cause is a bare global option
-above the block, or a block pulled in by an `Include` above it; the validator
-names the option in its `devbox SSH effective <option> is ...` message, so
-remove or relocate that override. Then rerun `devbox start`, which rewrites the
-managed block, and inspect the effective result with:
+`# END devbox` or an unterminated block. Remove the offending markers and rerun
+`devbox start`. An unreachable alias means the generated block cannot connect —
+usually because a global option above it wins: OpenSSH keeps the first obtained
+value, and the block is inserted before the first `Host`/`Match` entry, so a
+bare global option above it (or a block pulled in by an `Include` above it) can
+override the generated values. Inspect the effective result with:
 
 ```sh
 ssh -G devbox
 ```
+
+Fix or relocate the conflicting option, then rerun `devbox start`.
 
 ## Another command is running
 
@@ -128,8 +117,16 @@ root-disk copy) before mounting, so it can be applied with a plain
 
 ## Services
 
-PostgreSQL and Valkey are root-managed and bound to `127.0.0.1` only. Check
-them with `devbox services status`. Credentials live in
+PostgreSQL and Valkey are staged during provisioning but stay stopped until
+started:
+
+```sh
+devbox services start
+devbox services status
+devbox services stop
+```
+
+They are root-managed and bound to `127.0.0.1` only. Credentials live in
 `~/.config/devbox/secrets` inside the guest. Valkey listens on
 `127.0.0.1:16379`, a guest-only port that is not published to the host.
 
@@ -139,38 +136,15 @@ The guest copy is authoritative after the first provision, so `POSTGRES_PORT`
 changes in `.env` are ignored; deleting `~/.config/devbox/config` makes the
 next provision re-seed it from `.env`.
 
-## Release installation
-
-`scripts/release.sh verify` fails closed: it requires `SHA256SUMS.sig` and a
-valid signature against the committed public key (`DEVBOX_RELEASE_PUBKEY`
-overrides the default), plus a single `devbox-<version>` top-level directory
-and a MANIFEST that matches every archived file. Unsigned archives are accepted
-only with `DEVBOX_ALLOW_UNSIGNED=1`, for local builds; never install an archive
-that does not verify.
-
-A failed install leaves the previous release active, and `--force` replaces an
-existing version directory. Installed releases live below
-`${XDG_DATA_HOME:-$HOME/.local/share}/devbox`, are activated through `current`,
-and are managed with the shipped `list`, `use`, and `prune` commands. Release
-installs keep host configuration at
-`${XDG_CONFIG_HOME:-$HOME/.config}/devbox/env` (mode 0600), so a `.env` inside
-an installed release tree is ignored with a warning.
-
-See [docs/release-checklist.md](release-checklist.md) for release operations
-and [docs/architecture.md](architecture.md) for installer and prune internals.
-
 ## Checkout moved or renamed
 
-The Colima profile records its install root in an ownership marker
-(`~/.colima/devbox/.devbox-owner`): the checkout directory for a checkout, or
-the data root for release installs, so release upgrades keep the profile.
-Stop the VM before moving a checkout, then claim the existing profile from the
-new path:
+The VM profile is keyed by name and carries no host path, so moving or renaming
+the checkout is safe. Run `devbox init` again from the new location (press Enter
+to keep the current values) to refresh the `devbox` symlink on your `PATH`.
 
-```sh
-devbox stop
-devbox install --adopt
-```
+## Upgrading devbox
 
-`devbox install --adopt` never adopts a running VM. Do not rewrite the marker
-to claim a profile created by another installation.
+An existing VM converges in place on the next `devbox start`; the managed SSH
+key is refreshed for both the standard and the legacy guest locations, so no
+recreation is required. `devbox destroy` followed by `devbox start` remains the
+clean path when you want a fresh guest.

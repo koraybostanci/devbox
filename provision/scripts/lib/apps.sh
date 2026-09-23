@@ -32,8 +32,8 @@ install_opencode() {
     version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"
 }
 
-# Runs as root from the root provisioning payload (lib/devbox.sh); the
-# unprivileged tools.sh run cannot use sudo.
+# Runs as root from system.sh; the unprivileged tools.sh run cannot write
+# /usr/local/bin.
 install_databricks() {
     local installer
     stage "Databricks CLI $DATABRICKS_VERSION"
@@ -51,9 +51,15 @@ install_databricks() {
 }
 
 install_yq() {
+    local archive
     stage "yq $YQ_VERSION"
     mkdir -p "$HOME/.local/bin"
-    GOBIN="$HOME/.local/bin" go install "github.com/mikefarah/yq/v4@$YQ_VERSION"
+    archive="$(mktemp)"
+    download_verified \
+        "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_arm64" \
+        "$YQ_SHA256" "$archive"
+    install -m 755 "$archive" "$HOME/.local/bin/yq"
+    rm -f "$archive"
     yq --version | grep -qF "$YQ_VERSION"
 }
 

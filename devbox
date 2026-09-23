@@ -25,9 +25,7 @@ usage() {
 Usage: devbox <command> [options]
 
 Get started:
-    init                           Initialize and validate local configuration
-    install                        Install the user-local devbox command
-    install --adopt                Claim an existing VM profile (VM must be stopped)
+    init                           Initialize configuration and install the devbox command
 
 Daily workflow:
     start                          Start and converge the VM
@@ -37,6 +35,8 @@ Daily workflow:
     stop [--force]                 Stop gracefully; force only when requested
 
 Services:
+    services start                 Start the managed PostgreSQL and Valkey services
+    services stop                  Stop them (data is kept)
     services status                Show the managed PostgreSQL and Valkey services
 
 Authentication and helpers (optional, guest-local):
@@ -69,17 +69,6 @@ case "$cmd" in
         usage
         exit 0
         ;;
-    install)
-        case "$#" in
-            0) install_cli "$DEVBOX_SCRIPT" ;;
-            1)
-                [ "$1" = "--adopt" ] || die "Usage: devbox install [--adopt]"
-                configure_devbox_paths
-                adopt_devbox_profile
-                ;;
-            *) die "Usage: devbox install [--adopt]" ;;
-        esac
-        ;;
     uninstall)
         [ $# -eq 0 ] || die "Usage: devbox uninstall"
         uninstall_cli "$DEVBOX_SCRIPT"
@@ -99,6 +88,9 @@ case "$cmd" in
         ;;
     init)
         [ $# -eq 0 ] || die "Usage: devbox init"
+        # Install the command first so even the first run leaves the user able
+        # to use `devbox` instead of `./devbox`.
+        install_cli "$DEVBOX_SCRIPT"
         initialize_local_config
         ;;
     start | provision | connect | exec | status | services | auth | db | stop | destroy)

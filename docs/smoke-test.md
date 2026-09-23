@@ -1,0 +1,64 @@
+# Manual Smoke Test
+
+`scripts/check.sh` covers the static surface only; it cannot exercise Colima,
+SSH, or Docker. Run this on a Mac (Apple Silicon) before merging changes that
+touch lifecycle, provisioning, SSH, or services. Use an account without devbox
+state, or destroy the VM first.
+
+## Static gate
+
+```sh
+scripts/check.sh     # must end with "All checks passed."
+```
+
+## Clean install
+
+```sh
+./devbox init           # answer the prompts; installs the devbox command
+devbox start
+./devbox status
+./devbox connect        # workspace at /home/devbox/workspace
+./devbox exec id -un    # devbox
+./devbox exec sudo -n true   # must fail
+./devbox exec id -nG    # must not list docker
+./devbox auth status
+./devbox db info
+```
+
+Confirm:
+
+- `ssh devbox true` works and `ssh -G devbox | grep -i forwardagent` reports
+  `no`.
+- The host has no devbox mounts (`mount | grep -i devbox` is empty).
+- The guest cannot read the staged service credentials:
+  `devbox exec cat /var/lib/devbox/services/env` must fail.
+
+## Services on demand
+
+```sh
+devbox services status   # no containers running
+devbox services start
+devbox services status   # postgres and valkey healthy
+devbox exec bash -c 'exec 3<>/dev/tcp/127.0.0.1/15432'
+devbox services stop
+devbox services status   # stopped again
+```
+
+After `devbox stop` and `devbox start`, confirm the services are still stopped
+until `devbox services start` is run.
+
+## Re-converge and teardown
+
+```sh
+devbox stop
+devbox start              # provisioning is current; SSH alias is refreshed
+devbox destroy            # type "devbox" to confirm
+grep -n 'BEGIN devbox' ~/.ssh/config   # no managed block remains
+```
+
+If you have a VM created by an older devbox version, run `devbox start` once
+and confirm `ssh devbox true` still works: the managed key is refreshed for
+both the standard and legacy guest locations, so the VM converges in place.
+
+Host files are untouched by `devbox destroy`; the workspace and guest
+credentials are gone with the VM.

@@ -162,7 +162,6 @@ packages=(
     gh
     git
     git-delta
-    golang-go
     gnupg
     jq
     libbz2-dev
@@ -211,3 +210,12 @@ done
 configure_devbox_guest_identity
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox
+
+# Root-only tools run from this root phase; the unprivileged tools phase cannot
+# write /usr/local/bin.
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/apps.sh"
+set -a
+source "$DEVBOX_PROVISION_ROOT/versions.env"
+set +a
+install_databricks

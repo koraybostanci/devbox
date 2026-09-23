@@ -45,102 +45,45 @@ shell_quote() {
     printf '%q' "$1"
 }
 
-# Canonicalize a path without creating anything: walk up to the nearest
-# existing ancestor, resolve it physically with cd -P, and re-append the
-# remaining components. The final component is resolved too when it already
-# exists, including when it is itself a symlink. Canonicalization keeps
-# identity comparisons (data root, install root, activation target) from mixing
-# logical paths such as macOS $HOME under /var with physical paths under
-# /private/var.
-canonicalize_path() {
-    local path="$1" depth="${2:-0}" suffix="" base parent target directory
+# Follow a symlink chain to its final target without requiring the path to
+# exist. Used before atomically replacing a file the user may have symlinked
+# (for example ~/.ssh/config in a dotfiles setup).
+resolve_symlink_target() {
+    local path="$1" depth=0 target
 
-    case "$path" in
-        /*) ;;
-        *) path="$PWD/$path" ;;
-    esac
-    while [ "${path%/}" != "$path" ] && [ -n "${path#/}" ]; do
-        path="${path%/}"
+    while [ -L "$path" ] && [ "$depth" -lt 40 ]; do
+        target="$(readlink "$path")"
+        case "$target" in
+            /*) ;;
+            *) target="$(dirname "$path")/$target" ;;
+        esac
+        path="$target"
+        depth=$((depth + 1))
     done
-
-    while [ ! -e "$path" ] && [ ! -L "$path" ]; do
-        base="${path##*/}"
-        parent="${path%/*}"
-        [ -n "$parent" ] || parent="/"
-        [ "$base" != "$path" ] || break
-        suffix="/$base$suffix"
-        path="${parent%/}"
-        [ -n "$path" ] || path="/"
-    done
-
-    if [ -L "$path" ]; then
-        if [ "$depth" -lt 40 ]; then
-            target="$(readlink "$path")"
-            case "$target" in
-                /*) ;;
-                *) target="$(dirname "$path")/$target" ;;
-            esac
-            path="$(canonicalize_path "$target" "$((depth + 1))")"
-        fi
-    else
-        directory="$(dirname "$path")"
-        if [ "$directory" != "$path" ]; then
-            directory="$(cd -P "$directory" && pwd)"
-            if [ "$directory" = "/" ]; then
-                path="/$(basename "$path")"
-            else
-                path="$directory/$(basename "$path")"
-            fi
-        fi
-    fi
-
-    if [ "$path" = "/" ]; then
-        printf '/%s\n' "${suffix#/}"
-    else
-        printf '%s%s\n' "$path" "$suffix"
-    fi
-}
-
-# Canonical host data root shared by release installs and locks. The launcher
-# always reports physical directories (it resolves itself with cd -P), so this
-# must be physical too: on macOS a sandbox HOME below /var/folders resolves to
-# /private/var/folders, and a logical data root would never match release
-# paths reported by the launcher.
-devbox_data_root() {
-    canonicalize_path "${XDG_DATA_HOME:-$HOME/.local/share}/devbox"
-}
-
-# Host configuration file shared by release installs. XDG_CONFIG_HOME overrides
-# ~/.config, mirroring devbox_data_root's XDG_DATA_HOME handling. The path is
-# deliberately not canonicalized so callers and tests can compare it literally.
-devbox_host_env_file() {
-    printf '%s/devbox/env\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+    printf '%s\n' "$path"
 }
 
 choose_install_bin() {
     local candidate
     local -a path_dirs
 
+    # Keep using an existing devbox location when it is writable, so repeat
+    # installs are stable.
     if command -v devbox >/dev/null 2>&1; then
         candidate="$(dirname "$(command -v devbox)")"
         [ -w "$candidate" ] && printf '%s\n' "$candidate" && return
     fi
 
+    # Prefer a writable PATH directory under $HOME so the command works
+    # immediately after `devbox init`.
     IFS=: read -r -a path_dirs <<<"$PATH"
-    if [ "${#path_dirs[@]}" -gt 0 ]; then
-        for candidate in "${path_dirs[@]}"; do
-            [ -n "$candidate" ] || continue
-            if [ ! -d "$candidate" ] || [ ! -w "$candidate" ]; then
-                continue
-            fi
-            case "$candidate" in
-                "$HOME"/*)
-                    printf '%s\n' "$candidate"
-                    return
-                    ;;
-            esac
-        done
-    fi
+    for candidate in "${path_dirs[@]}"; do
+        [ -n "$candidate" ] || continue
+        [ -d "$candidate" ] && [ -w "$candidate" ] || continue
+        case "$candidate" in
+            "$HOME"/*) printf '%s\n' "$candidate"; return ;;
+        esac
+    done
 
     printf '%s/.local/bin\n' "$HOME"
 }
@@ -167,8 +110,7 @@ install_cli() {
 }
 
 uninstall_cli() {
-    local source_path="$1"
-    local installed target data_root release_current accepted=false
+    local source_path="$1" installed target
 
     installed="$(command -v devbox 2>/dev/null || true)"
     [ -n "$installed" ] || {
@@ -177,33 +119,13 @@ uninstall_cli() {
     }
     [ -L "$installed" ] || die "$installed is not a symlink; refusing to remove it"
 
-    target="$(canonicalize_path "$installed")"
-    source_path="$(canonicalize_path "$source_path")"
-    data_root="$(devbox_data_root)"
-    release_current="$data_root/current"
-    if [ "$target" = "$source_path" ]; then
-        accepted=true
-    else
-        case "$target" in
-            "$release_current" | "$release_current"/*) accepted=true ;;
-            "$data_root"/releases/*) accepted=true ;;
-        esac
-    fi
-    [ "$accepted" = true ] || die "$installed belongs to another checkout: $target"
+    target="$(resolve_symlink_target "$installed")"
+    source_path="$(resolve_symlink_target "$source_path")"
+    [ "$target" = "$source_path" ] ||
+        die "$installed belongs to another checkout: $target"
 
     command rm "$installed"
     log "Removed: $installed"
-
-    # Running from a release tree also drops the activation symlink. This
-    # command never deletes installed release trees.
-    case "$source_path" in
-        "$data_root"/releases/*)
-            if [ -L "$release_current" ]; then
-                command rm "$release_current"
-                log "Removed: $release_current"
-            fi
-            ;;
-    esac
 }
 
 acquire_lock() {

@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/provision}"
+export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
 export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
 
 set -a
@@ -49,11 +49,11 @@ login_shell_is_clean() {
 check "devbox guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
 check "devbox guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
 check "guest-local provisioning bundle" has_verified_devbox_bundle "$DEVBOX_PROVISION_ROOT"
-check "devbox root bundle state is inaccessible" bash -c '
-    [ ! -r /var/lib/devbox/bundles ] &&
-        [ ! -w /var/lib/devbox/bundles ]
+check "devbox root provisioning directory is root-owned" bash -c '
+    [ -d /var/lib/devbox ] && [ ! -L /var/lib/devbox ] &&
+        [ "$(stat -c "%U" /var/lib/devbox)" = root ]
 '
-check "devbox staged provisioning input is root-owned, readable, and read-only" bash -c '
+check "devbox provisioning input is root-owned, readable, and read-only" bash -c '
     [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] &&
         [ "$(stat -c "%U" "$DEVBOX_PROVISION_ROOT")" = root ] &&
         [ -r "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ] &&
@@ -69,42 +69,26 @@ check "devbox workspace is writable and real" bash -c '
 check "devbox guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
 check "devbox guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
 check "devbox guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
-check "devbox has no legacy mounts" bash -c '
-    [ ! -e /mnt/devbox/projects ] && [ ! -e /mnt/devbox/data ]
-'
-if [ ! -r "$DEVBOX_GUEST_CONFIG_ROOT/config" ] ||
-    [ ! -r "$DEVBOX_GUEST_CONFIG_ROOT/secrets" ]; then
-    printf 'FAIL: devbox guest configuration is unavailable at %s\n' \
-        "$DEVBOX_GUEST_CONFIG_ROOT" >&2
-    exit 1
-fi
-source "$DEVBOX_GUEST_CONFIG_ROOT/config"
-source "$DEVBOX_GUEST_CONFIG_ROOT/secrets"
-check "devbox services root is root-owned and closed" bash -c '
-    [ -d /var/lib/devbox/services ] &&
+# Services are staged during provisioning but stay stopped until the user runs
+# `devbox services start`; only the root-owned definition and credentials are
+# required here.
+check "devbox services are staged and closed" bash -c '
+    [ -d /var/lib/devbox/services ] && [ ! -L /var/lib/devbox/services ] &&
         [ "$(stat -c "%U" /var/lib/devbox/services)" = root ] &&
-        [ ! -w /var/lib/devbox/services ]
+        [ ! -w /var/lib/devbox/services ] &&
+        [ -f /var/lib/devbox/services/compose.yaml ] &&
+        [ -f /var/lib/devbox/services/env ] &&
+        [ "$(stat -c "%a" /var/lib/devbox/services/env)" = 600 ]
 '
-check "devbox PostgreSQL listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${POSTGRES_PORT:-15432}"
-# VALKEY_PORT is guest-config-only (not seeded from the host); the default
-# 16379 below is the port the seeded guest configuration uses.
-check "devbox Valkey listens on loopback" bash -c "exec 3<>/dev/tcp/127.0.0.1/${VALKEY_PORT:-16379}"
 check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md"
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
 check "OpenCode v2 config" test -f "$HOME/.config/opencode/opencode.jsonc"
 check "OpenCode global guidance" test -f "$HOME/.config/opencode/AGENTS.md"
-check "OpenCode v1 config is absent" test ! -e "$HOME/.config/opencode/opencode.json"
 check "OpenCode loop agents" test -f "$HOME/.config/opencode/agents/loop-implementer.md" -a \
     -f "$HOME/.config/opencode/agents/loop-reviewer.md" -a \
     -f "$HOME/.config/opencode/agents/loop-reviewer-deep.md"
-check "legacy filesystem MCP is absent" bash -c '
-    [ ! -f "$HOME/.mcp.json" ] || ! jq -e "
-        .mcpServers.filesystem |
-        .command == \"npx\" and (.args | index(\"@modelcontextprotocol/server-filesystem\"))
-    " "$HOME/.mcp.json" >/dev/null 2>&1
-'
 
 tool_failures=0
 zsh -lic '
@@ -146,4 +130,17 @@ else
 fi
 
 ((failures == 0)) || exit "$failures"
+
+# Record the provisioned bundle digest only after every check passed, so a
+# matching marker always means this exact tree was verified.
+if [ -n "${DEVBOX_BUNDLE_DIGEST:-}" ]; then
+    umask 077
+    state_directory="$HOME/.local/state/devbox"
+    mkdir -p "$state_directory"
+    temporary="$(mktemp "$state_directory/.provision.XXXXXX")"
+    printf '%s\n' "$DEVBOX_BUNDLE_DIGEST" >"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$state_directory/provision.sha256"
+fi
+
 printf 'Guest readiness checks passed.\n'
