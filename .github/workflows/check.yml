@@ -8,12 +8,10 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    runs-on: macos-15
+  linux:
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install validation tools
-        run: brew install docker docker-compose
       - name: Run checks
         run: scripts/check.sh
