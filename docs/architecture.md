@@ -81,7 +81,7 @@ credentials.
 
 Mutating lifecycle commands serialize on a PID-bearing `mkdir` lock under
 `~/.local/state/devbox/locks`: `start`, `provision`, `stop`, and `destroy`.
-`init`, `install`, and the read-only commands do not take the lock. Stale locks
+`init` and the read-only commands do not take the lock. Stale locks
 are removed only when their recorded process no longer exists. `devbox stop`
 stops the VM; `devbox destroy` requires the profile name to be typed and then
 deletes the VM together with its runtime data and the managed SSH alias.

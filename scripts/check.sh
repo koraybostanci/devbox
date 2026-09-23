@@ -460,6 +460,78 @@ fi
 [ ! -e "$init_unit_root/missing.env" ] ||
     fail "devbox init wrote the configuration after a failed prompt"
 
+# A symlinked configuration is updated through the link, not replaced.
+symlink_root="$validation_root/env-symlink"
+mkdir -p "$symlink_root/home" "$symlink_root/dotfiles"
+printf 'export GIT_NAME="Old"\n' >"$symlink_root/dotfiles/env"
+ln -s "$symlink_root/dotfiles/env" "$symlink_root/home/.env"
+HOME="$symlink_root/home" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    for key in "${ENV_KEYS[@]}"; do unset "$key"; done
+    GIT_NAME="New"; GIT_EMAIL="e@x.com"; POSTGRES_USER=dev; POSTGRES_DB=dev
+    POSTGRES_PORT=15432; DEVBOX_CPU=4; DEVBOX_MEMORY=4; DEVBOX_DISK=60
+    write_env_file "$HOME/.env"
+' || fail "write_env_file failed for a symlinked configuration"
+[ -L "$symlink_root/home/.env" ] || fail "write_env_file replaced a symlinked .env"
+grep -q '^export GIT_NAME="New"$' "$symlink_root/dotfiles/env" ||
+    fail "write_env_file did not update the symlink target"
+
+# Unsupported and malformed lines are reported before the rewrite drops them.
+warning_env="$validation_root/warning.env"
+printf 'export GIT_NAME="X"\nexport POSTGRES_PASSWORD=secret\nnot an assignment\n' >"$warning_env"
+chmod 600 "$warning_env"
+HOME="$init_unit_root/home" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    for key in "${ENV_KEYS[@]}"; do unset "$key"; done
+    load_env_defaults "$1"
+' _ "$warning_env" 2>"$validation_root/warning.err" ||
+    fail "load_env_defaults failed on an unsupported key"
+grep -q 'removes unsupported variable POSTGRES_PASSWORD' "$validation_root/warning.err" ||
+    fail "load_env_defaults did not report the unsupported key"
+grep -q 'is not a KEY=value assignment' "$validation_root/warning.err" ||
+    fail "load_env_defaults did not report the malformed line"
+
+# --- devbox PATH block in the login shell rc --------------------------------
+path_unit_root="$validation_root/path-unit"
+mkdir -p "$path_unit_root/home"
+path_rc="$path_unit_root/home/.zshrc"
+printf 'export EDITOR=vim\n' >"$path_rc"
+chmod 640 "$path_rc"
+HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    ensure_devbox_path "$HOME/.local/bin" || exit 1
+    ensure_devbox_path "$HOME/.local/bin" || exit 1
+' >/dev/null || fail "ensure_devbox_path failed"
+[ "$(grep -c '^# BEGIN devbox$' "$path_rc")" -eq 1 ] ||
+    fail "ensure_devbox_path did not write exactly one block"
+[ "$(file_mode_of "$path_rc")" = 640 ] ||
+    fail "ensure_devbox_path changed the rc mode"
+grep -qx 'export EDITOR=vim' "$path_rc" ||
+    fail "ensure_devbox_path dropped existing rc content"
+grep -q "export PATH=\"$path_unit_root/home/.local/bin:" "$path_rc" ||
+    fail "ensure_devbox_path wrote the wrong PATH entry"
+HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    remove_devbox_path
+' >/dev/null || fail "remove_devbox_path failed"
+if grep -q '^# BEGIN devbox$' "$path_rc"; then
+    fail "remove_devbox_path kept the block"
+fi
+grep -qx 'export EDITOR=vim' "$path_rc" ||
+    fail "remove_devbox_path dropped existing rc content"
+# Malformed markers are left untouched.
+printf '# BEGIN devbox\n' >"$path_rc"
+if HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    ensure_devbox_path "$HOME/.local/bin"
+' >/dev/null 2>&1; then
+    fail "ensure_devbox_path accepted malformed markers"
+fi
+[ "$(cat "$path_rc")" = "# BEGIN devbox" ] ||
+    fail "ensure_devbox_path modified an rc with malformed markers"
+
 # --- managed services -------------------------------------------------------
 compose_command=()
 if docker compose version >/dev/null 2>&1; then

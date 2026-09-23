@@ -22,13 +22,16 @@ Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 
 ```sh
 ./devbox init          # answer the prompts; installs the devbox command
-devbox start           # create and provision the VM
+devbox start           # create and provision the VM (open a new shell if init asked)
 devbox connect         # open a zsh shell in the guest
 devbox stop
 ```
 
-`devbox init` installs a `devbox` symlink into a writable directory on your
-`PATH` (usually `~/.local/bin`), so every later command is just `devbox`.
+`devbox init` installs a `devbox` symlink into `~/.local/bin` (or a
+conventional user bin directory already on your `PATH`). If that directory is
+not on your `PATH`, it adds a marked block to `~/.zshrc` (or
+`~/.bash_profile`); open a new shell once, and every later command is just
+`devbox`. `devbox uninstall` removes both.
 
 ### What's provisioned
 

@@ -16,13 +16,13 @@ scripts/check.sh     # must end with "All checks passed."
 ```sh
 ./devbox init           # answer the prompts; installs the devbox command
 devbox start
-./devbox status
-./devbox connect        # workspace at /home/devbox/workspace
-./devbox exec id -un    # devbox
-./devbox exec sudo -n true   # must fail
-./devbox exec id -nG    # must not list docker
-./devbox auth status
-./devbox db info
+devbox status
+devbox connect        # workspace at /home/devbox/workspace
+devbox exec id -un    # devbox
+devbox exec sudo -n true   # must fail
+devbox exec id -nG    # must not list docker
+devbox auth status
+devbox db info
 ```
 
 Confirm:

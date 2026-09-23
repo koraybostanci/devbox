@@ -178,15 +178,23 @@ env_default() {
 }
 
 # Read the existing configuration leniently, so `devbox init` can offer current
-# values as defaults even when the file needs repair.
+# values as defaults even when the file needs repair. Unsupported and malformed
+# lines are reported because the rewrite drops them.
 load_env_defaults() {
-    local env_file="$1" line key value_expression
+    local env_file="$1" line key value_expression line_number=0
 
     while IFS= read -r line || [ -n "$line" ]; do
+        line_number=$((line_number + 1))
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-        [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]
+        if [[ ! "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]; then
+            warn "$env_file:$line_number is not a KEY=value assignment; ignoring"
+            continue
+        fi
         key="${BASH_REMATCH[2]}"
-        is_allowed_env_key "$key" || continue
+        if ! is_allowed_env_key "$key"; then
+            warn "$env_file:$line_number removes unsupported variable $key"
+            continue
+        fi
         value_expression="${line#*=}"
         printf -v "$key" '%s' "$(env_value "$value_expression")"
     done <"$env_file"
@@ -252,6 +260,9 @@ prompt_number() {
 write_env_file() {
     local env_file="$1" config_root temporary key quoted
 
+    # Follow a symlinked configuration to its target, so a dotfiles-managed
+    # .env is updated in place instead of being replaced by a regular file.
+    [ -L "$env_file" ] && env_file="$(resolve_symlink_target "$env_file")"
     config_root="$(dirname "$env_file")"
     if [ ! -d "$config_root" ]; then
         mkdir -p "$config_root"
@@ -263,8 +274,10 @@ write_env_file() {
         printf "# Service secrets are generated inside the guest and never live here.\n"
         printf '\n'
         for key in "${ENV_KEYS[@]}"; do
-            quoted="$(env_quote "${!key}")" ||
+            if ! quoted="$(env_quote "${!key}")"; then
+                command rm -f "$temporary"
                 die "$key must not mix single and double quotes"
+            fi
             printf 'export %s=%s\n' "$key" "$quoted"
         done
     } >"$temporary"
