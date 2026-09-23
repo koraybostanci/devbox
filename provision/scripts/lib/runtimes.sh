@@ -48,26 +48,36 @@ install_uv() {
     stage "uv $UV_VERSION"
     mkdir -p "$HOME/.local/bin"
     installer="$(mktemp)"
-    curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-        --retry 3 --retry-connrefused --retry-all-errors \
-        "https://astral.sh/uv/$UV_VERSION/install.sh" -o "$installer"
+    download_verified \
+        "https://astral.sh/uv/$UV_VERSION/install.sh" \
+        "$UV_INSTALL_SHA256" "$installer"
     UV_INSTALL_DIR="$HOME/.local/bin" UV_NO_MODIFY_PATH=1 sh "$installer"
     rm -f "$installer"
     version_equals "$(uv --version | awk '{print $2}')" "$UV_VERSION"
 }
 
 install_go() {
-    local launcher
+    local archive directory launcher
     stage "Go $GO_VERSION"
-    launcher="$HOME/.local/bin/go$GO_VERSION"
     export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
+    launcher="$HOME/.local/bin/go"
     if [ -x "$launcher" ] && version_equals "$(go version | awk '{print $3}' | sed 's/^go//')" "$GO_VERSION"; then
         return
     fi
+    archive="$(mktemp)"
+    directory="$(mktemp -d)"
+    download_verified \
+        "https://go.dev/dl/go$GO_VERSION.linux-arm64.tar.gz" \
+        "$GO_SHA256" "$archive"
+    tar -xzf "$archive" -C "$directory"
+    [ -x "$directory/go/bin/go" ]
+    rm -rf "$HOME/.local/go"
+    mv "$directory/go" "$HOME/.local/go"
     mkdir -p "$HOME/.local/bin"
-    GOBIN="$HOME/.local/bin" /usr/bin/go install "golang.org/dl/go$GO_VERSION@$GO_DL_VERSION"
-    "$launcher" download
-    ln -sfn "go$GO_VERSION" "$HOME/.local/bin/go"
+    ln -sfn "$HOME/.local/go/bin/go" "$HOME/.local/bin/go"
+    ln -sfn "$HOME/.local/go/bin/gofmt" "$HOME/.local/bin/gofmt"
+    rm -rf "$archive" "$directory"
+    hash -r
     version_equals "$(go version | awk '{print $3}' | sed 's/^go//')" "$GO_VERSION"
 }
 

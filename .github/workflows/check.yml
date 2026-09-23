@@ -3,7 +3,6 @@ name: Check
 on:
   push:
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
@@ -11,10 +10,10 @@ permissions:
 jobs:
   macos:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install validation tools
-        run: brew install jq yq docker docker-compose
+        run: brew install docker docker-compose
       - name: Run checks
         run: scripts/check.sh

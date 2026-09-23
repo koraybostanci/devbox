@@ -13,12 +13,11 @@ lives in the guest.
 - `devbox` — the launcher.
 - `lib/common.sh` — logging, locking, CLI install helpers.
 - `lib/config.sh` — host platform check, `.env` parsing.
-- `lib/devbox.sh` — VM lifecycle, provisioning, identity, SSH, services.
+- `lib/devbox.sh` — VM lifecycle, provisioning, SSH alias, services.
 - `provision/` — guest provisioning bundle (system/tools/verify scripts and
   `config/services/compose.yaml`).
 - `colima.yaml` — the Colima profile template.
 - `scripts/check.sh` — static checks (the CI gate).
-- `scripts/release.sh` — build/verify/install signed releases.
 
 Commands are in [README.md](README.md); host/guest internals are in
 [docs/architecture.md](docs/architecture.md).

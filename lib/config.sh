@@ -45,43 +45,14 @@ env_value() {
     printf '%s' "$expression"
 }
 
-# Resolve the host configuration file. An explicit DEVBOX_ENV_FILE wins.
-# Release installs live under the data root's releases/ tree, so their
-# configuration must stay outside the versioned directory; checkouts keep the
-# repository-local .env. The release-tree detection compares canonical
-# directories because the launcher reports DEVBOX_DIR physically while the
-# data root may be reached through a symlinked $HOME.
+# Resolve the host configuration file: an explicit DEVBOX_ENV_FILE wins,
+# otherwise the checkout-local .env.
 devbox_env_file() {
-    local directory data_root
-
     if [ -n "${DEVBOX_ENV_FILE:-}" ]; then
         printf '%s\n' "$DEVBOX_ENV_FILE"
         return
     fi
-    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
-    data_root="$(devbox_data_root)"
-    case "$directory" in
-        "$data_root"/releases/*) devbox_host_env_file ;;
-        *) printf '%s\n' "$directory/.env" ;;
-    esac
-}
-
-# Warn once when a release install still carries the superseded in-tree .env.
-devbox_warn_legacy_env_file() {
-    local directory data_root release_env
-
-    [ "${DEVBOX_ENV_FILE_WARNED:-}" = true ] && return 0
-    directory="$(canonicalize_path "${DEVBOX_DIR:-$PWD}")"
-    data_root="$(devbox_data_root)"
-    case "$directory" in
-        "$data_root"/releases/*) ;;
-        *) return 0 ;;
-    esac
-    release_env="$(devbox_host_env_file)"
-    if [ -f "$release_env" ] && [ -f "$directory/.env" ]; then
-        DEVBOX_ENV_FILE_WARNED=true
-        warn "ignoring legacy $directory/.env; release configurations live at $release_env"
-    fi
+    printf '%s/.env\n' "${DEVBOX_DIR:-$PWD}"
 }
 
 validate_env_file() {
@@ -107,7 +78,6 @@ validate_env_file() {
 load_env() {
     local key line value_expression env_file resource_key resource_value
 
-    devbox_warn_legacy_env_file
     env_file="$(devbox_env_file)"
     validate_env_file "$env_file"
     for key in "${ENV_KEYS[@]}"; do
@@ -146,27 +116,215 @@ load_env() {
     done
 }
 
+# Quote a value for a `KEY="value"` line that env_value can read back. Values
+# mixing both quote styles are rejected by the caller.
+env_quote() {
+    local value="$1"
+
+    case "$value" in
+        *'"'*)
+            case "$value" in
+                *"'"*) return 1 ;;
+                *) printf "'%s'" "$value" ;;
+            esac
+            ;;
+        *) printf '"%s"' "$value" ;;
+    esac
+}
+
+host_git_config() {
+    local key="$1" fallback="$2" value=""
+
+    if command -v git >/dev/null 2>&1; then
+        value="$(git config --global "$key" 2>/dev/null || true)"
+    fi
+    printf '%s\n' "${value:-$fallback}"
+}
+
+env_label() {
+    case "$1" in
+        GIT_NAME) printf 'Git name' ;;
+        GIT_EMAIL) printf 'Git email' ;;
+        POSTGRES_USER) printf 'PostgreSQL user' ;;
+        POSTGRES_DB) printf 'PostgreSQL database' ;;
+        POSTGRES_PORT) printf 'PostgreSQL port' ;;
+        DEVBOX_CPU) printf 'VM CPUs' ;;
+        DEVBOX_MEMORY) printf 'VM memory in GiB' ;;
+        DEVBOX_DISK) printf 'VM disk in GiB' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# Default for a prompt: the value already in the configuration file, otherwise
+# the host Git identity or the built-in default.
+env_default() {
+    local key="$1" current="${!key:-}"
+
+    if [ -n "$current" ]; then
+        printf '%s\n' "$current"
+        return
+    fi
+    case "$key" in
+        GIT_NAME) host_git_config user.name "Your Name" ;;
+        GIT_EMAIL) host_git_config user.email "you@personal.com" ;;
+        POSTGRES_USER) printf 'dev\n' ;;
+        POSTGRES_DB) printf 'dev\n' ;;
+        POSTGRES_PORT) printf '15432\n' ;;
+        DEVBOX_CPU) printf '4\n' ;;
+        DEVBOX_MEMORY) printf '4\n' ;;
+        DEVBOX_DISK) printf '60\n' ;;
+        *) printf '\n' ;;
+    esac
+}
+
+# Read the existing configuration leniently, so `devbox init` can offer current
+# values as defaults even when the file needs repair. Unsupported and malformed
+# lines are reported because the rewrite drops them.
+load_env_defaults() {
+    local env_file="$1" line key value_expression line_number=0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line_number=$((line_number + 1))
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ ! "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]; then
+            warn "$env_file:$line_number is not a KEY=value assignment; ignoring"
+            continue
+        fi
+        key="${BASH_REMATCH[2]}"
+        if ! is_allowed_env_key "$key"; then
+            warn "$env_file:$line_number removes unsupported variable $key"
+            continue
+        fi
+        value_expression="${line#*=}"
+        printf -v "$key" '%s' "$(env_value "$value_expression")"
+    done <"$env_file"
+}
+
+# Print `label [default]: ` and read one value; empty input or EOF keeps the
+# default.
+prompt_value() {
+    local label="$1" default="$2" value
+
+    if [ -n "$default" ]; then
+        printf '%s [%s]: ' "$label" "$default" >&2
+    else
+        printf '%s: ' "$label" >&2
+    fi
+    if IFS= read -r value; then
+        [ -n "$value" ] || value="$default"
+    else
+        value="$default"
+        printf '\n' >&2
+    fi
+    printf '%s' "$value"
+}
+
+# Required text value. On a terminal an invalid answer is re-prompted; without
+# one (piped or closed stdin) the caller reports the failure.
+prompt_required() {
+    local label="$1" default="$2" value
+
+    while :; do
+        value="$(prompt_value "$label" "$default")"
+        case "$value" in
+            '' | 'Your Name' | 'you@personal.com')
+                if [ -t 0 ]; then
+                    warn "$label is required"
+                    continue
+                fi
+                return 1
+                ;;
+        esac
+        printf '%s' "$value"
+        return 0
+    done
+}
+
+prompt_number() {
+    local label="$1" default="$2" value
+
+    while :; do
+        value="$(prompt_value "$label" "$default")"
+        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+            printf '%s' "$value"
+            return 0
+        fi
+        if [ -t 0 ]; then
+            warn "$label must be a positive integer"
+            continue
+        fi
+        return 1
+    done
+}
+
+write_env_file() {
+    local env_file="$1" config_root temporary key quoted
+
+    # Follow a symlinked configuration to its target, so a dotfiles-managed
+    # .env is updated in place instead of being replaced by a regular file.
+    [ -L "$env_file" ] && env_file="$(resolve_symlink_target "$env_file")"
+    config_root="$(dirname "$env_file")"
+    if [ ! -d "$config_root" ]; then
+        mkdir -p "$config_root"
+        chmod 700 "$config_root"
+    fi
+    temporary="$(mktemp "$config_root/.env.XXXXXX")"
+    {
+        printf "# devbox configuration - edit this file and run 'devbox init' again.\n"
+        printf "# Service secrets are generated inside the guest and never live here.\n"
+        printf '\n'
+        for key in "${ENV_KEYS[@]}"; do
+            if ! quoted="$(env_quote "${!key}")"; then
+                command rm -f "$temporary"
+                die "$key must not mix single and double quotes"
+            fi
+            printf 'export %s=%s\n' "$key" "$quoted"
+        done
+    } >"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$env_file"
+}
+
+# Prompt for every supported key, keeping existing values as defaults.
+prompt_env_values() {
+    local key value label
+
+    for key in "${ENV_KEYS[@]}"; do
+        label="$(env_label "$key")"
+        value="$(env_default "$key")"
+        case "$key" in
+            DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK | POSTGRES_PORT)
+                value="$(prompt_number "$label" "$value")" ||
+                    die "$label must be a positive integer"
+                ;;
+            *)
+                value="$(prompt_required "$label" "$value")" ||
+                    die "$label is required"
+                ;;
+        esac
+        printf -v "$key" '%s' "$value"
+    done
+}
+
 initialize_local_config() {
-    local env_file config_root
+    local env_file key
 
     check_host_platform
 
-    devbox_warn_legacy_env_file
     env_file="$(devbox_env_file)"
-    if [ ! -f "$env_file" ]; then
-        [ -f "$DEVBOX_DIR/.env.example" ] ||
-            die "Missing $DEVBOX_DIR/.env.example; reinstall devbox"
-        config_root="$(dirname "$env_file")"
-        if [ ! -d "$config_root" ]; then
-            mkdir -p "$config_root"
-            chmod 700 "$config_root"
-        fi
-        cp "$DEVBOX_DIR/.env.example" "$env_file"
-        chmod 600 "$env_file"
-        log "Created $env_file"
-        die "Fill in $env_file, then run 'devbox init' again"
+    for key in "${ENV_KEYS[@]}"; do
+        unset "$key"
+    done
+    if [ -f "$env_file" ]; then
+        load_env_defaults "$env_file"
     fi
 
+    log "Configure devbox (press Enter to keep the value in brackets):"
+    prompt_env_values
+
+    write_env_file "$env_file"
     load_env
     log "devbox initialization complete."
+    log "Configuration: $env_file"
+    log "Edit that file and run 'devbox init' again to change settings."
 }
