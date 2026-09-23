@@ -6,15 +6,15 @@ except the repository and your Colima installation on the guest.
 ## Host / guest boundary
 
 - The host owns the repository, the host configuration (`.env`, mode 0600),
-  the Colima profile, and a marked OpenSSH host alias for `devbox`. It needs
+  the Colima profile, and a managed OpenSSH host alias for `devbox`. It needs
   only Colima and the OpenSSH client.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
   data, and credentials. There are no host filesystem mounts.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
   `~/.colima/_lima`. The devbox profile disables automatic Docker context
   activation and agent forwarding, and tells Colima to leave the OpenSSH
-  configuration alone (`sshConfig: false`); the marked `devbox` host alias is
-  written by devbox itself.
+  configuration alone (`sshConfig: false`); devbox writes `~/.ssh/devbox.conf`
+  itself and includes it first from `~/.ssh/config`.
 
 ## Identity
 

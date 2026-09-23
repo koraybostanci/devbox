@@ -241,6 +241,8 @@ stream_devbox_bundle() {
         [ -f "$temporary/provision/scripts/state.sh" ]
         [ -f "$temporary/provision/scripts/tools.sh" ]
         [ -f "$temporary/provision/scripts/verify.sh" ]
+        [ -f "$temporary/provision/scripts/authorize-key.sh" ]
+        [ -f "$temporary/provision/scripts/services.sh" ]
         bundle_digest() {
             local provision_root="$1"
 
@@ -325,21 +327,8 @@ stage_devbox_guest_state() {
 devbox_services_compose() {
     local action="$1"
 
-    devbox_admin_guest sudo bash -c '
-        set -Eeuo pipefail
-        action="$1"
-        services=/var/lib/devbox/services
-        [ -f "$services/compose.yaml" ] && [ -f "$services/env" ] || {
-            printf "devbox services are not provisioned; run devbox provision\n" >&2
-            exit 1
-        }
-        compose=(docker compose --project-name devbox --env-file "$services/env" -f "$services/compose.yaml")
-        case "$action" in
-            start) "${compose[@]}" up -d --wait ;;
-            stop) "${compose[@]}" down ;;
-            status) "${compose[@]}" ps ;;
-        esac
-    ' _ "$action"
+    devbox_admin_guest sudo \
+        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/services.sh" "$action"
 }
 
 devbox_guest_provision_digest() {
@@ -397,121 +386,33 @@ authorize_devbox_host_key() {
     local colima_config="$1" key
 
     key="$(devbox_host_public_key "$colima_config")" || return
-    printf '%s\n' "$key" | devbox_admin_guest sudo bash -c '
-        set -Eeuo pipefail
-        home=/home/devbox
-        user=devbox
-        key="$(cat)"
-        [ -n "$key" ] && [ "$(printf "%s\\n" "$key" | wc -l | tr -d " ")" = 1 ] || {
-            printf "ERROR: invalid devbox host SSH public key\n" >&2
-            exit 1
-        }
-        [ -d "$home" ] && [ ! -L "$home" ] || {
-            printf "ERROR: devbox guest home is invalid\n" >&2
-            exit 1
-        }
-        [ ! -L "$home/.ssh" ] || {
-            printf "ERROR: devbox guest SSH directory is invalid\n" >&2
-            exit 1
-        }
-        install -d -o "$user" -g "$user" -m 700 "$home/.ssh"
-        [ -d "$home/.ssh" ] && [ ! -L "$home/.ssh" ] || {
-            printf "ERROR: devbox guest SSH directory is invalid\n" >&2
-            exit 1
-        }
-        authorized="$home/.ssh/authorized_keys"
-        temporary="$(mktemp "$home/.ssh/.authorized_keys.XXXXXX")"
-        printf "%s\\n" "$key" >"$temporary"
-        chown "$user":"$user" "$temporary"
-        chmod 600 "$temporary"
-        mv "$temporary" "$authorized"
-        # Older devbox versions configured sshd to read
-        # /etc/ssh/authorized_keys/%u. Keep that file current when the directory
-        # exists so an existing VM converges without being recreated.
-        if [ -d /etc/ssh/authorized_keys ] && [ ! -L /etc/ssh/authorized_keys ]; then
-            temporary="$(mktemp "/etc/ssh/authorized_keys/.${user}.XXXXXX")"
-            printf "%s\\n" "$key" >"$temporary"
-            chown root:root "$temporary"
-            chmod 644 "$temporary"
-            mv "$temporary" "/etc/ssh/authorized_keys/$user"
-        fi
-    '
+    printf '%s\n' "$key" | devbox_admin_guest sudo \
+        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/authorize-key.sh"
 }
 
-# Write the managed block into a destination file: replace the existing
-# `# BEGIN devbox`/`# END devbox` span in place, or insert the block before the
-# first Host/Match entry (or append it when there is none). Returns nonzero for
-# malformed markers: an orphan END or an unterminated BEGIN.
-stage_devbox_host_ssh_config() {
-    local managed_config="$1"
-    local config="$2"
-    local temporary="$3"
+# Print the user's SSH configuration with any previous devbox include or
+# marker block (from earlier devbox versions) removed. Returns nonzero for an
+# unterminated `# BEGIN devbox` block; the caller then discards the result.
+filter_devbox_ssh_config() {
+    local config="$1"
 
-    if [ -e "$config" ]; then
-        awk -v managed_config="$managed_config" '
-            function insert_managed_config(    line) {
-                print "# BEGIN devbox"
-                while ((getline line < managed_config) > 0) print line
-                close(managed_config)
-                print "# END devbox"
-                print ""
-                inserted = 1
-            }
-            /^# BEGIN devbox[[:space:]]*$/ {
-                if (inside) bad = 1
-                inside = 1
-                next
-            }
-            /^# END devbox[[:space:]]*$/ {
-                if (!inside) bad = 1
-                inside = 0
-                next
-            }
-            inside { next }
-            !inserted && /^[[:space:]]*([Hh][Oo][Ss][Tt]|[Mm][Aa][Tt][Cc][Hh])[[:space:]]/ {
-                insert_managed_config()
-            }
-            { print }
-            END {
-                if (inside) bad = 1
-                if (bad) exit 1
-                if (!inserted) insert_managed_config()
-            }
-        ' "$config" >"$temporary" || return 1
-    else
-        {
-            printf '%s\n' "# BEGIN devbox"
-            cat "$managed_config"
-            printf '%s\n' "# END devbox"
-        } >"$temporary" || return 1
-    fi
-}
-
-# Remove the managed devbox block from a source configuration into a
-# destination file. Returns nonzero for malformed markers or unreadable input;
-# the caller discards the destination on failure.
-strip_devbox_ssh_block() {
-    local config="$1" destination="$2"
-
-    [ -e "$config" ] || return 1
+    [ -e "$config" ] || return 0
     awk '
+        /^[[:space:]]*Include[[:space:]]+.*devbox\.conf[[:space:]]*$/ { next }
         /^# BEGIN devbox[[:space:]]*$/ {
-            if (inside) bad = 1
             inside = 1
             next
         }
         /^# END devbox[[:space:]]*$/ {
-            if (!inside) bad = 1
-            inside = 0
-            next
+            if (inside) {
+                inside = 0
+                next
+            }
         }
         inside { next }
         { print }
-        END {
-            if (inside) bad = 1
-            if (bad) exit 1
-        }
-    ' "$config" >"$destination"
+        END { if (inside) exit 1 }
+    ' "$config"
 }
 
 # Rewrite Colima's SSH configuration into the managed `Host devbox` block: force
@@ -533,78 +434,125 @@ render_devbox_ssh_managed_block() {
     ' "$colima_config"
 }
 
-# Stage the managed block into ~/.ssh/config, replacing any existing devbox
-# block. The staged file is verified against a live connection before the user's
-# configuration is replaced.
+# Write the managed `Host devbox` block to ~/.ssh/devbox.conf and make
+# ~/.ssh/config include it first, so its values win over other Host blocks. The
+# staged configuration is verified against a live connection before the user's
+# files are replaced.
 write_devbox_ssh_config() {
     local colima_config="$1"
-    local managed config config_dir temporary config_mode
-    local ssh_dir_existed=false config_dir_existed=false
+    local ssh_dir="$HOME/.ssh" managed config
+    local stage_dir staged_managed staged_config final_config
+    local temporary config_mode
+    local ssh_dir_existed=false
 
-    managed="$(mktemp "${TMPDIR:-/tmp}/devbox-managed.XXXXXX")" ||
+    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/devbox-ssh.XXXXXX")" ||
         die "failed to stage the devbox SSH configuration"
-    render_devbox_ssh_managed_block "$colima_config" >"$managed" || {
-        command rm -f "$managed"
+    staged_managed="$stage_dir/devbox.conf"
+    staged_config="$stage_dir/config"
+    final_config="$stage_dir/final.conf"
+
+    render_devbox_ssh_managed_block "$colima_config" >"$staged_managed" || {
+        command rm -rf "$stage_dir"
         die "Colima failed to generate the devbox SSH configuration"
     }
-    if ! grep -q '^Host devbox$' "$managed" ||
+    if ! grep -q '^Host devbox$' "$staged_managed" ||
         ! grep -Eqi '^[[:space:]]*HostName[[:space:]]+' "$colima_config" ||
         ! grep -Eqi '^[[:space:]]*Port[[:space:]]+' "$colima_config" ||
-        ! grep -q '^[[:space:]]*IdentityFile[[:space:]]' "$managed"; then
-        command rm -f "$managed"
+        ! grep -q '^[[:space:]]*IdentityFile[[:space:]]' "$staged_managed"; then
+        command rm -rf "$stage_dir"
         die "Colima returned an invalid devbox SSH configuration"
     fi
-    chmod 600 "$managed"
 
-    config="$HOME/.ssh/config"
+    managed="$ssh_dir/devbox.conf"
+    config="$ssh_dir/config"
     [ -L "$config" ] && config="$(resolve_symlink_target "$config")"
-    config_dir="$(dirname "$config")"
-    [ -d "$HOME/.ssh" ] && ssh_dir_existed=true
-    [ -d "$config_dir" ] && config_dir_existed=true
-    mkdir -p "$HOME/.ssh" "$config_dir" || {
-        command rm -f "$managed"
-        die "failed to create the devbox SSH configuration directories"
+
+    # Stage with an absolute include so the final files stay untouched until
+    # the connection test passes.
+    {
+        printf 'Include %s\n' "$staged_managed"
+        filter_devbox_ssh_config "$config" || exit 1
+    } >"$staged_config" || {
+        command rm -rf "$stage_dir"
+        die "$config contains malformed devbox markers"
     }
-    [ -d "$HOME/.ssh" ] && [ ! -L "$HOME/.ssh" ] &&
-        [ -d "$config_dir" ] && [ ! -L "$config_dir" ] || {
-        command rm -f "$managed"
-        die "devbox SSH configuration directories are invalid"
+    chmod 600 "$staged_managed" "$staged_config" || {
+        command rm -rf "$stage_dir"
+        die "failed to secure the staged devbox SSH configuration"
     }
-    if [ "$ssh_dir_existed" = false ]; then
-        chmod 700 "$HOME/.ssh"
+    if ! ssh -F "$staged_config" -o BatchMode=yes -o ConnectTimeout=10 devbox true >/dev/null 2>&1; then
+        command rm -rf "$stage_dir"
+        die "generated SSH host 'devbox' is not reachable; inspect 'ssh -G devbox' and rerun 'devbox start'"
     fi
-    if [ "$config_dir_existed" = false ]; then
-        chmod 700 "$config_dir"
-    fi
+
+    # The committed configuration uses the relative include, which OpenSSH
+    # resolves against ~/.ssh.
+    {
+        printf '%s\n' "Include devbox.conf"
+        filter_devbox_ssh_config "$config" || exit 1
+    } >"$final_config" || {
+        command rm -rf "$stage_dir"
+        die "$config contains malformed devbox markers"
+    }
+
+    [ -d "$ssh_dir" ] && ssh_dir_existed=true
+    mkdir -p "$ssh_dir" || {
+        command rm -rf "$stage_dir"
+        die "failed to create the devbox SSH configuration directory"
+    }
+    [ -d "$ssh_dir" ] && [ ! -L "$ssh_dir" ] || {
+        command rm -rf "$stage_dir"
+        die "devbox SSH configuration directory is invalid"
+    }
+    [ "$ssh_dir_existed" = true ] || chmod 700 "$ssh_dir" || {
+        command rm -rf "$stage_dir"
+        die "failed to secure the devbox SSH configuration directory"
+    }
     if [ -e "$config" ]; then
         config_mode="$(file_mode "$config")" || {
-            command rm -f "$managed"
+            command rm -rf "$stage_dir"
             die "failed to inspect $config"
         }
     else
         config_mode=600
     fi
-    temporary="$(mktemp "$config_dir/.config.XXXXXX")" || {
-        command rm -f "$managed"
-        die "failed to stage the devbox SSH configuration update"
+
+    temporary="$(mktemp "$ssh_dir/.devbox.conf.XXXXXX")" || {
+        command rm -rf "$stage_dir"
+        die "failed to stage the devbox SSH configuration"
     }
-    if ! stage_devbox_host_ssh_config "$managed" "$config" "$temporary"; then
-        command rm -f "$managed" "$temporary"
-        die "$config contains malformed devbox markers"
-    fi
+    cat "$staged_managed" >"$temporary" || {
+        command rm -rf "$stage_dir" "$temporary"
+        die "failed to stage the devbox SSH configuration"
+    }
+    chmod 600 "$temporary" || {
+        command rm -rf "$stage_dir" "$temporary"
+        die "failed to secure the devbox SSH configuration"
+    }
+    mv "$temporary" "$managed" || {
+        command rm -rf "$stage_dir" "$temporary"
+        die "failed to update $managed"
+    }
+
+    temporary="$(mktemp "$(dirname "$config")/.config.XXXXXX")" || {
+        command rm -rf "$stage_dir"
+        die "failed to stage the devbox SSH configuration"
+    }
+    cat "$final_config" >"$temporary" || {
+        command rm -rf "$stage_dir" "$temporary"
+        die "failed to stage the devbox SSH configuration"
+    }
     chmod "$config_mode" "$temporary" || {
-        command rm -f "$managed" "$temporary"
-        die "failed to secure the staged devbox SSH configuration"
+        command rm -rf "$stage_dir" "$temporary"
+        die "failed to secure the devbox SSH configuration"
     }
-    if ! ssh -F "$temporary" -o BatchMode=yes -o ConnectTimeout=10 devbox true >/dev/null 2>&1; then
-        command rm -f "$managed" "$temporary"
-        die "generated SSH host 'devbox' is not reachable; inspect 'ssh -G devbox' and rerun 'devbox start'"
-    fi
-    command rm -f "$managed"
-    mv "$temporary" "$config" || {
+    if [ -e "$config" ] && cmp -s "$temporary" "$config"; then
         command rm -f "$temporary"
+    elif ! mv "$temporary" "$config"; then
+        command rm -rf "$stage_dir" "$temporary"
         die "failed to update $config"
-    }
+    fi
+    command rm -rf "$stage_dir"
 }
 
 ensure_devbox_guest_ssh_access() {
@@ -628,31 +576,34 @@ ensure_devbox_guest_ssh_access() {
 }
 
 remove_devbox_ssh_config() {
-    local config="$HOME/.ssh/config" config_dir temporary config_mode
+    local ssh_dir="$HOME/.ssh" managed config temporary config_mode
 
+    managed="$ssh_dir/devbox.conf"
+    config="$ssh_dir/config"
     [ -L "$config" ] && config="$(resolve_symlink_target "$config")"
-    config_dir="$(dirname "$config")"
-    if [ ! -e "$config" ]; then
-        return 0
+    if [ -e "$config" ]; then
+        temporary="$(mktemp "$(dirname "$config")/.config.XXXXXX")" ||
+            die "failed to stage the devbox SSH configuration cleanup"
+        if ! filter_devbox_ssh_config "$config" >"$temporary"; then
+            command rm -f "$temporary"
+            die "$config contains malformed devbox markers"
+        fi
+        config_mode="$(file_mode "$config")" || {
+            command rm -f "$temporary"
+            die "failed to inspect $config"
+        }
+        chmod "$config_mode" "$temporary" || {
+            command rm -f "$temporary"
+            die "failed to preserve the mode of $config"
+        }
+        if cmp -s "$temporary" "$config"; then
+            command rm -f "$temporary"
+        elif ! mv "$temporary" "$config"; then
+            command rm -f "$temporary"
+            die "failed to update $config"
+        fi
     fi
-    temporary="$(mktemp "$config_dir/.config.XXXXXX")" ||
-        die "failed to stage the devbox SSH configuration cleanup"
-    if ! strip_devbox_ssh_block "$config" "$temporary"; then
-        command rm -f "$temporary"
-        die "$config contains malformed devbox markers"
-    fi
-    config_mode="$(file_mode "$config")" || {
-        command rm -f "$temporary"
-        die "failed to inspect $config"
-    }
-    chmod "$config_mode" "$temporary" || {
-        command rm -f "$temporary"
-        die "failed to preserve the mode of $config"
-    }
-    mv "$temporary" "$config" || {
-        command rm -f "$temporary"
-        die "failed to update $config"
-    }
+    command rm -f "$managed"
 }
 
 provision_devbox_guest() (

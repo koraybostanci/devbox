@@ -53,7 +53,8 @@ until `devbox services start` is run.
 devbox stop
 devbox start              # provisioning is current; SSH alias is refreshed
 devbox destroy            # type "devbox" to confirm
-grep -n 'BEGIN devbox' ~/.ssh/config   # no managed block remains
+grep -n 'devbox.conf' ~/.ssh/config    # no managed include remains
+[ ! -e ~/.ssh/devbox.conf ]            # managed file removed
 ```
 
 If you have a VM created by an older devbox version, run `devbox start` once

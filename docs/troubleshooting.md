@@ -49,19 +49,18 @@ generated administrative account.
 
 ## SSH configuration conflicts
 
-`devbox start` rewrites the marked `# BEGIN devbox`/`# END devbox` block in
-`~/.ssh/config` and refuses a configuration it cannot reconcile, with one of:
+`devbox start` writes `~/.ssh/devbox.conf` and ensures `~/.ssh/config` includes
+it as the first line, so its values win over other `Host` blocks. It refuses a
+configuration it cannot reconcile, with one of:
 
 - `contains malformed devbox markers`
 - `generated SSH host 'devbox' is not reachable`
 
-Malformed markers mean the structure is genuinely broken: an orphan
-`# END devbox` or an unterminated block. Remove the offending markers and rerun
+Malformed markers mean an unterminated `# BEGIN devbox` block written by an
+older devbox version is still present in `~/.ssh/config`; remove it and rerun
 `devbox start`. An unreachable alias means the generated block cannot connect —
-usually because a global option above it wins: OpenSSH keeps the first obtained
-value, and the block is inserted before the first `Host`/`Match` entry, so a
-bare global option above it (or a block pulled in by an `Include` above it) can
-override the generated values. Inspect the effective result with:
+usually because a system-wide option or an `Include` above it wins. Inspect the
+effective result with:
 
 ```sh
 ssh -G devbox

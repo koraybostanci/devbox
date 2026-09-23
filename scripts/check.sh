@@ -5,16 +5,10 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export ROOT
+# shellcheck disable=SC1091
+source "$ROOT/lib/common.sh"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-
-file_mode_of() {
-    if [ "$(uname -s)" = "Darwin" ]; then
-        stat -f '%Lp' "$1"
-    else
-        stat -c '%a' "$1"
-    fi
-}
 
 validation_root="$(mktemp -d)"
 trap 'command rm -rf "$validation_root"' EXIT
@@ -166,9 +160,6 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
     source "$ROOT/lib/devbox.sh"
-    devbox_host_public_key() {
-        printf "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test\n"
-    }
     capture_payloads() {
         local i j target
         for ((i = 1; i <= $#; i++)); do
@@ -192,9 +183,6 @@ HOME="$devbox_home" DEVBOX_REMOTE_PAYLOADS_DIR="$payloads_dir" ROOT="$ROOT" DEVB
         printf "ERROR: devbox_guest payload was not captured for syntax checking\n" >&2
         exit 1
     }
-    authorize_devbox_host_key "$DEVBOX_PAYLOAD_ARCHIVE" || true
-    devbox_as_guest true || true
-    devbox_services_compose status || true
     stream_devbox_bundle "$DEVBOX_PAYLOAD_DIGEST" "$DEVBOX_PAYLOAD_ARCHIVE" || true
     devbox_guest_bundle_is_valid "$DEVBOX_PAYLOAD_DIGEST" || true
 ' || fail "devbox remote payload capture failed"
@@ -204,13 +192,13 @@ for payload in "$payloads_dir"/payload.*; do
     payload_count=$((payload_count + 1))
     bash -n "$payload" || fail "a devbox remote payload is not valid Bash: $payload"
 done
-# The floor is coupled to the number of remote payload sites in lib/devbox.sh;
-# update it when a payload site is added or removed.
-[ "$payload_count" -ge 4 ] || fail "expected at least 4 devbox remote payloads, captured $payload_count"
+# Only the two bootstrap payloads remain inline; every other guest step lives
+# in provision/scripts and is covered by the shell-syntax scan above.
+[ "$payload_count" -ge 2 ] || fail "expected at least 2 devbox remote payloads, captured $payload_count"
 
-# --- devbox SSH config staging and stripping --------------------------------
-# stage_devbox_host_ssh_config and strip_devbox_ssh_block are pure renderers,
-# and resolve_symlink_target is a pure resolver: exercise them outside any VM.
+# --- devbox SSH config filtering and rendering --------------------------------
+# filter_devbox_ssh_config, render_devbox_ssh_managed_block, and
+# resolve_symlink_target are pure: exercise them outside any VM.
 ssh_config_unit_root="$validation_root/ssh-config-unit"
 mkdir -p "$ssh_config_unit_root"
 cat >"$validation_root/ssh-config-unit.sh" <<'EOF'
@@ -222,27 +210,6 @@ source "$ROOT/lib/common.sh"
 source "$ROOT/lib/devbox.sh"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-assert_single_pair() {
-    [ "$(grep -Fxc '# BEGIN devbox' "$1" || true)" -eq 1 ] || fail "expected exactly one BEGIN marker in $1"
-    [ "$(grep -Fxc '# END devbox' "$1" || true)" -eq 1 ] || fail "expected exactly one END marker in $1"
-}
-assert_managed_content() {
-    local staged="$1"
-
-    sed -n '/^# BEGIN devbox$/,/^# END devbox$/p' "$staged" | sed '1d;$d' >"$staged.block"
-    cmp -s "$managed" "$staged.block" || fail "did not embed the managed content"
-}
-
-managed="$unit_root/managed.conf"
-cat >"$managed" <<'CONFIG'
-Host devbox
-  HostName 127.0.0.1
-  User devbox
-  Port 51234
-  IdentityFile /tmp/devbox-key
-  IdentitiesOnly yes
-  ForwardAgent no
-CONFIG
 
 # render_devbox_ssh_managed_block rewrites Colima's output into the managed
 # block: the unprivileged user and disabled agent forwarding are forced, and
@@ -270,78 +237,40 @@ if grep -qE 'User lima|ForwardAgent yes|ControlMaster' "$unit_root/managed-rende
     fail "managed block kept an overridden option"
 fi
 
-# A config that does not exist yet is created with the managed content wrapped
-# in exactly one marker pair.
-stage_devbox_host_ssh_config "$managed" "$unit_root/new/config" "$unit_root/staged-new" ||
-    fail "staging a new config failed"
-assert_single_pair "$unit_root/staged-new"
-[ "$(sed -n '1p' "$unit_root/staged-new")" = "# BEGIN devbox" ] ||
-    fail "new config does not start with the BEGIN marker"
-[ "$(sed -n '$p' "$unit_root/staged-new")" = "# END devbox" ] ||
-    fail "new config does not end with the END marker"
-assert_managed_content "$unit_root/staged-new"
-
-# An existing config without Host/Match entries keeps its content and gets the
-# block appended.
-printf '# user config\nSetEnv KEEP=1\n' >"$unit_root/existing-plain"
-stage_devbox_host_ssh_config "$managed" "$unit_root/existing-plain" "$unit_root/staged-append" ||
-    fail "staging an existing config failed"
-assert_single_pair "$unit_root/staged-append"
-[ "$(sed -n '1p' "$unit_root/staged-append")" = "# user config" ] ||
-    fail "existing content was not preserved ahead of the appended block"
-grep -qx 'SetEnv KEEP=1' "$unit_root/staged-append" ||
-    fail "existing content was not preserved in the appended config"
-assert_managed_content "$unit_root/staged-append"
-
-# An existing managed block is replaced, exactly once, and content around it
-# survives.
-printf '# user config\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost other\n  HostName other.example.com\n' \
-    >"$unit_root/existing-block"
-stage_devbox_host_ssh_config "$managed" "$unit_root/existing-block" "$unit_root/staged-replace" ||
-    fail "replacing an existing block failed"
-assert_single_pair "$unit_root/staged-replace"
-grep -qx 'Host other' "$unit_root/staged-replace" ||
-    fail "content after the replaced block was lost"
-[ "$(sed -n '$p' "$unit_root/staged-replace")" = "  HostName other.example.com" ] ||
-    fail "content after the replaced block was reordered"
-if grep -qx '  Port 1' "$unit_root/staged-replace"; then
-    fail "the stale managed block survived replacement"
-fi
-assert_managed_content "$unit_root/staged-replace"
-
-# The block is inserted before the first Host entry.
-printf 'Host first\n  HostName first.example.com\n' >"$unit_root/existing-host"
-stage_devbox_host_ssh_config "$managed" "$unit_root/existing-host" "$unit_root/staged-insert" ||
-    fail "inserting before the first Host entry failed"
-assert_single_pair "$unit_root/staged-insert"
-awk '
-    /^# BEGIN devbox$/ { inserted = 1 }
-    /^Host first$/ { exit !inserted }
-' "$unit_root/staged-insert" ||
-    fail "the managed block was not inserted before the first Host entry"
-
-# Genuinely malformed structure is still refused: an orphan END and an
-# unterminated BEGIN.
-printf '# head\n# END devbox\n# tail\n' >"$unit_root/orphan-end"
-if stage_devbox_host_ssh_config "$managed" "$unit_root/orphan-end" "$unit_root/staged-orphan-end"; then
-    fail "an orphan END marker was accepted"
-fi
-printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/missing-end"
-if stage_devbox_host_ssh_config "$managed" "$unit_root/missing-end" "$unit_root/staged-missing-end"; then
-    fail "a missing END marker was accepted"
+# filter_devbox_ssh_config drops devbox includes and previous marker blocks
+# while preserving everything else.
+cat >"$unit_root/config-in" <<'CONFIG'
+# user config
+Include devbox.conf
+SetEnv KEEP=1
+# BEGIN devbox
+Host devbox
+  Port 1
+# END devbox
+Include /tmp/other/devbox.conf
+Host other
+  HostName other.example.com
+CONFIG
+filter_devbox_ssh_config "$unit_root/config-in" >"$unit_root/config-out" ||
+    fail "filter_devbox_ssh_config failed"
+grep -qx '# user config' "$unit_root/config-out" ||
+    fail "filter_devbox_ssh_config dropped the leading comment"
+grep -qx 'SetEnv KEEP=1' "$unit_root/config-out" ||
+    fail "filter_devbox_ssh_config dropped user content"
+grep -qx 'Host other' "$unit_root/config-out" ||
+    fail "filter_devbox_ssh_config dropped the trailing Host entry"
+if grep -qE 'devbox\.conf|BEGIN devbox|END devbox|Port 1' "$unit_root/config-out"; then
+    fail "filter_devbox_ssh_config kept a devbox include or marker block"
 fi
 
-# strip_devbox_ssh_block removes only the managed block.
-printf 'Host keep\n  HostName keep.example.com\n# BEGIN devbox\nHost devbox\n  Port 1\n# END devbox\nHost tail\n' \
-    >"$unit_root/strip-source"
-strip_devbox_ssh_block "$unit_root/strip-source" "$unit_root/strip-out" ||
-    fail "strip_devbox_ssh_block rejected a well-formed block"
-printf 'Host keep\n  HostName keep.example.com\nHost tail\n' >"$unit_root/strip-expected"
-cmp -s "$unit_root/strip-expected" "$unit_root/strip-out" ||
-    fail "strip_devbox_ssh_block did not preserve every other line"
-printf '# head\n# END devbox\n# tail\n' >"$unit_root/strip-orphan-end"
-if strip_devbox_ssh_block "$unit_root/strip-orphan-end" "$unit_root/strip-orphan-out"; then
-    fail "strip_devbox_ssh_block accepted an orphan END marker"
+# A missing configuration yields no output.
+[ -z "$(filter_devbox_ssh_config "$unit_root/does-not-exist")" ] ||
+    fail "filter_devbox_ssh_config produced output for a missing config"
+
+# An unterminated marker block is refused.
+printf '# head\n# BEGIN devbox\nHost devbox\n' >"$unit_root/config-bad"
+if filter_devbox_ssh_config "$unit_root/config-bad" >"$unit_root/config-bad-out"; then
+    fail "filter_devbox_ssh_config accepted an unterminated block"
 fi
 
 # resolve_symlink_target follows a chain and leaves missing paths unchanged.
@@ -355,7 +284,70 @@ ln -s one "$unit_root/links/two"
     fail "resolve_symlink_target changed a missing path"
 EOF
 ROOT="$ROOT" /bin/bash "$validation_root/ssh-config-unit.sh" "$ssh_config_unit_root" ||
-    fail "devbox SSH config staging and stripping tests failed"
+    fail "devbox SSH config filtering and rendering tests failed"
+
+# write_devbox_ssh_config/remove_devbox_ssh_config manage ~/.ssh/devbox.conf
+# and the include line; exercise them with a stubbed ssh connection test.
+include_unit_root="$validation_root/ssh-include"
+mkdir -p "$include_unit_root/home/.ssh" "$include_unit_root/bin"
+printf '#!/bin/bash\nexit 0\n' >"$include_unit_root/bin/ssh"
+chmod +x "$include_unit_root/bin/ssh"
+cat >"$include_unit_root/colima.conf" <<'CONFIG'
+Host devbox
+  HostName 127.0.0.1
+  User lima
+  Port 51234
+  IdentityFile /tmp/devbox-key
+CONFIG
+cat >"$include_unit_root/home/.ssh/config" <<'CONFIG'
+# user config
+# BEGIN devbox
+Host devbox
+  Port 1
+# END devbox
+Host other
+  HostName other.example.com
+CONFIG
+chmod 640 "$include_unit_root/home/.ssh/config"
+HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
+    ROOT="$ROOT" DEVBOX_INCLUDE_CONFIG="$include_unit_root/colima.conf" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/devbox.sh"
+    write_devbox_ssh_config "$DEVBOX_INCLUDE_CONFIG"
+' || fail "write_devbox_ssh_config failed"
+[ "$(head -1 "$include_unit_root/home/.ssh/config")" = "Include devbox.conf" ] ||
+    fail "write_devbox_ssh_config did not prepend the include"
+[ -f "$include_unit_root/home/.ssh/devbox.conf" ] ||
+    fail "write_devbox_ssh_config did not write devbox.conf"
+grep -qx 'Host other' "$include_unit_root/home/.ssh/config" ||
+    fail "write_devbox_ssh_config dropped user content"
+if grep -q 'BEGIN devbox' "$include_unit_root/home/.ssh/config"; then
+    fail "write_devbox_ssh_config kept the old marker block"
+fi
+[ "$(file_mode "$include_unit_root/home/.ssh/config")" = 640 ] ||
+    fail "write_devbox_ssh_config changed the config mode"
+cp "$include_unit_root/home/.ssh/config" "$include_unit_root/first-config"
+HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
+    ROOT="$ROOT" DEVBOX_INCLUDE_CONFIG="$include_unit_root/colima.conf" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/devbox.sh"
+    write_devbox_ssh_config "$DEVBOX_INCLUDE_CONFIG"
+' || fail "repeat write_devbox_ssh_config failed"
+cmp -s "$include_unit_root/home/.ssh/config" "$include_unit_root/first-config" ||
+    fail "write_devbox_ssh_config is not idempotent"
+HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
+    ROOT="$ROOT" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/devbox.sh"
+    remove_devbox_ssh_config
+' || fail "remove_devbox_ssh_config failed"
+if grep -q 'devbox.conf' "$include_unit_root/home/.ssh/config"; then
+    fail "remove_devbox_ssh_config kept the include"
+fi
+[ ! -e "$include_unit_root/home/.ssh/devbox.conf" ] ||
+    fail "remove_devbox_ssh_config kept devbox.conf"
+grep -qx 'Host other' "$include_unit_root/home/.ssh/config" ||
+    fail "remove_devbox_ssh_config dropped user content"
 
 # --- host configuration resolution and validation ----------------------------
 env_output="$(
@@ -439,7 +431,7 @@ printf 'Devbox Test\ndevbox@example.com\n\n\n\n\n\n' |
     prompt_env_values
     write_env_file "$DEVBOX_ENV_FILE"
 ' 2>/dev/null || fail "devbox init prompting failed"
-[ "$(file_mode_of "$init_env")" = 600 ] ||
+[ "$(file_mode "$init_env")" = 600 ] ||
     fail "devbox init wrote the configuration with the wrong mode"
 grep -q '^export GIT_NAME="Devbox Test"$' "$init_env" ||
     fail "devbox init did not write the answered value"
@@ -506,7 +498,7 @@ HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
 ' >/dev/null || fail "ensure_devbox_path failed"
 [ "$(grep -c '^# BEGIN devbox$' "$path_rc")" -eq 1 ] ||
     fail "ensure_devbox_path did not write exactly one block"
-[ "$(file_mode_of "$path_rc")" = 640 ] ||
+[ "$(file_mode "$path_rc")" = 640 ] ||
     fail "ensure_devbox_path changed the rc mode"
 grep -qx 'export EDITOR=vim' "$path_rc" ||
     fail "ensure_devbox_path dropped existing rc content"
@@ -563,7 +555,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         "$ROOT/devbox" init >"$init_root/init.log" 2>&1 ||
         fail "devbox init did not complete with piped answers"
     [ -f "$init_env" ] || fail "devbox init did not create the host configuration"
-    [ "$(file_mode_of "$init_env")" = 600 ] ||
+    [ "$(file_mode "$init_env")" = 600 ] ||
         fail "devbox init created the host configuration with the wrong mode"
     grep -q '^export GIT_NAME="Devbox Test"$' "$init_env" ||
         fail "devbox init did not write the answered Git name"
