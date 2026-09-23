@@ -357,25 +357,33 @@ run_devbox_guest_provisioning() {
     ' || return
 }
 
-# Print the effective value of a `ssh -G` keyword from Colima's SSH
-# configuration, resolving a leading ~/ to the host home.
-devbox_effective_ssh_value() {
-    local colima_config="$1" key="$2" value
+# Print the identity file from Colima's SSH configuration. Colima rewrites the
+# Host line to `colima-<profile>`, so resolving it through `ssh -G` with the
+# short profile name is unreliable; read the option directly instead. The path
+# is quoted by Lima, and a leading ~/ is expanded.
+devbox_identity_file() {
+    local colima_config="$1" identity_file
 
-    value="$(ssh -F "$colima_config" -G "$DEVBOX_PROFILE" 2>/dev/null |
-        awk -v key="$key" 'tolower($1) == key { print $2; exit }')"
-    case "$value" in
-        "~/"*) value="$HOME/${value#\~/}" ;;
+    identity_file="$(awk '
+        tolower($1) == "identityfile" {
+            sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "")
+            sub(/[[:space:]]+$/, "")
+            if ($0 ~ /^".*"$/) $0 = substr($0, 2, length($0) - 2)
+            print
+            exit
+        }
+    ' "$colima_config")"
+    case "$identity_file" in
+        "~/"*) identity_file="$HOME/${identity_file#\~/}" ;;
     esac
-    [ -n "$value" ] || return 1
-    printf '%s\n' "$value"
+    [ -n "$identity_file" ] && [ -r "$identity_file" ] || return 1
+    printf '%s\n' "$identity_file"
 }
 
 devbox_host_public_key() {
     local colima_config="$1" identity_file
 
-    identity_file="$(devbox_effective_ssh_value "$colima_config" identityfile)" || true
-    [ -n "$identity_file" ] && [ -r "$identity_file" ] ||
+    identity_file="$(devbox_identity_file "$colima_config")" ||
         die "Colima SSH configuration has no readable identity file for $DEVBOX_PROFILE"
     ssh-keygen -y -f "$identity_file"
 }

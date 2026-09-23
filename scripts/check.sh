@@ -281,6 +281,33 @@ if filter_devbox_ssh_config "$unit_root/config-bad" >"$unit_root/config-bad-out"
     fail "filter_devbox_ssh_config accepted an unterminated block"
 fi
 
+# devbox_identity_file reads Lima's quoted IdentityFile even though Colima
+# rewrites the Host line to `colima-<profile>`.
+printf 'key\n' >"$unit_root/identity-key"
+cat >"$unit_root/lima.conf" <<CONFIG
+Host colima-devbox
+  IdentityFile "$unit_root/identity-key"
+  User lima
+  Hostname 127.0.0.1
+  Port 51234
+CONFIG
+[ "$(devbox_identity_file "$unit_root/lima.conf")" = "$unit_root/identity-key" ] ||
+    fail "devbox_identity_file did not read the quoted identity file"
+printf 'key\n' >"$unit_root/home-key"
+cat >"$unit_root/lima-tilde.conf" <<'CONFIG'
+Host colima-devbox
+  IdentityFile "~/home-key"
+CONFIG
+[ "$(HOME="$unit_root" devbox_identity_file "$unit_root/lima-tilde.conf")" = "$unit_root/home-key" ] ||
+    fail "devbox_identity_file did not expand a leading ~/"
+cat >"$unit_root/lima-missing.conf" <<'CONFIG'
+Host colima-devbox
+  IdentityFile "/tmp/does-not-exist-devbox-key"
+CONFIG
+if devbox_identity_file "$unit_root/lima-missing.conf" >/dev/null 2>&1; then
+    fail "devbox_identity_file accepted a missing identity file"
+fi
+
 # resolve_symlink_target follows a chain and leaves missing paths unchanged.
 mkdir -p "$unit_root/links"
 printf 'target\n' >"$unit_root/links/real"
