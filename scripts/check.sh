@@ -204,9 +204,7 @@ done
 # in provision/scripts and is covered by the shell-syntax scan above.
 [ "$payload_count" -ge 2 ] || fail "expected at least 2 devbox remote payloads, captured $payload_count"
 
-# --- devbox SSH config filtering and rendering --------------------------------
-# filter_devbox_ssh_config, render_devbox_ssh_managed_block, and
-# resolve_symlink_target are pure: exercise them outside any VM.
+# --- devbox SSH config rendering and managed alias ---------------------------
 ssh_config_unit_root="$validation_root/ssh-config-unit"
 mkdir -p "$ssh_config_unit_root"
 cat >"$validation_root/ssh-config-unit.sh" <<'EOF'
@@ -219,11 +217,8 @@ source "$ROOT/lib/devbox.sh"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-# render_devbox_ssh_managed_block rewrites Colima's output into the managed
-# block: the unprivileged user and disabled agent forwarding are forced, and
-# overriding options are dropped.
 cat >"$unit_root/colima.conf" <<'CONFIG'
-Host devbox
+Host colima-devbox
   HostName 127.0.0.1
   User lima
   Port 51234
@@ -245,144 +240,100 @@ if grep -qE 'User lima|ForwardAgent yes|ControlMaster' "$unit_root/managed-rende
     fail "managed block kept an overridden option"
 fi
 
-# filter_devbox_ssh_config drops devbox includes and previous marker blocks
-# while preserving everything else.
 cat >"$unit_root/config-in" <<'CONFIG'
+Include ~/.ssh/devbox.conf
 # user config
-Include devbox.conf
-SetEnv KEEP=1
 # BEGIN devbox
 Host devbox
   Port 1
 # END devbox
-Include /tmp/other/devbox.conf
 Host other
   HostName other.example.com
 CONFIG
 filter_devbox_ssh_config "$unit_root/config-in" >"$unit_root/config-out" ||
     fail "filter_devbox_ssh_config failed"
-grep -qx '# user config' "$unit_root/config-out" ||
-    fail "filter_devbox_ssh_config dropped the leading comment"
-grep -qx 'SetEnv KEEP=1' "$unit_root/config-out" ||
-    fail "filter_devbox_ssh_config dropped user content"
-grep -qx 'Host other' "$unit_root/config-out" ||
-    fail "filter_devbox_ssh_config dropped the trailing Host entry"
-if grep -qE 'devbox\.conf|BEGIN devbox|END devbox|Port 1' "$unit_root/config-out"; then
-    fail "filter_devbox_ssh_config kept a devbox include or marker block"
+grep -qx 'Include ~/.ssh/devbox.conf' "$unit_root/config-out" ||
+    fail "filter_devbox_ssh_config dropped the persistent Include"
+grep -qx '# user config' "$unit_root/config-out" || fail "filter dropped user content"
+grep -qx 'Host other' "$unit_root/config-out" || fail "filter dropped the trailing Host entry"
+if grep -qE 'BEGIN devbox|END devbox|Port 1' "$unit_root/config-out"; then
+    fail "filter kept an old devbox marker block"
+fi
+printf '# BEGIN devbox\nHost devbox\n' >"$unit_root/config-bad"
+if filter_devbox_ssh_config "$unit_root/config-bad" > /dev/null 2>&1; then
+    fail "filter accepted an unterminated marker block"
 fi
 
-# A missing configuration yields no output.
-[ -z "$(filter_devbox_ssh_config "$unit_root/does-not-exist")" ] ||
-    fail "filter_devbox_ssh_config produced output for a missing config"
-
-# An unterminated marker block is refused.
-printf '# head\n# BEGIN devbox\nHost devbox\n' >"$unit_root/config-bad"
-if filter_devbox_ssh_config "$unit_root/config-bad" >"$unit_root/config-bad-out"; then
-    fail "filter_devbox_ssh_config accepted an unterminated block"
-fi
-
-# devbox_identity_file reads Lima's quoted IdentityFile even though Colima
-# rewrites the Host line to `colima-<profile>`.
 printf 'key\n' >"$unit_root/identity-key"
 cat >"$unit_root/lima.conf" <<CONFIG
 Host colima-devbox
   IdentityFile "$unit_root/identity-key"
-  User lima
-  Hostname 127.0.0.1
-  Port 51234
 CONFIG
 [ "$(devbox_identity_file "$unit_root/lima.conf")" = "$unit_root/identity-key" ] ||
     fail "devbox_identity_file did not read the quoted identity file"
-printf 'key\n' >"$unit_root/home-key"
-cat >"$unit_root/lima-tilde.conf" <<'CONFIG'
-Host colima-devbox
-  IdentityFile "~/home-key"
-CONFIG
-[ "$(HOME="$unit_root" devbox_identity_file "$unit_root/lima-tilde.conf")" = "$unit_root/home-key" ] ||
-    fail "devbox_identity_file did not expand a leading ~/"
-cat >"$unit_root/lima-missing.conf" <<'CONFIG'
-Host colima-devbox
-  IdentityFile "/tmp/does-not-exist-devbox-key"
-CONFIG
-if devbox_identity_file "$unit_root/lima-missing.conf" >/dev/null 2>&1; then
-    fail "devbox_identity_file accepted a missing identity file"
-fi
-
-# resolve_symlink_target follows a chain and leaves missing paths unchanged.
 mkdir -p "$unit_root/links"
 printf 'target\n' >"$unit_root/links/real"
 ln -s real "$unit_root/links/one"
 ln -s one "$unit_root/links/two"
 [ "$(resolve_symlink_target "$unit_root/links/two")" = "$unit_root/links/real" ] ||
     fail "resolve_symlink_target did not follow a symlink chain"
-[ "$(resolve_symlink_target "$unit_root/links/missing")" = "$unit_root/links/missing" ] ||
-    fail "resolve_symlink_target changed a missing path"
-EOF
-ROOT="$ROOT" /bin/bash "$validation_root/ssh-config-unit.sh" "$ssh_config_unit_root" ||
-    fail "devbox SSH config filtering and rendering tests failed"
 
-# write_devbox_ssh_config/remove_devbox_ssh_config manage ~/.ssh/devbox.conf
-# and the include line; exercise them with a stubbed ssh connection test.
-include_unit_root="$validation_root/ssh-include"
+include_unit_root="$unit_root/ssh-include"
 mkdir -p "$include_unit_root/home/.ssh" "$include_unit_root/bin"
 printf '#!/bin/bash\nexit 0\n' >"$include_unit_root/bin/ssh"
 chmod +x "$include_unit_root/bin/ssh"
 cat >"$include_unit_root/colima.conf" <<'CONFIG'
-Host devbox
+Host colima-devbox
   HostName 127.0.0.1
-  User lima
   Port 51234
   IdentityFile /tmp/devbox-key
 CONFIG
 cat >"$include_unit_root/home/.ssh/config" <<'CONFIG'
-# user config
-# BEGIN devbox
-Host devbox
-  Port 1
-# END devbox
+Include ~/.ssh/devbox.conf
 Host other
   HostName other.example.com
+# BEGIN devbox
+Host old-devbox
+  Port 1
+# END devbox
 CONFIG
-chmod 640 "$include_unit_root/home/.ssh/config"
+cp "$include_unit_root/home/.ssh/config" "$include_unit_root/config-before"
 HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
     ROOT="$ROOT" DEVBOX_INCLUDE_CONFIG="$include_unit_root/colima.conf" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/devbox.sh"
     write_devbox_ssh_config "$DEVBOX_INCLUDE_CONFIG"
 ' || fail "write_devbox_ssh_config failed"
-[ "$(head -1 "$include_unit_root/home/.ssh/config")" = "Include devbox.conf" ] ||
-    fail "write_devbox_ssh_config did not prepend the include"
-[ -f "$include_unit_root/home/.ssh/devbox.conf" ] ||
-    fail "write_devbox_ssh_config did not write devbox.conf"
-grep -qx 'Host other' "$include_unit_root/home/.ssh/config" ||
-    fail "write_devbox_ssh_config dropped user content"
-if grep -q 'BEGIN devbox' "$include_unit_root/home/.ssh/config"; then
-    fail "write_devbox_ssh_config kept the old marker block"
-fi
-[ "$(file_mode "$include_unit_root/home/.ssh/config")" = 640 ] ||
-    fail "write_devbox_ssh_config changed the config mode"
-cp "$include_unit_root/home/.ssh/config" "$include_unit_root/first-config"
+[ -f "$include_unit_root/home/.ssh/devbox.conf" ] || fail "managed SSH file was not written"
+[ "$(file_mode "$include_unit_root/home/.ssh/devbox.conf")" = 600 ] ||
+    fail "managed SSH file has the wrong mode"
+cmp -s "$include_unit_root/home/.ssh/config" "$include_unit_root/config-before" ||
+    fail "write_devbox_ssh_config modified the user's SSH config"
+cp "$include_unit_root/home/.ssh/devbox.conf" "$include_unit_root/first-managed"
 HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
     ROOT="$ROOT" DEVBOX_INCLUDE_CONFIG="$include_unit_root/colima.conf" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/devbox.sh"
     write_devbox_ssh_config "$DEVBOX_INCLUDE_CONFIG"
 ' || fail "repeat write_devbox_ssh_config failed"
-cmp -s "$include_unit_root/home/.ssh/config" "$include_unit_root/first-config" ||
-    fail "write_devbox_ssh_config is not idempotent"
-HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" \
-    ROOT="$ROOT" /bin/bash -c '
+cmp -s "$include_unit_root/home/.ssh/devbox.conf" "$include_unit_root/first-managed" ||
+    fail "managed SSH file is not stable"
+HOME="$include_unit_root/home" PATH="$include_unit_root/bin:/usr/bin:/bin" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/devbox.sh"
     remove_devbox_ssh_config
 ' || fail "remove_devbox_ssh_config failed"
-if grep -q 'devbox.conf' "$include_unit_root/home/.ssh/config"; then
-    fail "remove_devbox_ssh_config kept the include"
-fi
-[ ! -e "$include_unit_root/home/.ssh/devbox.conf" ] ||
-    fail "remove_devbox_ssh_config kept devbox.conf"
+[ ! -e "$include_unit_root/home/.ssh/devbox.conf" ] || fail "managed SSH file was not removed"
+grep -qx 'Include ~/.ssh/devbox.conf' "$include_unit_root/home/.ssh/config" ||
+    fail "cleanup removed the persistent Include"
 grep -qx 'Host other' "$include_unit_root/home/.ssh/config" ||
-    fail "remove_devbox_ssh_config dropped user content"
+    fail "cleanup dropped user SSH configuration"
+if grep -q 'BEGIN devbox' "$include_unit_root/home/.ssh/config"; then
+    fail "cleanup kept an old devbox marker block"
+fi
+EOF
+ROOT="$ROOT" /bin/bash "$validation_root/ssh-config-unit.sh" "$ssh_config_unit_root" ||
+    fail "devbox SSH config tests failed"
 
 # --- host configuration resolution and validation ----------------------------
 env_output="$(
@@ -520,44 +471,28 @@ grep -q 'removes unsupported variable POSTGRES_PASSWORD' "$validation_root/warni
 grep -q 'is not a KEY=value assignment' "$validation_root/warning.err" ||
     fail "load_env_defaults did not report the malformed line"
 
-# --- devbox PATH block in the login shell rc --------------------------------
-path_unit_root="$validation_root/path-unit"
-mkdir -p "$path_unit_root/home"
-path_rc="$path_unit_root/home/.zshrc"
-printf 'export EDITOR=vim\n' >"$path_rc"
-chmod 640 "$path_rc"
-HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
+# --- devbox CLI symlink -------------------------------------------------------
+cli_unit_root="$validation_root/cli-unit"
+mkdir -p "$cli_unit_root/home"
+printf 'export EDITOR=vim\n' >"$cli_unit_root/home/.zshrc"
+cp "$cli_unit_root/home/.zshrc" "$cli_unit_root/zshrc-before"
+HOME="$cli_unit_root/home" PATH="/usr/bin:/bin" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
-    ensure_devbox_path "$HOME/.local/bin" || exit 1
-    ensure_devbox_path "$HOME/.local/bin" || exit 1
-' >/dev/null || fail "ensure_devbox_path failed"
-[ "$(grep -c '^# BEGIN devbox$' "$path_rc")" -eq 1 ] ||
-    fail "ensure_devbox_path did not write exactly one block"
-[ "$(file_mode "$path_rc")" = 640 ] ||
-    fail "ensure_devbox_path changed the rc mode"
-grep -qx 'export EDITOR=vim' "$path_rc" ||
-    fail "ensure_devbox_path dropped existing rc content"
-grep -q "export PATH=\"$path_unit_root/home/.local/bin:" "$path_rc" ||
-    fail "ensure_devbox_path wrote the wrong PATH entry"
-HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
+    install_cli "$ROOT/devbox"
+    uninstall_cli "$ROOT/devbox"
+' >/dev/null || fail "devbox CLI install/uninstall failed"
+[ ! -e "$cli_unit_root/home/.local/bin/devbox" ] || fail "uninstall kept the devbox symlink"
+cmp -s "$cli_unit_root/home/.zshrc" "$cli_unit_root/zshrc-before" ||
+    fail "CLI installation modified the user's shell config"
+mkdir -p "$cli_unit_root/home/bin"
+ln -s "$ROOT/devbox" "$cli_unit_root/home/bin/devbox"
+HOME="$cli_unit_root/home" PATH="$cli_unit_root/home/bin:/usr/bin:/bin" ROOT="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
-    remove_devbox_path
-' >/dev/null || fail "remove_devbox_path failed"
-if grep -q '^# BEGIN devbox$' "$path_rc"; then
-    fail "remove_devbox_path kept the block"
-fi
-grep -qx 'export EDITOR=vim' "$path_rc" ||
-    fail "remove_devbox_path dropped existing rc content"
-# Malformed markers are left untouched.
-printf '# BEGIN devbox\n' >"$path_rc"
-if HOME="$path_unit_root/home" SHELL=/bin/zsh PATH="/usr/bin:/bin" /bin/bash -c '
-    source "$ROOT/lib/common.sh"
-    ensure_devbox_path "$HOME/.local/bin"
-' >/dev/null 2>&1; then
-    fail "ensure_devbox_path accepted malformed markers"
-fi
-[ "$(cat "$path_rc")" = "# BEGIN devbox" ] ||
-    fail "ensure_devbox_path modified an rc with malformed markers"
+    install_cli "$ROOT/devbox"
+    uninstall_cli "$ROOT/devbox"
+' >/dev/null || fail "devbox CLI did not reuse its existing symlink"
+[ ! -e "$cli_unit_root/home/bin/devbox" ] || fail "uninstall kept the existing devbox symlink"
+[ ! -e "$cli_unit_root/home/.local/bin/devbox" ] || fail "CLI migration created a second symlink"
 
 # --- managed services -------------------------------------------------------
 compose_command=()

@@ -20,18 +20,21 @@ Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 
 ## Quick start
 
+Before the first `devbox connect`, add `Include ~/.ssh/devbox.conf` at the top
+of `~/.ssh/config`; see [Remote access](#remote-access).
+
 ```sh
 ./devbox init          # answer the prompts; installs the devbox command
-devbox start           # create and provision the VM (open a new shell if init asked)
+# If init prints a PATH instruction, follow it or keep using ./devbox.
+devbox start           # create and provision the VM
 devbox connect         # open a zsh shell in the guest
 devbox stop
 ```
 
-`devbox init` installs a `devbox` symlink into `~/.local/bin` (or a
-conventional user bin directory already on your `PATH`). If that directory is
-not on your `PATH`, it adds a marked block to `~/.zshrc` (or
-`~/.bash_profile`); open a new shell once, and every later command is just
-`devbox`. `devbox uninstall` removes both.
+`devbox init` installs a `devbox` symlink into `~/.local/bin`. If that
+directory is not on your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"`
+to your shell configuration and open a new shell. Until then, use `./devbox`
+from the checkout. `devbox uninstall` removes the symlink.
 
 ### What's provisioned
 
@@ -80,10 +83,11 @@ stop/start and is removed only by `devbox destroy`.
 
 ### Remote access
 
-`devbox start` writes `~/.ssh/devbox.conf` and ensures it is included first
-from your OpenSSH config (`~/.ssh/config`). Point editors, `git`, and other
-tools at host `devbox` to work with the guest files directly over SSH;
-`devbox destroy` removes both.
+Add `Include ~/.ssh/devbox.conf` at the top of `~/.ssh/config` once. The
+`devbox start` command updates that managed file with the VM's current SSH
+endpoint. Point editors, `git`, and other tools at host `devbox` to work with
+guest files over SSH. `devbox destroy` removes the managed file; the Include
+line can stay.
 
 ## Services
 
