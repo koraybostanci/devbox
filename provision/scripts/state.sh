@@ -13,7 +13,8 @@ trap 'printf "ERROR: devbox state setup failed at line %s\n" "$LINENO" >&2' ERR
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
 
-directory=/home/devbox/.config/devbox
+config_root=/home/devbox/.config
+directory="$config_root/devbox"
 services=/var/lib/devbox/services
 config="$directory/config"
 secrets="$directory/secrets"
@@ -22,10 +23,15 @@ secrets="$directory/secrets"
     printf 'ERROR: devbox guest home is invalid\n' >&2
     exit 1
 }
+[ ! -L "$config_root" ] && { [ ! -e "$config_root" ] || [ -d "$config_root" ]; } || {
+    printf 'ERROR: devbox XDG configuration root is invalid\n' >&2
+    exit 1
+}
 [ ! -L "$directory" ] || {
     printf 'ERROR: devbox configuration directory is invalid\n' >&2
     exit 1
 }
+install -d -o devbox -g devbox -m 700 "$config_root"
 install -d -o devbox -g devbox -m 700 "$directory"
 umask 077
 

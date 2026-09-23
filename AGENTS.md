@@ -24,8 +24,9 @@ Commands are in [README.md](README.md); host/guest internals are in
 
 ## CI gate
 
-`bash scripts/check.sh` must end `All checks passed.`; CI runs it on macOS for
-every push and pull request. Run it before proposing a change.
+`bash scripts/check.sh` must end `All checks passed.`; run it before proposing
+a change. GitHub Actions is disabled at the repository level, so this is the
+only gate; `.github/workflows/check.yml` runs it on Linux when re-enabled.
 
 ## Publication
 
