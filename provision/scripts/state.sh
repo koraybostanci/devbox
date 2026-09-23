@@ -98,3 +98,10 @@ temporary="$(mktemp "$services/.compose.XXXXXX")"
 cat "$compose_source" >"$temporary"
 chmod 600 "$temporary"
 mv "$temporary" "$compose"
+
+[ -f "$envfile" ] && [ -f "$compose" ] &&
+    [ "$(stat -c '%a' "$envfile")" = 600 ] &&
+    [ "$(stat -c '%a' "$compose")" = 600 ] || {
+    printf 'ERROR: devbox service definition could not be staged\n' >&2
+    exit 1
+}

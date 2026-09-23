@@ -70,15 +70,13 @@ check "devbox guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null
 check "devbox guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
 check "devbox guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
 # Services are staged during provisioning but stay stopped until the user runs
-# `devbox services start`; only the root-owned definition and credentials are
-# required here.
-check "devbox services are staged and closed" bash -c '
+# `devbox services start`. This check runs as the devbox user, so it can only
+# assert the directory's ownership and mode; state.sh validates the staged
+# files (compose.yaml, env) as root where it writes them.
+check "devbox services root is root-owned and closed" bash -c '
     [ -d /var/lib/devbox/services ] && [ ! -L /var/lib/devbox/services ] &&
         [ "$(stat -c "%U" /var/lib/devbox/services)" = root ] &&
-        [ ! -w /var/lib/devbox/services ] &&
-        [ -f /var/lib/devbox/services/compose.yaml ] &&
-        [ -f /var/lib/devbox/services/env ] &&
-        [ "$(stat -c "%a" /var/lib/devbox/services/env)" = 600 ]
+        [ "$(stat -c "%a" /var/lib/devbox/services)" = 700 ]
 '
 check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md"
 check "Git identity" test -n "$(git config --global user.name)"

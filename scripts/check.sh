@@ -130,6 +130,14 @@ for pin in GO_SHA256 NVM_INSTALL_SHA256 PYENV_INSTALLER_SHA256 UV_INSTALL_SHA256
         fail "provision/versions.env: $pin must be a SHA-256"
 done
 
+# --- guest script privilege boundaries --------------------------------------
+# verify.sh runs as the unprivileged devbox user. The services directory is
+# root-owned mode 700, so verify.sh cannot traverse into it; file-level checks
+# belong in the root-run scripts.
+if grep -q '/var/lib/devbox/services/' provision/scripts/verify.sh; then
+    fail "verify.sh must not inspect files inside the root-only services directory"
+fi
+
 # --- prohibited provisioning patterns --------------------------------------
 # Fail closed on a missing scan target: grep -R exits 2 for a missing path,
 # which would silently satisfy the non-match test below.
