@@ -13,6 +13,10 @@ scripts/check.sh     # must end with "All checks passed."
 
 ## Clean install
 
+Before connecting, add `Include ~/.ssh/devbox.conf` at the top of
+`~/.ssh/config`. If `~/.local/bin` is not on your `PATH`, use `./devbox` or add
+it to `PATH` before running the commands below.
+
 ```sh
 ./devbox init           # answer the prompts; installs the devbox command
 devbox start
@@ -50,11 +54,12 @@ until `devbox services start` is run.
 ## Re-converge and teardown
 
 ```sh
+grep -q '^Include ~/.ssh/devbox.conf$' ~/.ssh/config
 devbox stop
 devbox start              # provisioning is current; SSH alias is refreshed
 devbox destroy            # type "devbox" to confirm
-grep -n 'devbox.conf' ~/.ssh/config    # no managed include remains
-[ ! -e ~/.ssh/devbox.conf ]            # managed file removed
+grep -q '^Include ~/.ssh/devbox.conf$' ~/.ssh/config  # persistent Include remains
+[ ! -e ~/.ssh/devbox.conf ]                          # managed file removed
 ```
 
 If you have a VM created by an older devbox version, run `devbox start` once
