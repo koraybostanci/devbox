@@ -49,24 +49,21 @@ generated administrative account.
 
 ## SSH configuration conflicts
 
-`devbox start` writes `~/.ssh/devbox.conf` and ensures `~/.ssh/config` includes
-it as the first line, so its values win over other `Host` blocks. It refuses a
-configuration it cannot reconcile, with one of:
+Add `Include ~/.ssh/devbox.conf` at the top of `~/.ssh/config` once. The
+`devbox start` command updates `~/.ssh/devbox.conf` and checks that its
+generated endpoint is reachable. The Include should come before other `Host`
+blocks so its values take precedence.
 
-- `contains malformed devbox markers`
-- `generated SSH host 'devbox' is not reachable`
-
-Malformed markers mean an unterminated `# BEGIN devbox` block written by an
-older devbox version is still present in `~/.ssh/config`; remove it and rerun
-`devbox start`. An unreachable alias means the generated block cannot connect —
-usually because a system-wide option or an `Include` above it wins. Inspect the
-effective result with:
+If the alias does not work, inspect the effective result with:
 
 ```sh
 ssh -G devbox
 ```
 
-Fix or relocate the conflicting option, then rerun `devbox start`.
+An unterminated `# BEGIN devbox` block left by an older version is removed by
+`devbox destroy`; otherwise, remove that old block manually. If a system-wide
+or user-level SSH setting overrides the alias, move the Include above the
+conflicting user-level options and rerun `devbox start`.
 
 ## Another command is running
 

@@ -13,8 +13,8 @@ except the repository and your Colima installation on the guest.
 - `COLIMA_HOME` must be the standard `~/.colima`; `LIMA_HOME` must be unset or
   `~/.colima/_lima`. The devbox profile disables automatic Docker context
   activation and agent forwarding, and tells Colima to leave the OpenSSH
-  configuration alone (`sshConfig: false`); devbox writes `~/.ssh/devbox.conf`
-  itself and includes it first from `~/.ssh/config`.
+  configuration alone (`sshConfig: false`). Add `Include ~/.ssh/devbox.conf` at
+  the top of `~/.ssh/config` once; devbox only updates the managed file.
 
 ## Identity
 
