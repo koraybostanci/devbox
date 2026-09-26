@@ -238,6 +238,11 @@ chmod 755 "$apparmor_rootlesskit" "$apparmor_shadow"
     devbox_rootlesskit_apparmor_profile_is_ready \
         "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" \
         "$apparmor_rootlesskit" "$apparmor_rootlesskit" || exit 1
+    if [ "$(id -u)" -ne 0 ]; then
+        devbox_rootlesskit_apparmor_profile_is_ready \
+            "$apparmor_setting" "$apparmor_profile" "$apparmor_unit_root/unreadable-profiles" \
+            "$apparmor_rootlesskit" "$apparmor_rootlesskit" || exit 1
+    fi
     devbox_rootlesskit_path_is_profiled "$apparmor_shadow" "$apparmor_rootlesskit" && exit 1
 
     mv "$apparmor_profile" "$apparmor_profile.saved"

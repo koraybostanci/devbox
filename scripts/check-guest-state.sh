@@ -388,6 +388,19 @@ ROOT="$ROOT" /bin/bash -c '
     printf "devbox:165536:65536\n" >>"$1/subuid"
     devbox_subid_file_has_usable_range \
         "$1/subuid" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+    printf "kbostanci:524288:1073741824\\ndevbox:100000:65536\\n" >"$1/colima-subuid"
+    cp "$1/colima-subuid" "$1/colima-subgid"
+    printf "mapped-user:x:524288:524288:Mapped user:/nonexistent:/usr/sbin/nologin\\n" \
+        >"$1/colima-passwd"
+    printf "mapped-group:x:524288:\\n" >"$1/colima-group"
+    devbox_subid_file_has_usable_range \
+        "$1/colima-subuid" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid \
+        "$1/colima-passwd" "$1/colima-group"
+    devbox_subid_file_has_usable_range \
+        "$1/colima-subgid" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
+        "$1/colima-passwd" "$1/colima-group"
+    [ "$(devbox_find_free_subid_start \
+        "$1/colima-subuid" uid "$1/passwd" "$1/group")" = 165536 ]
     ! devbox_subid_file_has_usable_range \
         "$1/subgid" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid "$1/passwd" "$1/group"
     printf "devbox:100000:65536\nalice:130000:65536\n" >"$1/overlap"
@@ -402,6 +415,11 @@ ROOT="$ROOT" /bin/bash -c '
     printf "devbox:99999:65536\n" >"$1/low-boundary"
     ! devbox_subid_file_has_usable_range \
         "$1/low-boundary" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+    printf "devbox:600100001:65536\n" >"$1/high-boundary"
+    ! devbox_subid_file_has_usable_range \
+        "$1/high-boundary" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+    printf "devbox:4294967290:10\n" >"$1/overflow"
+    ! devbox_subid_file_is_valid "$1/overflow"
 
     printf "system-user:x:165536:2000:System user:/nonexistent:/usr/sbin/nologin\n" \
         >"$1/uid-collision-passwd"
