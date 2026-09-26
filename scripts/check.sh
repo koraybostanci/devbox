@@ -138,6 +138,240 @@ if grep -q '/var/lib/devbox/services/' provision/scripts/verify.sh; then
     fail "verify.sh must not inspect files inside the root-only services directory"
 fi
 
+# User Docker and Puppeteer defaults must be isolated from the root-managed
+# services daemon and project-specific browser download settings.
+rootless_zshenv=provision/config/zsh/zshenv
+[ -f "$rootless_zshenv" ] || fail "rootless Docker/Chromium shell configuration is missing"
+grep -qF 'export PUPPETEER_EXECUTABLE_PATH="${PUPPETEER_EXECUTABLE_PATH:-/snap/bin/chromium}"' \
+    "$rootless_zshenv" ||
+    fail "zsh startup must default Puppeteer to Chromium without replacing an existing path"
+grep -qF 'export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"' "$rootless_zshenv" ||
+    fail "zsh startup must route Docker to the per-user socket"
+grep -qF 'unset DOCKER_CONTEXT' "$rootless_zshenv" ||
+    fail "zsh startup must prevent an inherited Docker context from overriding the rootless socket"
+if grep -R -nE '^[[:space:]]*(export[[:space:]]+)?PUPPETEER_SKIP_DOWNLOAD=' provision/config/zsh; then
+    fail "PUPPETEER_SKIP_DOWNLOAD must remain project-scoped, not global"
+fi
+grep -qF 'snap install chromium --channel=stable' provision/scripts/system.sh ||
+    fail "system provisioning must install actual Ubuntu Chromium from the stable snap"
+grep -qF 'devbox_configure_rootless_docker' provision/scripts/tools.sh ||
+    fail "the unprivileged tools phase must configure rootless Docker"
+grep -qE '^[[:space:]]+apparmor$' provision/scripts/system.sh ||
+    fail "system provisioning must install Ubuntu's AppArmor package"
+grep -qF 'version **29.5 or newer**' docs/architecture.md ||
+    fail "the rootless host-network Engine version requirement must be documented"
+grep -qF 'read-only `/:/host:ro,rslave` mount' docs/architecture.md ||
+    fail "Finsights' read-only guest-root mount semantics must be documented"
+grep -qF 'node exporter' docs/architecture.md || grep -qF 'Node Exporter' docs/architecture.md ||
+    fail "Finsights Node Exporter least-privilege guidance must be documented"
+grep -qF 'depend on the Engine server version and rootless runtime' docs/architecture.md ||
+    fail "rootless host namespace behavior must be qualified"
+grep -qF 'does not elevate access' docs/architecture.md ||
+    fail "rootless guest-root bind-mount permission limits must be documented"
+grep -qF 'VM smoke test against the actual rootless daemon is required' docs/architecture.md ||
+    fail "actual guest metrics must require a rootless VM smoke test"
+for readiness_check in \
+    devbox_rootless_context_is_selected devbox_rootless_docker_is_ready \
+    devbox_rootful_docker_is_denied chromium_launches_headlessly \
+    devbox_rootlesskit_apparmor_profile_is_ready; do
+    grep -q "$readiness_check" provision/scripts/verify.sh ||
+        fail "guest readiness check is missing: $readiness_check"
+done
+if grep -R -nE \
+    'kernel\.apparmor_restrict_unprivileged_userns[[:space:]]*=[[:space:]]*0|sysctl[[:space:]].*apparmor_restrict_unprivileged_userns' \
+    provision/scripts; then
+    fail "RootlessKit provisioning must not disable AppArmor's user-namespace restriction"
+fi
+
+# Exercise Ubuntu's packaged RootlessKit profile loading without a VM or a
+# system AppArmor policy: only an enabled restriction should trigger the load.
+apparmor_unit_root="$validation_root/apparmor-unit"
+mkdir -p "$apparmor_unit_root/usr/bin" "$apparmor_unit_root/usr/local/bin"
+apparmor_setting="$apparmor_unit_root/restrict-userns"
+apparmor_profile="$apparmor_unit_root/rootlesskit-profile"
+apparmor_profiles="$apparmor_unit_root/loaded-profiles"
+apparmor_rootlesskit="$apparmor_unit_root/usr/bin/rootlesskit"
+apparmor_shadow="$apparmor_unit_root/usr/local/bin/rootlesskit"
+apparmor_error="$apparmor_unit_root/error"
+cat >"$apparmor_profile" <<'PROFILE'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile rootlesskit /usr/bin/rootlesskit flags=(unconfined) {
+  userns,
+  include if exists <local/rootlesskit>
+}
+PROFILE
+printf '#!/bin/sh\nexit 0\n' >"$apparmor_rootlesskit"
+printf '#!/bin/sh\nexit 0\n' >"$apparmor_shadow"
+chmod 755 "$apparmor_rootlesskit" "$apparmor_shadow"
+: >"$apparmor_profiles"
+(
+    source "$ROOT/provision/scripts/lib/docker.sh"
+    package_query_count=0
+    parser_call_count=0
+    dpkg-query() {
+        package_query_count=$((package_query_count + 1))
+        case "$1" in
+            -W) [ "$3" = apparmor ] && printf 'installed\n' ;;
+            -S) printf 'apparmor: %s\n' "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    apparmor_parser() {
+        [ "$1" = -r ] && [ "$2" = "$apparmor_profile" ] || return 1
+        parser_call_count=$((parser_call_count + 1))
+        printf 'rootlesskit (unconfined)\n' >>"$apparmor_profiles"
+    }
+
+    printf '0\n' >"$apparmor_setting"
+    devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" || exit 1
+    [ "$package_query_count" -eq 0 ] && [ "$parser_call_count" -eq 0 ] &&
+        [ ! -s "$apparmor_profiles" ] || exit 1
+
+    printf '1\n' >"$apparmor_setting"
+    devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" || exit 1
+    [ "$parser_call_count" -eq 1 ] || exit 1
+    grep -Fqx 'rootlesskit (unconfined)' "$apparmor_profiles" || exit 1
+    devbox_rootlesskit_apparmor_profile_is_ready \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" \
+        "$apparmor_rootlesskit" "$apparmor_rootlesskit" || exit 1
+    devbox_rootlesskit_path_is_profiled "$apparmor_shadow" "$apparmor_rootlesskit" && exit 1
+
+    mv "$apparmor_profile" "$apparmor_profile.saved"
+    if devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" 2>"$apparmor_error"; then
+        exit 1
+    fi
+    grep -q "Ubuntu's packaged RootlessKit AppArmor profile is unavailable" \
+        "$apparmor_error" || exit 1
+) || fail "RootlessKit AppArmor profile checks failed"
+
+zshenv_unit_root="$validation_root/zshenv-unit"
+zshenv_unit_home="$zshenv_unit_root/home"
+zshenv_stub_bin="$zshenv_unit_root/bin"
+mkdir -p "$zshenv_unit_home" "$zshenv_stub_bin"
+cat >"$zshenv_unit_home/.zshenv" <<'EOF'
+# Existing user settings must survive provisioning and remain later overrides.
+export DEVBOX_ZSHENV_USER_SETTING=preserved
+export DOCKER_HOST=unix:///tmp/user-selected-docker.sock
+export PUPPETEER_EXECUTABLE_PATH=/project/browser
+EOF
+chmod 600 "$zshenv_unit_home/.zshenv"
+cp "$zshenv_unit_home/.zshenv" "$zshenv_unit_root/.zshenv-original"
+cat >"$zshenv_stub_bin/zsh" <<'EOF'
+#!/bin/bash
+[ "$1" = -n ] && [ -f "$2" ]
+EOF
+chmod +x "$zshenv_stub_bin/zsh"
+ROOT="$ROOT" HOME="$zshenv_unit_home" DEVBOX_PROVISION_ROOT="$ROOT/provision" \
+    PATH="$zshenv_stub_bin:/usr/bin:/bin" /bin/bash -c '
+        set -Eeuo pipefail
+        source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
+        source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
+        configure_shell
+    ' || fail "shell configuration failed with a pre-existing .zshenv"
+{
+    printf '%s\n' '# >>> devbox managed zshenv >>>'
+    cat "$ROOT/$rootless_zshenv"
+    printf '%s\n' '# <<< devbox managed zshenv <<<'
+    cat "$zshenv_unit_root/.zshenv-original"
+} >"$zshenv_unit_root/.zshenv-expected"
+cmp -s "$zshenv_unit_root/.zshenv-expected" "$zshenv_unit_home/.zshenv" ||
+    fail "configure_shell changed or misplaced existing .zshenv content"
+grep -qF 'export DEVBOX_ZSHENV_USER_SETTING=preserved' "$zshenv_unit_home/.zshenv" ||
+    fail "configure_shell removed pre-existing .zshenv content"
+grep -qF 'export DOCKER_HOST=unix:///tmp/user-selected-docker.sock' "$zshenv_unit_home/.zshenv" ||
+    fail "configure_shell did not preserve the user's Docker override"
+grep -qF 'export PUPPETEER_EXECUTABLE_PATH=/project/browser' "$zshenv_unit_home/.zshenv" ||
+    fail "configure_shell did not preserve project Puppeteer configuration"
+[ "$(grep -Fxc '# >>> devbox managed zshenv >>>' "$zshenv_unit_home/.zshenv")" = 1 ] ||
+    fail "configure_shell did not install exactly one managed .zshenv block"
+[ "$(file_mode "$zshenv_unit_home/.zshenv")" = 600 ] ||
+    fail "configure_shell changed the existing .zshenv permissions"
+cp "$zshenv_unit_home/.zshenv" "$zshenv_unit_root/.zshenv-first-run"
+ROOT="$ROOT" HOME="$zshenv_unit_home" DEVBOX_PROVISION_ROOT="$ROOT/provision" \
+    PATH="$zshenv_stub_bin:/usr/bin:/bin" /bin/bash -c '
+        set -Eeuo pipefail
+        source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
+        source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
+        configure_shell
+    ' || fail "repeat shell configuration failed"
+cmp -s "$zshenv_unit_root/.zshenv-first-run" "$zshenv_unit_home/.zshenv" ||
+    fail "repeat shell configuration changed the managed .zshenv"
+
+if command -v zsh >/dev/null 2>&1; then
+    default_puppeteer_path="$(env -u PUPPETEER_EXECUTABLE_PATH -u PUPPETEER_SKIP_DOWNLOAD \
+        zsh -f -c '
+        source "$1"
+        printenv PUPPETEER_EXECUTABLE_PATH
+    ' _ "$ROOT/$rootless_zshenv")" || fail "zsh startup could not set the Puppeteer default"
+    [ "$default_puppeteer_path" = /snap/bin/chromium ] ||
+        fail "an unset Puppeteer path did not default to /snap/bin/chromium"
+
+    inherited_puppeteer_path="$(env PUPPETEER_EXECUTABLE_PATH=/project/inherited-browser \
+        zsh -f -c '
+        source "$1"
+        printenv PUPPETEER_EXECUTABLE_PATH
+    ' _ "$ROOT/$rootless_zshenv")" || fail "zsh startup could not read an inherited Puppeteer path"
+    [ "$inherited_puppeteer_path" = /project/inherited-browser ] ||
+        fail "zsh startup replaced an inherited Puppeteer path"
+
+    shell_docker_host="unix:///run/user/$(id -u)/docker.sock"
+    shell_config_output="$(env DOCKER_HOST=unix:///tmp/inherited.sock DOCKER_CONTEXT=inherited \
+        PUPPETEER_EXECUTABLE_PATH=/project/browser PUPPETEER_SKIP_DOWNLOAD=true zsh -f -c '
+        source "$1"
+        printf "%s\n%s\n%s\n%s\n" "$DOCKER_HOST" "${DOCKER_CONTEXT-<unset>}" \
+            "${PUPPETEER_EXECUTABLE_PATH-<unset>}" "${PUPPETEER_SKIP_DOWNLOAD-<unset>}"
+    ' _ "$ROOT/$rootless_zshenv")" || fail "zsh startup config could not be loaded"
+    expected_shell_config="$shell_docker_host
+<unset>
+/project/browser
+true"
+    [ "$shell_config_output" = "$expected_shell_config" ] ||
+        fail "zsh startup changed a project Puppeteer setting or missed the rootless Docker default"
+    merged_zshenv_output="$(env -u PUPPETEER_EXECUTABLE_PATH zsh -f -c '
+        source "$1"
+        printf "%s\n%s\n%s\n" "$DEVBOX_ZSHENV_USER_SETTING" "$DOCKER_HOST" \
+            "$PUPPETEER_EXECUTABLE_PATH"
+    ' _ "$zshenv_unit_home/.zshenv")" || fail "managed .zshenv could not be sourced by zsh"
+    expected_merged_zshenv="preserved
+unix:///tmp/user-selected-docker.sock
+/project/browser"
+    [ "$merged_zshenv_output" = "$expected_merged_zshenv" ] ||
+        fail "managed .zshenv did not preserve effective user and project settings"
+fi
+
+services_stub_bin="$validation_root/services-stub-bin"
+services_capture="$validation_root/services-capture"
+mkdir -p "$services_stub_bin"
+cat >"$services_stub_bin/docker" <<'EOF'
+#!/bin/bash
+printf 'host=%s\n' "${DOCKER_HOST:-}" >"$SERVICE_CAPTURE"
+if [ "${DOCKER_CONTEXT+x}" = x ]; then
+    printf 'context=%s\n' "$DOCKER_CONTEXT" >>"$SERVICE_CAPTURE"
+else
+    printf 'context=<unset>\n' >>"$SERVICE_CAPTURE"
+fi
+printf 'arg=%s\n' "$@" >>"$SERVICE_CAPTURE"
+EOF
+chmod +x "$services_stub_bin/docker"
+PATH="$services_stub_bin:/usr/bin:/bin" SERVICE_CAPTURE="$services_capture" \
+    DOCKER_HOST=unix:///tmp/inherited-rootless.sock DOCKER_CONTEXT=inherited \
+    /bin/bash -c '
+        set -Eeuo pipefail
+        source "$1"
+        devbox_services_docker compose ps
+    ' _ "$ROOT/provision/scripts/services.sh" || fail "services Docker helper failed"
+grep -qx 'host=unix:///var/run/docker.sock' "$services_capture" ||
+    fail "devbox services did not force the rootful Docker socket"
+grep -qx 'context=<unset>' "$services_capture" ||
+    fail "devbox services inherited a Docker context"
+grep -qx 'arg=compose' "$services_capture" && grep -qx 'arg=ps' "$services_capture" ||
+    fail "devbox services did not route its Compose command through Docker"
+
 # --- focused guest state, migration, and sync checks -----------------------
 source "$ROOT/scripts/check-guest-state.sh"
 

@@ -5,6 +5,7 @@ set -Eeuo pipefail
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
 export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/docker.sh"
 
 set -a
 source "$DEVBOX_PROVISION_ROOT/versions.env"
@@ -47,6 +48,23 @@ login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
+login_shell_uses_rootless_docker() {
+    local expected actual context
+
+    expected="$(devbox_rootless_endpoint)" || return 1
+    actual="$(zsh -lic 'printf "%s" "${DOCKER_HOST:-}"')" || return 1
+    context="$(zsh -lic 'printf "%s" "${DOCKER_CONTEXT:-}"')" || return 1
+    [ "$actual" = "$expected" ] && [ -z "$context" ]
+}
+
+chromium_launches_headlessly() {
+    local executable=/snap/bin/chromium html
+
+    [ -x "$executable" ] || return 1
+    html="$("$executable" --headless --disable-gpu --dump-dom about:blank 2>/dev/null)" || return 1
+    [[ "$html" == *'<html'* ]]
+}
+
 guest_home_uses_lima_data_disk() {
     local data_root
 
@@ -78,7 +96,18 @@ check "devbox workspace is writable and real" bash -c '
 '
 check "devbox guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
 check "devbox guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
-check "devbox guest cannot access Docker socket" bash -c '! test -w /var/run/docker.sock'
+check "devbox has 65,536 subordinate UID/GID mappings" devbox_user_has_rootless_subid_ranges
+check "devbox has systemd lingering enabled" devbox_user_lingering_is_enabled
+check "RootlessKit uses its Ubuntu-profiled executable and profile" \
+    devbox_rootlesskit_apparmor_profile_is_ready
+check "rootless Docker user service is enabled" devbox_rootless_user_service_is_enabled
+check "rootless Docker user service is active" devbox_rootless_user_service_is_active
+check "rootless Docker context points to the per-user socket" devbox_rootless_context_is_selected
+check "rootless Docker endpoint is reachable" devbox_rootless_docker_is_ready
+check "devbox cannot access the rootful Docker socket" devbox_rootful_docker_is_denied
+check "devbox shell defaults to the rootless Docker socket" login_shell_uses_rootless_docker
+check "guest package architecture is ARM64" test "$(dpkg --print-architecture)" = arm64
+check "Ubuntu Chromium launches headlessly" chromium_launches_headlessly
 # Services are staged during provisioning but stay stopped until the user runs
 # `devbox services start`. This check runs as the devbox user, so it can only
 # assert the directory's ownership and mode; state.sh validates the staged

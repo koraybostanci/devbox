@@ -6,6 +6,7 @@ trap 'printf "ERROR: system provisioning failed at line %s\n" "$LINENO" >&2' ERR
 export DEBIAN_FRONTEND=noninteractive
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/docker.sh"
 
 devbox_guest_identity_is_safe() {
     local guest_user="$1"
@@ -162,6 +163,31 @@ configure_devbox_guest_identity() {
     }
 }
 
+install_guest_chromium() {
+    local architecture
+
+    architecture="$(dpkg --print-architecture)"
+    [ "$architecture" = arm64 ] || {
+        printf 'ERROR: devbox requires Ubuntu ARM64 Chromium; found package architecture %s\n' \
+            "$architecture" >&2
+        return 1
+    }
+    command -v snap >/dev/null 2>&1 || {
+        printf 'ERROR: snapd is required to install Ubuntu Chromium\n' >&2
+        return 1
+    }
+    systemctl enable --now snapd.socket
+    snap wait system seed.loaded
+    if ! snap list chromium >/dev/null 2>&1; then
+        snap install chromium --channel=stable
+    fi
+    [ -x /snap/bin/chromium ] || {
+        printf 'ERROR: Ubuntu Chromium snap did not install /snap/bin/chromium\n' >&2
+        return 1
+    }
+    snap run chromium --version 2>&1 | grep -q '^Chromium '
+}
+
 # Keep the helpers above sourceable by the static gate without running the
 # package installation and provisioning stages below.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
@@ -169,15 +195,19 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 fi
 
 packages=(
+    apparmor
     bat
     build-essential
     ca-certificates
     curl
+    dbus-user-session
+    fuse-overlayfs
     fzf
     gh
     git
     git-delta
     gnupg
+    iptables
     jq
     libbz2-dev
     libffi-dev
@@ -190,7 +220,10 @@ packages=(
     libxmlsec1-dev
     openjdk-21-jdk-headless
     rustup
+    slirp4netns
+    snapd
     tk-dev
+    uidmap
     unzip
     wget
     xz-utils
@@ -223,6 +256,8 @@ for package in "${packages[@]}"; do
 done
 
 configure_devbox_guest_identity
+devbox_prepare_rootless_docker
+install_guest_chromium
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox
 
