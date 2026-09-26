@@ -123,12 +123,17 @@ devbox_rootlesskit_apparmor_profile_is_ready() {
     local loaded_profiles="${3:-$DEVBOX_APPARMOR_PROFILES}"
     local actual_path="${4:-$(type -P rootlesskit 2>/dev/null || true)}"
     local expected_path="${5:-$DEVBOX_ROOTLESSKIT_EXECUTABLE}"
-    local restriction_status
+    local restriction_status euid="${EUID:-$(id -u)}"
 
     devbox_rootlesskit_path_is_profiled "$actual_path" "$expected_path" || return 1
     if devbox_apparmor_userns_restriction_is_enabled "$setting_file"; then
-        devbox_apparmor_package_has_rootlesskit_profile "$profile_file" &&
-            devbox_rootlesskit_apparmor_profile_is_loaded "$loaded_profiles"
+        devbox_apparmor_package_has_rootlesskit_profile "$profile_file" || return 1
+        # The root provisioning phase verifies the loaded policy. The user
+        # phase cannot inspect securityfs on systems where it is root-only.
+        if [ "$euid" -ne 0 ]; then
+            return 0
+        fi
+        devbox_rootlesskit_apparmor_profile_is_loaded "$loaded_profiles"
     else
         restriction_status=$?
         [ "$restriction_status" -eq 1 ]
@@ -155,7 +160,7 @@ devbox_subid_file_is_valid() {
     else
         return 0
     fi
-    awk -F: -v minimum="$DEVBOX_SUBID_RANGE_MIN" -v maximum="$DEVBOX_SUBID_RANGE_MAX" '
+    awk -F: -v minimum="$DEVBOX_SUBID_RANGE_MIN" -v maximum_id=4294967294 '
         /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
         NF != 3 || $1 == "" || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ || $3 < 1 {
             exit 1
@@ -163,26 +168,37 @@ devbox_subid_file_is_valid() {
         {
             first = $2 + 0
             count = $3 + 0
-            if (first < minimum || first > maximum || count > maximum - first + 1) {
+            if (first < minimum || first > maximum_id || count > maximum_id - first + 1) {
                 exit 1
             }
         }
     ' "$file"
 }
 
-# Existing devbox ranges must not overlap another account's subordinate IDs.
+# Existing devbox ranges must stay in the allocator window and not overlap
+# another account's subordinate IDs.
 devbox_subid_user_ranges_are_safe() {
     local file="$1" account="$2"
 
     [ -f "$file" ] || return 0
-    awk -F: -v account="$account" '
+    awk -F: -v account="$account" -v minimum="$DEVBOX_SUBID_RANGE_MIN" \
+        -v maximum="$DEVBOX_SUBID_RANGE_MAX" '
         /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
         {
+            range_first = $2 + 0
+            range_last = range_first + $3 - 1
+            if ($1 == account && (range_first < minimum || range_last > maximum)) {
+                invalid = 1
+                exit
+            }
             owner[++n] = $1
-            first[n] = $2 + 0
-            last[n] = $2 + $3 - 1
+            first[n] = range_first
+            last[n] = range_last
         }
         END {
+            if (invalid) {
+                exit 1
+            }
             for (i = 1; i <= n; i++) {
                 for (j = i + 1; j <= n; j++) {
                     if ((owner[i] == account || owner[j] == account) &&
@@ -198,6 +214,7 @@ devbox_subid_user_ranges_are_safe() {
 
 devbox_subid_file_avoids_system_identities() {
     local file="$1" kind="$2" passwd_file="${3:-/etc/passwd}" group_file="${4:-/etc/group}"
+    local account="${5:-}"
 
     case "$kind" in
         uid | gid) ;;
@@ -205,7 +222,7 @@ devbox_subid_file_avoids_system_identities() {
     esac
     [ -f "$file" ] && [ -f "$passwd_file" ] && [ -r "$passwd_file" ] &&
         [ -f "$group_file" ] && [ -r "$group_file" ] || return 1
-    awk -F: -v kind="$kind" -v passwd_file="$passwd_file" \
+    awk -F: -v kind="$kind" -v account="$account" -v passwd_file="$passwd_file" \
         -v group_file="$group_file" -v mapping_file="$file" '
         function remember_identity(raw, value) {
             if (raw ~ /^[0-9]+$/) {
@@ -229,6 +246,9 @@ devbox_subid_file_avoids_system_identities() {
         }
         FILENAME == mapping_file {
             if (/^[[:space:]]*#/ || /^[[:space:]]*$/) {
+                next
+            }
+            if (account != "" && $1 != account) {
                 next
             }
             first = $2 + 0
@@ -298,7 +318,7 @@ devbox_subid_file_has_usable_range() {
         devbox_subid_user_ranges_are_safe "$file" "$account" || return 2
     if [ -n "$kind" ]; then
         devbox_subid_file_avoids_system_identities \
-            "$file" "$kind" "$passwd_file" "$group_file" || return 2
+            "$file" "$kind" "$passwd_file" "$group_file" "$account" || return 2
     fi
     awk -F: -v account="$account" -v required="$required" '
         $1 == account && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $3 >= required {
