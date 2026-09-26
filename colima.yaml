@@ -9,3 +9,5 @@ sshPort: 0
 portForwarder: none
 forwardAgent: false
 sshConfig: false
+mounts: null
+env: {}
