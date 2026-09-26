@@ -9,6 +9,7 @@ export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbo
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/common.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/runtimes.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/apps.sh"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/docker.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/configure.sh"
 
 set -a
@@ -19,6 +20,7 @@ set +a
 
 install_runtimes
 install_apps
+devbox_configure_rootless_docker
 configure_guest
 
 printf 'Guest provisioning complete.\n'

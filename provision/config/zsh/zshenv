@@ -1,0 +1,8 @@
+# Use the per-user rootless daemon by default, even when an SSH or parent
+# process supplied a different Docker context. Root-managed services explicitly
+# select the rootful socket in their own helper.
+unset DOCKER_CONTEXT DOCKER_TLS DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
+
+# Use Ubuntu's native ARM64 Chromium unless the user/project selected a browser.
+export PUPPETEER_EXECUTABLE_PATH="${PUPPETEER_EXECUTABLE_PATH:-/snap/bin/chromium}"
