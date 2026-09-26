@@ -22,6 +22,13 @@ lives in the guest.
 Commands are in [README.md](README.md); host/guest internals are in
 [docs/architecture.md](docs/architecture.md).
 
+## Host boundary for agents
+
+Agents must not attempt to use host mounts, the host gateway or host services,
+SSH, agent/port forwarding, or any other channel to read, write, or execute
+anything on the host. Ordinary external network use is allowed. This is agent
+policy guidance, not technical network enforcement.
+
 ## CI gate
 
 `bash scripts/check.sh` must end `All checks passed.`; run it before proposing

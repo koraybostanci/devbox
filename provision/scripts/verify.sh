@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
 export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
 
 set -a
 source "$DEVBOX_PROVISION_ROOT/versions.env"
@@ -46,6 +47,14 @@ login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
+guest_home_uses_lima_data_disk() {
+    local data_root
+
+    data_root="$(devbox_lima_data_root)" || return 1
+    [ -n "$data_root" ] &&
+        devbox_home_is_on_lima_data_disk /home/devbox "$data_root/devbox-home" "$data_root"
+}
+
 check "devbox guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
 check "devbox guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
 check "guest-local provisioning bundle" has_verified_devbox_bundle "$DEVBOX_PROVISION_ROOT"
@@ -62,6 +71,7 @@ check "devbox provisioning input is root-owned, readable, and read-only" bash -c
 '
 check "devbox active user" test "$(id -un)" = devbox
 check "devbox guest home" test "$HOME" = /home/devbox
+check "devbox guest home is on the Lima data disk" guest_home_uses_lima_data_disk
 check "devbox workspace is writable and real" bash -c '
     [ -d /home/devbox/workspace ] && [ ! -L /home/devbox/workspace ] &&
         [ -w /home/devbox/workspace ]

@@ -4,9 +4,10 @@ A disposable, isolated Ubuntu development VM on macOS, powered by Colima.
 
 Your editors and SSH clients run on macOS; the project files, shells,
 compilers, CLIs, and project processes all live inside the VM, and the managed
-PostgreSQL and Valkey containers run there under root. The guest is fully
-self-contained — there are no host filesystem mounts — so you can rebuild or
-destroy it without touching your Mac.
+PostgreSQL and Valkey containers run there under root. There are no host
+filesystem mounts into the guest. The VM's virtual disk is still stored on the
+host under Colima storage, so destroying the VM deletes that guest data from
+the Mac as well as from the guest.
 
 Design and internals are in [docs/architecture.md](docs/architecture.md).
 
@@ -58,15 +59,23 @@ export POSTGRES_PORT="15432"
 export DEVBOX_CPU="4"
 export DEVBOX_MEMORY="4"
 export DEVBOX_DISK="60"
+export DEVBOX_USE_HOST_PROXY="false"
 ```
 
 The identity and PostgreSQL keys are seeded into the guest on first provision
-and maintained in the guest at `~/.config/devbox/config` afterwards; the
-`DEVBOX_*` resource keys size the VM and changing them requires recreating it.
-See [docs/troubleshooting.md](docs/troubleshooting.md) to change either group.
+and maintained in the guest at `~/.config/devbox/config` afterwards.
+`POSTGRES_USER` and `POSTGRES_DB` accept 1–63 ASCII letters, digits, dots,
+dashes, or underscores; `POSTGRES_PORT` must be in the range 1–65535. The
+`DEVBOX_CPU`, `DEVBOX_MEMORY`, and `DEVBOX_DISK` keys size the VM; changing them
+requires recreating it. Host proxy variables are cleared from Colima by default.
+Set `DEVBOX_USE_HOST_PROXY="true"` only when the guest needs the proxy exported
+by the current host process. Proxy changes apply at the next VM start; run
+`devbox stop` then `devbox start` to apply them. See
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
-Secrets are never taken from the host: the guest generates its own service
-credentials.
+Service secrets are generated in the guest and are not placed in the host
+`.env` or repository. They persist on the VM disk, which is stored on the host
+under Colima storage.
 
 ## Daily workflow
 
@@ -108,8 +117,8 @@ containers back.
 
 ## Authentication (optional)
 
-Provider sign-in is optional and happens entirely inside the guest; no host
-credentials are used or stored.
+Provider sign-in is optional and happens inside the guest; host provider CLI
+credentials are not imported.
 
 ```sh
 devbox auth status                 # github, claude, opencode, databricks
@@ -136,10 +145,24 @@ devbox uninstall             # remove the devbox symlink
 
 ## Security
 
-- The guest has no host filesystem mounts and does not reuse the host SSH agent.
+- The profile explicitly disables host filesystem mounts and does not reuse the
+  host SSH agent. The VM disk (including workspaces, provider credentials, and
+  service secrets) resides on the host under Colima storage, normally below
+  `~/.colima`; protect that storage and host backups accordingly.
+- The guest retains ordinary network access, including reachability to the
+  host gateway and any host services listening there, unless separately
+  restricted. Disabling mounts is not network isolation.
 - The daily identity is the unprivileged `devbox` account (no sudo, no Docker
-  group, no Docker socket).
-- Service secrets are generated in the guest and never stored on the host.
+  group, no Docker socket). Guest agents run as that same account and can access
+  its workspace and credentials; there is no per-agent guest-user sandbox.
+- Agent instructions forbid using host mounts, the host gateway, SSH,
+  forwarding, or other channels to access the host. This is policy guidance,
+  not technical network enforcement; ordinary external network use remains
+  allowed.
+- Host proxy settings are cleared from Colima invocations by default. The
+  explicit `DEVBOX_USE_HOST_PROXY=true` opt-in propagates the host's exported
+  proxy variables into the guest and Docker daemon on VM start. Proxy URLs
+  (including embedded credentials) persist on the VM disk.
 - Provisioning scripts are streamed over SSH, checksum-verified inside the
   guest, and run from a root-owned read-only copy; direct SSH is only
   authorized after the guest passes its readiness checks.
