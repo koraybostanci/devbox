@@ -4,6 +4,8 @@ set -Eeuo pipefail
 trap 'printf "ERROR: system provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
 export DEBIAN_FRONTEND=noninteractive
+export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
 
 devbox_guest_identity_is_safe() {
     local guest_user="$1"
@@ -26,48 +28,55 @@ devbox_guest_identity_is_safe() {
     [ "$group_names" = "$guest_user" ] || return 1
 }
 
-# Move an existing root-disk home onto the data-disk target before it is
-# bind-mounted, so converging a pre-existing VM neither hides user data nor
-# leaves the old copy consuming root-disk space. Does nothing once the target
-# already holds data or when there is nothing to move.
-migrate_guest_home_contents() {
-    local source="$1"
-    local target="$2"
-
-    [ -n "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] && return 0
-    [ -n "$(find "$source" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] || return 0
-    printf 'Moving existing guest home onto the data disk...\n'
-    cp -a "$source/." "$target/"
-    find "$source" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-}
-
 # Keep the guest user's toolchain and caches on the large Lima data disk
 # (mounted under /mnt/lima-*), not the fixed-size root disk.
 relocate_guest_home() {
     local guest_user="$1"
     local guest_home="/home/$1"
-    local data_root target
+    local data_root target fstab_entry temporary
 
     [ "$guest_user" = devbox ] || return 1
-    data_root="$(findmnt -rno TARGET -t ext4 2>/dev/null | grep -E '^/mnt/lima-' | head -n 1 || true)"
+    data_root="$(devbox_lima_data_root)" || data_root=""
     [ -n "$data_root" ] && mountpoint -q "$data_root" || {
-        printf 'WARNING: Lima data disk not found; guest home stays on the root disk\n' >&2
-        return 0
+        printf 'ERROR: Lima ext4 data disk not found; refusing to leave /home/devbox on the root disk\n' >&2
+        return 1
     }
     target="$data_root/devbox-home"
+    [ ! -L "$target" ] || {
+        printf 'ERROR: devbox data-disk home target is a symlink: %s\n' "$target" >&2
+        return 1
+    }
     mkdir -p "$target"
-    chmod 700 "$target"
+    # Hand the destination root to devbox before migration. The state helper
+    # drops to that user for chmod, copying, and source cleanup; root must not
+    # write through the guest-controlled destination tree.
+    chown -h "$guest_user":"$guest_user" "$target"
     if ! mountpoint -q "$guest_home"; then
-        # A symlinked home is unsafe; leave it for the caller's validation to
-        # reject rather than following it during the move.
-        [ ! -L "$guest_home" ] || return 0
+        # A symlinked home is unsafe; reject it rather than following it.
+        [ ! -L "$guest_home" ] || {
+            printf 'ERROR: devbox guest home is a symlink: %s\n' "$guest_home" >&2
+            return 1
+        }
         mkdir -p "$guest_home"
-        migrate_guest_home_contents "$guest_home" "$target"
-        mount --bind "$target" "$guest_home"
+        devbox_migrate_guest_home_contents "$guest_home" "$target"
+        mount --bind "$target" "$guest_home" || return 1
     fi
-    grep -qE "^[^#]*[[:space:]]$guest_home[[:space:]]" /etc/fstab 2>/dev/null ||
-        printf '%s %s none bind,nofail,x-systemd.requires-mounts-for=%s 0 0\n' \
-            "$target" "$guest_home" "$data_root" >>/etc/fstab
+    if ! devbox_home_is_on_lima_data_disk "$guest_home" "$target" "$data_root"; then
+        printf 'ERROR: %s is not bind-mounted from the Lima data disk at %s\n' \
+            "$guest_home" "$target" >&2
+        return 1
+    fi
+    fstab_entry="$target $guest_home none bind,nofail,x-systemd.requires-mounts-for=$data_root 0 0"
+    temporary="$(mktemp /etc/.fstab.XXXXXX)"
+    awk -v home="$guest_home" 'NF < 2 || $1 ~ /^#/ || $2 != home { print }' /etc/fstab >"$temporary"
+    printf '%s\n' "$fstab_entry" >>"$temporary"
+    if ! cmp -s "$temporary" /etc/fstab; then
+        chown root:root "$temporary"
+        chmod 644 "$temporary"
+        mv "$temporary" /etc/fstab
+    else
+        rm -f "$temporary"
+    fi
     chown "$guest_user":"$guest_user" "$guest_home"
     chmod 700 "$guest_home"
 }
@@ -152,6 +161,12 @@ configure_devbox_guest_identity() {
         return 1
     }
 }
+
+# Keep the helpers above sourceable by the static gate without running the
+# package installation and provisioning stages below.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
 
 packages=(
     bat

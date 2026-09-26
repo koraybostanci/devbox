@@ -33,9 +33,18 @@ Confirm:
 
 - `ssh devbox true` works and `ssh -G devbox | grep -i forwardagent` reports
   `no`.
-- The host has no devbox mounts (`mount | grep -i devbox` is empty).
+- Inspect the guest's mounts, not the host mount table:
+  `devbox exec findmnt -T /home/devbox` and
+  `devbox exec findmnt -T /home/devbox/workspace` should show the home on the
+  Lima data disk rather than the small guest root filesystem.
+- Confirm the guest has no host-shared filesystem mounts:
+  `devbox exec bash -c 'if findmnt -rn -t virtiofs,9p,fuse.sshfs | grep -q .; then exit 1; fi'`.
 - The guest cannot read the staged service credentials:
   `devbox exec cat /var/lib/devbox/services/env` must fail.
+
+The guest keeps ordinary network access and can reach host-gateway services
+unless the host/network is separately restricted. Agent host-boundary guidance
+is policy, not network enforcement; ordinary external network use is allowed.
 
 ## Services on demand
 

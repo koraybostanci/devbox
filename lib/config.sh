@@ -10,6 +10,7 @@ ENV_KEYS=(
     DEVBOX_CPU
     DEVBOX_MEMORY
     DEVBOX_DISK
+    DEVBOX_USE_HOST_PROXY
 )
 
 check_host_platform() {
@@ -105,6 +106,19 @@ load_env() {
     POSTGRES_USER="${POSTGRES_USER:-dev}"
     POSTGRES_DB="${POSTGRES_DB:-dev}"
     POSTGRES_PORT="${POSTGRES_PORT:-15432}"
+    DEVBOX_USE_HOST_PROXY="${DEVBOX_USE_HOST_PROXY:-false}"
+
+    [[ "$POSTGRES_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$POSTGRES_PORT" -le 65535 ] ||
+        die "$env_file: POSTGRES_PORT must be a port from 1 to 65535 (found '$POSTGRES_PORT')"
+    case "$DEVBOX_USE_HOST_PROXY" in
+        true | false) ;;
+        *) die "$env_file: DEVBOX_USE_HOST_PROXY must be true or false (found '$DEVBOX_USE_HOST_PROXY')" ;;
+    esac
+    for resource_key in POSTGRES_USER POSTGRES_DB; do
+        resource_value="${!resource_key}"
+        [[ "$resource_value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] ||
+            die "$env_file: $resource_key must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
+    done
 
     # These values are rendered straight into the Colima configuration and
     # passed as `colima start` flags, so reject anything that is not a positive
@@ -151,6 +165,7 @@ env_label() {
         DEVBOX_CPU) printf 'VM CPUs' ;;
         DEVBOX_MEMORY) printf 'VM memory in GiB' ;;
         DEVBOX_DISK) printf 'VM disk in GiB' ;;
+        DEVBOX_USE_HOST_PROXY) printf 'Pass host proxy settings into the guest' ;;
         *) printf '%s' "$1" ;;
     esac
 }
@@ -173,6 +188,7 @@ env_default() {
         DEVBOX_CPU) printf '4\n' ;;
         DEVBOX_MEMORY) printf '4\n' ;;
         DEVBOX_DISK) printf '60\n' ;;
+        DEVBOX_USE_HOST_PROXY) printf 'false\n' ;;
         *) printf '\n' ;;
     esac
 }
@@ -240,17 +256,55 @@ prompt_required() {
     done
 }
 
-prompt_number() {
+prompt_service_identifier() {
     local label="$1" default="$2" value
 
     while :; do
         value="$(prompt_value "$label" "$default")"
-        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+        if [[ "$value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]]; then
             printf '%s' "$value"
             return 0
         fi
         if [ -t 0 ]; then
-            warn "$label must be a positive integer"
+            warn "$label must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
+            continue
+        fi
+        return 1
+    done
+}
+
+prompt_number() {
+    local label="$1" default="$2" maximum="${3:-}" value
+
+    while :; do
+        value="$(prompt_value "$label" "$default")"
+        if [[ "$value" =~ ^[1-9][0-9]*$ ]] &&
+            { [ -z "$maximum" ] || { [[ "$value" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$value" -le "$maximum" ]; }; }; then
+            printf '%s' "$value"
+            return 0
+        fi
+        if [ -t 0 ]; then
+            if [ -n "$maximum" ]; then
+                warn "$label must be between 1 and $maximum"
+            else
+                warn "$label must be a positive integer"
+            fi
+            continue
+        fi
+        return 1
+    done
+}
+
+prompt_boolean() {
+    local label="$1" default="$2" value
+
+    while :; do
+        value="$(prompt_value "$label (true/false)" "$default")"
+        case "$value" in
+            true | false) printf '%s' "$value"; return 0 ;;
+        esac
+        if [ -t 0 ]; then
+            warn "$label must be true or false"
             continue
         fi
         return 1
@@ -272,6 +326,7 @@ write_env_file() {
     {
         printf "# devbox configuration - edit this file and run 'devbox init' again.\n"
         printf "# Service secrets are generated inside the guest and never live here.\n"
+        printf "# Host proxy variables are not passed to the guest unless explicitly enabled.\n"
         printf '\n'
         for key in "${ENV_KEYS[@]}"; do
             if ! quoted="$(env_quote "${!key}")"; then
@@ -293,9 +348,21 @@ prompt_env_values() {
         label="$(env_label "$key")"
         value="$(env_default "$key")"
         case "$key" in
-            DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK | POSTGRES_PORT)
+            POSTGRES_USER | POSTGRES_DB)
+                value="$(prompt_service_identifier "$label" "$value")" ||
+                    die "$label must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
+                ;;
+            POSTGRES_PORT)
+                value="$(prompt_number "$label" "$value" 65535)" ||
+                    die "$label must be a port from 1 to 65535"
+                ;;
+            DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK)
                 value="$(prompt_number "$label" "$value")" ||
                     die "$label must be a positive integer"
+                ;;
+            DEVBOX_USE_HOST_PROXY)
+                value="$(prompt_boolean "$label" "$value")" ||
+                    die "$label must be true or false"
                 ;;
             *)
                 value="$(prompt_required "$label" "$value")" ||

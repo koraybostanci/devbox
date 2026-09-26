@@ -6,6 +6,7 @@ DEVBOX_GUEST_HOME="/home/$DEVBOX_GUEST_USER"
 DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_HOME/.config/devbox"
 DEVBOX_GUEST_ROOT="/var/lib/devbox"
 DEVBOX_GUEST_PROVISION_ROOT="$DEVBOX_GUEST_ROOT/provision"
+DEVBOX_COLIMA_PROXY_OPT_IN=false
 
 configure_devbox_paths() {
     local colima_home state_root
@@ -54,16 +55,36 @@ prepare_devbox_docker_config() {
 # Run Colima against the devbox profile with an isolated Docker configuration,
 # so the VM's Docker context never leaks into the host Docker CLI.
 devbox_colima() {
-    local colima_bin
+    local colima_bin pass_proxy=false
 
     prepare_devbox_docker_config
     colima_bin="$(command -v colima 2>/dev/null || true)"
     [ -n "$colima_bin" ] && [ -x "$colima_bin" ] ||
         die "Missing host dependency: colima"
-    COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
-        LIMA_HOME="$DEVBOX_LIMA_HOME" \
-        DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
-        "$colima_bin" "$@"
+    if [ "${1:-}" = start ] && [ "$DEVBOX_COLIMA_PROXY_OPT_IN" = true ]; then
+        pass_proxy=true
+    fi
+    if [ "$pass_proxy" = true ]; then
+        HTTP_PROXY="${HTTP_PROXY-}" HTTPS_PROXY="${HTTPS_PROXY-}" \
+            ALL_PROXY="${ALL_PROXY-}" FTP_PROXY="${FTP_PROXY-}" \
+            WS_PROXY="${WS_PROXY-}" NO_PROXY="${NO_PROXY-}" \
+            http_proxy="${http_proxy-}" https_proxy="${https_proxy-}" \
+            all_proxy="${all_proxy-}" ftp_proxy="${ftp_proxy-}" \
+            ws_proxy="${ws_proxy-}" no_proxy="${no_proxy-}" \
+            COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
+            LIMA_HOME="$DEVBOX_LIMA_HOME" \
+            DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
+            "$colima_bin" "$@"
+    else
+        # Lima treats empty proxy variables as an instruction to remove any
+        # previously propagated system proxy from the guest.
+        HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= FTP_PROXY= WS_PROXY= NO_PROXY= \
+            http_proxy= https_proxy= all_proxy= ftp_proxy= ws_proxy= no_proxy= \
+            COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
+            LIMA_HOME="$DEVBOX_LIMA_HOME" \
+            DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
+            "$colima_bin" "$@"
+    fi
 }
 
 # Print the `colima list` record for the devbox profile.
@@ -84,12 +105,18 @@ devbox_state() {
 validate_devbox_colima_config() {
     local file="$1"
 
-    # The rendered colima.yaml is the single source of truth for the remaining
-    # profile settings (autoActivate, sshConfig, forwardAgent, portForwarder);
-    # only the invariants that must never drift are asserted here.
+    # Assert every setting that defines the host/guest boundary so a config
+    # edit cannot silently turn on mounts, forwarding, or host context changes.
     grep -qE '^runtime:[[:space:]]*docker$' "$file" &&
+        grep -qE '^arch:[[:space:]]*aarch64$' "$file" &&
         grep -qE '^vmType:[[:space:]]*vz$' "$file" &&
-        ! grep -qE '^mounts:' "$file"
+        grep -qE '^autoActivate:[[:space:]]*false$' "$file" &&
+        grep -qE '^forwardAgent:[[:space:]]*false$' "$file" &&
+        grep -qE '^portForwarder:[[:space:]]*none$' "$file" &&
+        grep -qE '^sshConfig:[[:space:]]*false$' "$file" &&
+        grep -qE '^mounts:[[:space:]]*null$' "$file" &&
+        [ "$(grep -cE '^mounts:' "$file" || true)" -eq 1 ] &&
+        grep -qE '^env:[[:space:]]*\{\}$' "$file"
 }
 
 render_devbox_colima_config() {
@@ -166,6 +193,7 @@ start_devbox_vm() {
     local state
 
     render_devbox_colima_config
+    DEVBOX_COLIMA_PROXY_OPT_IN="$DEVBOX_USE_HOST_PROXY"
     state="$(devbox_state)"
     case "$state" in
         Running) ;;

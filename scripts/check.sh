@@ -138,6 +138,9 @@ if grep -q '/var/lib/devbox/services/' provision/scripts/verify.sh; then
     fail "verify.sh must not inspect files inside the root-only services directory"
 fi
 
+# --- focused guest state, migration, and sync checks -----------------------
+source "$ROOT/scripts/check-guest-state.sh"
+
 # --- prohibited provisioning patterns --------------------------------------
 # Fail closed on a missing scan target: grep -R exits 2 for a missing path,
 # which would silently satisfy the non-match test below.
@@ -395,6 +398,9 @@ resource_output="$(
 )" || fail "load_env rejected a valid DEVBOX_CPU"
 [ "$resource_output" = "8" ] || fail "load_env did not load the valid DEVBOX_CPU"
 
+# --- focused host config, proxy, and Colima checks -------------------------
+source "$ROOT/scripts/check-host-config.sh"
+
 # A world-readable configuration file is rejected.
 chmod 644 "$resource_env"
 if DEVBOX_ENV_FILE="$resource_env" DEVBOX_DIR="$ROOT" /bin/bash -c '
@@ -409,7 +415,7 @@ fi
 init_unit_root="$validation_root/init-unit"
 mkdir -p "$init_unit_root/home"
 init_env="$init_unit_root/config/devbox/env"
-printf 'Devbox Test\ndevbox@example.com\n\n\n\n\n\n' |
+printf 'Devbox Test\ndevbox@example.com\n\n\n\n\n\n\n' |
     HOME="$init_unit_root/home" DEVBOX_ENV_FILE="$init_env" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     source "$ROOT/lib/config.sh"
@@ -449,6 +455,7 @@ HOME="$symlink_root/home" /bin/bash -c '
     for key in "${ENV_KEYS[@]}"; do unset "$key"; done
     GIT_NAME="New"; GIT_EMAIL="e@x.com"; POSTGRES_USER=dev; POSTGRES_DB=dev
     POSTGRES_PORT=15432; DEVBOX_CPU=4; DEVBOX_MEMORY=4; DEVBOX_DISK=60
+    DEVBOX_USE_HOST_PROXY=false
     write_env_file "$HOME/.env"
 ' || fail "write_env_file failed for a symlinked configuration"
 [ -L "$symlink_root/home/.env" ] || fail "write_env_file replaced a symlinked .env"

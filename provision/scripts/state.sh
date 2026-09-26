@@ -1,6 +1,7 @@
 #!/bin/bash
 # Guest state for devbox. Runs as root from lib/devbox.sh with the host seed
-# (GIT_NAME, GIT_EMAIL, POSTGRES_*) on stdin.
+# (GIT_NAME, GIT_EMAIL, POSTGRES_*) on stdin. Guest-writable files are parsed
+# as data; this root phase never sources them.
 #
 #   config  - non-secret defaults; seeded once, then the guest is authoritative.
 #   secrets - service secrets; always generated inside the guest, never seeded
@@ -12,6 +13,7 @@ set -Eeuo pipefail
 trap 'printf "ERROR: devbox state setup failed at line %s\n" "$LINENO" >&2' ERR
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
+source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
 
 config_root=/home/devbox/.config
 directory="$config_root/devbox"
@@ -27,39 +29,53 @@ secrets="$directory/secrets"
     printf 'ERROR: devbox XDG configuration root is invalid\n' >&2
     exit 1
 }
-[ ! -L "$directory" ] || {
+[ ! -L "$directory" ] && { [ ! -e "$directory" ] || [ -d "$directory" ]; } || {
     printf 'ERROR: devbox configuration directory is invalid\n' >&2
     exit 1
 }
-install -d -o devbox -g devbox -m 700 "$config_root"
-install -d -o devbox -g devbox -m 700 "$directory"
-umask 077
 
-# Seed the configuration once; the guest copy is authoritative afterwards.
-if [ ! -s "$config" ] || ! grep -q '^export POSTGRES_USER=' "$config" 2>/dev/null; then
-    temporary="$(mktemp "$directory/.config.XXXXXX")"
-    cat >"$temporary"
-    chmod 600 "$temporary"
-    chown devbox:devbox "$temporary"
-    mv "$temporary" "$config"
-else
-    cat >/dev/null
-fi
+# The guest user owns its editable config and secrets. Keep privileged writes
+# out of that directory; root reads the resulting values only as validated
+# literal data below.
+sudo -u devbox -- env HOME=/home/devbox /bin/bash -c '
+    set -Eeuo pipefail
+    source "$1"
+    devbox_seed_guest_state "$2"
+' _ "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh" "$directory" || {
+    printf 'ERROR: devbox guest config or secrets could not be safely seeded\n' >&2
+    exit 1
+}
 
-# Preserve existing secrets and generate any missing value.
-temporary="$(mktemp "$directory/.secrets.XXXXXX")"
-if [ -e "$secrets" ]; then
-    cat "$secrets" >"$temporary"
-fi
-grep -q '^export POSTGRES_PASSWORD=' "$temporary" ||
-    printf 'export POSTGRES_PASSWORD=%s\n' \
-        "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >>"$temporary"
-grep -q '^export VALKEY_PASSWORD=' "$temporary" ||
-    printf 'export VALKEY_PASSWORD=%s\n' \
-        "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >>"$temporary"
-chmod 600 "$temporary"
-chown devbox:devbox "$temporary"
-mv "$temporary" "$secrets"
+devbox_state_directory_is_safe "$config_root" devbox devbox 700 &&
+    devbox_state_directory_is_safe "$directory" devbox devbox 700 || {
+    printf 'ERROR: devbox configuration directory permissions are invalid\n' >&2
+    exit 1
+}
+
+unset POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+devbox_state_file_is_safe "$config" devbox devbox 600 || {
+    printf 'ERROR: guest config must be a regular devbox-owned mode-0600 file\n' >&2
+    exit 1
+}
+devbox_parse_state_file "$config" config
+devbox_state_config_is_complete || {
+    printf 'ERROR: guest config is missing required PostgreSQL settings\n' >&2
+    exit 1
+}
+VALKEY_PORT="${VALKEY_PORT:-16379}"
+
+devbox_state_file_is_safe "$secrets" devbox devbox 600 || {
+    printf 'ERROR: guest secrets must be a regular devbox-owned mode-0600 file\n' >&2
+    exit 1
+}
+devbox_parse_state_file "$secrets" secrets || {
+    printf 'ERROR: guest service secrets are invalid\n' >&2
+    exit 1
+}
+[ -n "${POSTGRES_PASSWORD:-}" ] && [ -n "${VALKEY_PASSWORD:-}" ] || {
+    printf 'ERROR: guest service secrets are missing\n' >&2
+    exit 1
+}
 
 compose_source="$DEVBOX_PROVISION_ROOT/config/services/compose.yaml"
 [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] || {
@@ -72,21 +88,7 @@ compose_source="$DEVBOX_PROVISION_ROOT/config/services/compose.yaml"
 }
 mkdir -p "$services/data/postgres" "$services/data/valkey"
 chmod 700 "$services"
-set -a
-. "$config"
-. "$secrets"
-set +a
-missing=
-[ -n "${POSTGRES_USER:-}" ] || missing="$missing POSTGRES_USER"
-[ -n "${POSTGRES_DB:-}" ] || missing="$missing POSTGRES_DB"
-[ -n "${POSTGRES_PORT:-}" ] || missing="$missing POSTGRES_PORT"
-[ -n "${POSTGRES_PASSWORD:-}" ] || missing="$missing POSTGRES_PASSWORD"
-[ -n "${VALKEY_PASSWORD:-}" ] || missing="$missing VALKEY_PASSWORD"
-[ -z "$missing" ] || {
-    printf 'ERROR: devbox service credentials are missing:%s\n' "$missing" >&2
-    exit 1
-}
-VALKEY_PORT="${VALKEY_PORT:-16379}"
+
 envfile="$services/env"
 temporary="$(mktemp "$services/.env.XXXXXX")"
 {
