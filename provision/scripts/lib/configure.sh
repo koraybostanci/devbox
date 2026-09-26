@@ -130,8 +130,114 @@ configure_claude() {
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 }
 
+managed_zshenv_target() {
+    local path="$1" link_target depth=0
+
+    while [ -L "$path" ]; do
+        [ "$depth" -lt 40 ] || return 1
+        link_target="$(readlink "$path")" || return 1
+        case "$link_target" in
+            /*) path="$link_target" ;;
+            *) path="$(dirname "$path")/$link_target" ;;
+        esac
+        depth=$((depth + 1))
+    done
+    printf '%s\n' "$path"
+}
+
+# Keep the user's .zshenv (or its dotfiles target) and place Devbox defaults
+# before it, so user and project-specific settings can override those defaults.
+sync_managed_zshenv() {
+    local source_file="$1" destination="$2" target parent temporary
+    local begin='# >>> devbox managed zshenv >>>' end='# <<< devbox managed zshenv <<<'
+    local mode=644 owner current_uid line
+
+    [ -f "$source_file" ] && [ ! -L "$source_file" ] || return 1
+    target="$(managed_zshenv_target "$destination")" || return 1
+    parent="$(dirname "$target")"
+    [ -d "$parent" ] || return 1
+
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        [ -f "$target" ] && [ ! -L "$target" ] || {
+            printf 'ERROR: refusing to replace non-regular zshenv file: %s\n' "$target" >&2
+            return 1
+        }
+        if [ "$(uname -s)" = Darwin ]; then
+            owner="$(stat -f '%u' "$target")" || return 1
+            mode="$(stat -f '%Lp' "$target")" || return 1
+        else
+            owner="$(stat -c '%u' "$target")" || return 1
+            mode="$(stat -c '%a' "$target")" || return 1
+        fi
+        current_uid="$(id -u)" || return 1
+        [ "$owner" = "$current_uid" ] || {
+            printf 'ERROR: refusing to replace zshenv not owned by this user: %s\n' "$target" >&2
+            return 1
+        }
+    fi
+
+    temporary="$(mktemp "$parent/.zshenv.devbox.XXXXXX")" || return 1
+    printf '%s\n' "$begin" >"$temporary" || {
+        rm -f "$temporary"
+        return 1
+    }
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line" >>"$temporary" || {
+            rm -f "$temporary"
+            return 1
+        }
+    done <"$source_file"
+    printf '%s\n' "$end" >>"$temporary" || {
+        rm -f "$temporary"
+        return 1
+    }
+
+    if [ -f "$target" ]; then
+        awk -v begin="$begin" -v end="$end" '
+            $0 == begin {
+                if (inside || found) {
+                    invalid = 1
+                    exit
+                }
+                inside = 1
+                found = 1
+                next
+            }
+            $0 == end {
+                if (!inside) {
+                    invalid = 1
+                    exit
+                }
+                inside = 0
+                next
+            }
+            !inside { print }
+            END { if (inside || invalid) exit 1 }
+        ' "$target" >>"$temporary" || {
+            rm -f "$temporary"
+            printf 'ERROR: malformed Devbox-managed block in %s\n' "$target" >&2
+            return 1
+        }
+    fi
+
+    chmod "$mode" "$temporary" || {
+        rm -f "$temporary"
+        return 1
+    }
+    if [ -f "$target" ] && cmp -s "$temporary" "$target"; then
+        rm -f "$temporary"
+        return 0
+    fi
+    mv -f "$temporary" "$target" || {
+        rm -f "$temporary"
+        return 1
+    }
+}
+
 configure_shell() {
+    sync_managed_zshenv "$DEVBOX_PROVISION_ROOT/config/zsh/zshenv" "$HOME/.zshenv"
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/zsh/zshrc" "$HOME/.zshrc" 644
+    zsh -n "$HOME/.zshenv"
     zsh -n "$HOME/.zshrc"
 }
 

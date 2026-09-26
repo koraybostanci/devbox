@@ -42,7 +42,9 @@ from the checkout. `devbox uninstall` removes the symlink.
 Node.js and npm (via nvm), Python and pyenv, uv, Go, Rust, Java 21, Claude
 Code, OpenCode, the Databricks CLI, `yq`, `gh`, `jq`, and zsh with oh-my-zsh.
 [`provision/versions.env`](provision/versions.env) is the source of truth for
-pinned versions; `gh` and `jq` come from Ubuntu packages.
+pinned versions; `gh`, `jq`, rootless Docker prerequisites, and snapd come from
+Ubuntu packages. The guest also has a per-user rootless Docker daemon and native
+ARM64 Chromium from Ubuntu's stable snap.
 
 ### Configuration
 
@@ -109,11 +111,40 @@ devbox services status
 devbox services stop
 ```
 
-They are bound to `127.0.0.1` only. The unprivileged `devbox` user cannot
-control Docker; it reaches the services over loopback using credentials in
-`~/.config/devbox/secrets`. Data lives below `/var/lib/devbox/services/data`
-and survives stop/start; `devbox services start` after a VM restart brings the
-containers back.
+The `devbox services` helper always runs Compose as root against the rootful
+`/var/run/docker.sock`; it does not follow the user's Docker context. These
+containers are bound to `127.0.0.1` only. The unprivileged `devbox` user cannot
+control this rootful daemon or access its socket; it reaches the services over
+loopback using credentials in `~/.config/devbox/secrets`. Data lives below
+`/var/lib/devbox/services/data` and survives stop/start; `devbox services start`
+after a VM restart brings the containers back.
+
+### Rootless Docker and Chromium
+
+Direct `docker` commands in the guest run against a separate Docker daemon
+owned by `devbox`, using `unix:///run/user/<uid>/docker.sock` and the `rootless`
+Docker context. Its images and containers are user-owned; this does not replace
+or upgrade Colima's rootful Engine, which remains reserved for `devbox services`.
+
+Ubuntu's actual ARM64 Chromium snap is available at `/snap/bin/chromium` and is
+the Puppeteer runtime default in the guest. Devbox's managed `.zshenv` block
+sets `PUPPETEER_EXECUTABLE_PATH` to that path only when it is unset or empty, so
+a non-empty value inherited before zsh starts wins. The managed block runs
+before pre-existing `.zshenv` content, so a later user/project setting there
+also wins. A project command can override the default for one invocation:
+
+```sh
+PUPPETEER_EXECUTABLE_PATH=/path/to/chromium npm test
+env -u PUPPETEER_EXECUTABLE_PATH npm ci
+env -u PUPPETEER_EXECUTABLE_PATH npm test
+```
+
+The first command selects a different executable; the latter two leave
+Puppeteer free to use the browser bundled with that project. Keep any
+`PUPPETEER_SKIP_DOWNLOAD=true` choice project-local as well (for example, set it
+only on that project's `npm ci` command when using a system browser); Devbox
+does not set it globally. Existing `.zshenv` content is preserved and remains
+after the managed block, so its later settings can override Devbox defaults.
 
 ## Authentication (optional)
 
@@ -153,16 +184,18 @@ devbox uninstall             # remove the devbox symlink
   host gateway and any host services listening there, unless separately
   restricted. Disabling mounts is not network isolation.
 - The daily identity is the unprivileged `devbox` account (no sudo, no Docker
-  group, no Docker socket). Guest agents run as that same account and can access
-  its workspace and credentials; there is no per-agent guest-user sandbox.
+  group, and no access to the rootful Docker socket). Its separate rootless
+  daemon runs as `devbox`. Guest agents run as that same account and can access
+  its workspace, credentials, and rootless containers; there is no per-agent
+  guest-user sandbox.
 - Agent instructions forbid using host mounts, the host gateway, SSH,
   forwarding, or other channels to access the host. This is policy guidance,
   not technical network enforcement; ordinary external network use remains
   allowed.
 - Host proxy settings are cleared from Colima invocations by default. The
   explicit `DEVBOX_USE_HOST_PROXY=true` opt-in propagates the host's exported
-  proxy variables into the guest and Docker daemon on VM start. Proxy URLs
-  (including embedded credentials) persist on the VM disk.
+  proxy variables into the guest and Colima-managed rootful Docker daemon on VM
+  start. Proxy URLs (including embedded credentials) persist on the VM disk.
 - Provisioning scripts are streamed over SSH, checksum-verified inside the
   guest, and run from a root-owned read-only copy; direct SSH is only
   authorized after the guest passes its readiness checks.

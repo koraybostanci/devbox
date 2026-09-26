@@ -355,3 +355,88 @@ ROOT="$ROOT" /bin/bash -c '
 [ ! -e "$opencode_sync_root/target/skills/current.md" ] || fail "removed managed skill was kept"
 [ -f "$opencode_sync_root/target/agents/user-added.md" ] || fail "user agent was removed on a later sync"
 [ -f "$opencode_sync_root/target/skills/user-added.md" ] || fail "user skill was removed on a later sync"
+
+# Subordinate-ID allocation must stay in the configured subordinate range,
+# avoid real passwd/group identities, and trust only protected system files.
+subid_root="$validation_root/subordinate-ids"
+mkdir -p "$subid_root" "$subid_root/stat-bin"
+cat >"$subid_root/passwd" <<'PASSWD'
+root:x:0:0:root:/root:/bin/bash
+devbox:x:1000:1000:Devbox:/home/devbox:/bin/bash
+system-user:x:65534:65534:System user:/nonexistent:/usr/sbin/nologin
+PASSWD
+cat >"$subid_root/group" <<'GROUP'
+root:x:0:
+devbox:x:1000:
+system-group:x:65534:
+GROUP
+printf 'alice:100000:65536\n' >"$subid_root/subuid"
+printf 'bob:100000:131072\n' >"$subid_root/subgid"
+# Keep ordinary temp-file fixtures usable as this user; mock only the system
+# metadata queried by the root-owned mapping-file safety check.
+cat >"$subid_root/stat-bin/stat" <<'STAT'
+#!/bin/bash
+[ "${1:-}" = -c ] && [ "${2:-}" = '%u %a' ] || exit 2
+printf '%s %s\n' "${DEVBOX_SUBID_TEST_OWNER:-0}" "${DEVBOX_SUBID_TEST_MODE:-644}"
+STAT
+chmod +x "$subid_root/stat-bin/stat"
+ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
+    source "$ROOT/provision/scripts/lib/docker.sh"
+    [ "$(devbox_find_free_subid_start "$1/subuid" uid "$1/passwd" "$1/group")" = 165536 ]
+    [ "$(devbox_find_free_subid_start "$1/subgid" gid "$1/passwd" "$1/group")" = 231072 ]
+    printf "devbox:165536:65536\n" >>"$1/subuid"
+    devbox_subid_file_has_usable_range \
+        "$1/subuid" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+    ! devbox_subid_file_has_usable_range \
+        "$1/subgid" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid "$1/passwd" "$1/group"
+    printf "devbox:100000:65536\nalice:130000:65536\n" >"$1/overlap"
+    ! devbox_subid_user_ranges_are_safe "$1/overlap" devbox
+    ! devbox_subid_file_has_usable_range "$1/overlap" devbox
+    printf "invalid:range\n" >"$1/malformed"
+    ! devbox_subid_file_is_valid "$1/malformed"
+    printf "devbox:0:65536\n" >"$1/low-zero"
+    ! devbox_subid_file_is_valid "$1/low-zero"
+    ! devbox_subid_file_has_usable_range \
+        "$1/low-zero" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+    printf "devbox:99999:65536\n" >"$1/low-boundary"
+    ! devbox_subid_file_has_usable_range \
+        "$1/low-boundary" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
+
+    printf "system-user:x:165536:2000:System user:/nonexistent:/usr/sbin/nologin\n" \
+        >"$1/uid-collision-passwd"
+    printf "devbox:165536:65536\n" >"$1/uid-collision"
+    ! devbox_subid_file_has_usable_range \
+        "$1/uid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid \
+        "$1/uid-collision-passwd" "$1/group"
+    printf "system-user:x:2000:231072:System user:/nonexistent:/usr/sbin/nologin\n" \
+        >"$1/gid-collision-passwd"
+    printf "devbox:231072:65536\n" >"$1/gid-collision"
+    ! devbox_subid_file_has_usable_range \
+        "$1/gid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
+        "$1/gid-collision-passwd" "$1/group"
+    printf "system-group:x:231072:\n" >"$1/gid-collision-group"
+    ! devbox_subid_file_has_usable_range \
+        "$1/gid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
+        "$1/passwd" "$1/gid-collision-group"
+
+    printf "host-user:x:100001:100001:Host user:/nonexistent:/usr/sbin/nologin\n" \
+        >"$1/allocation-passwd"
+    [ "$(devbox_find_free_subid_start /dev/null uid "$1/allocation-passwd" "$1/group")" = 100002 ]
+' _ "$subid_root" || fail "subordinate UID/GID range and identity checks failed"
+PATH="$subid_root/stat-bin:$PATH" ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
+    source "$ROOT/provision/scripts/lib/docker.sh"
+    devbox_subid_system_file_is_safe "$1/subuid"
+    if DEVBOX_SUBID_TEST_OWNER=1000 devbox_subid_system_file_is_safe "$1/subuid"; then
+        printf "subordinate-ID file owner validation was bypassed\n" >&2
+        exit 1
+    fi
+    if DEVBOX_SUBID_TEST_OWNER=0 DEVBOX_SUBID_TEST_MODE=666 \
+        devbox_subid_system_file_is_safe "$1/subuid"; then
+        printf "subordinate-ID file mode validation was bypassed\n" >&2
+        exit 1
+    fi
+    DEVBOX_SUBID_TEST_OWNER=0 DEVBOX_SUBID_TEST_MODE=600 \
+        devbox_subid_system_file_is_safe "$1/subuid"
+' _ "$subid_root" || fail "subordinate UID/GID file ownership and mode checks failed"
