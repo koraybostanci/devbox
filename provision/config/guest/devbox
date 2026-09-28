@@ -7,8 +7,7 @@
 
 set -Eeuo pipefail
 
-CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
-PROVIDERS=(github claude opencode databricks)
+CONFIG_ROOT="$HOME/.config/devbox"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
@@ -101,13 +100,9 @@ auth_login() {
 }
 
 db_info() {
-    [ -r "$CONFIG_ROOT/config" ] && [ -r "$CONFIG_ROOT/secrets" ] ||
-        die "guest configuration is unavailable at $CONFIG_ROOT"
+    [ -r "$CONFIG_ROOT/config" ] || die "guest configuration is unavailable at $CONFIG_ROOT"
     # shellcheck disable=SC1090,SC1091
-    set -a
     source "$CONFIG_ROOT/config"
-    source "$CONFIG_ROOT/secrets"
-    set +a
     printf 'postgres host: 127.0.0.1\n'
     printf 'postgres port: %s\n' "${POSTGRES_PORT:-15432}"
     printf 'postgres user: %s\n' "${POSTGRES_USER:-dev}"

@@ -26,8 +26,7 @@ writers to one terminal.
 - Limit the loop to five implementation attempts and ten reviewer findings.
   On a blocker, ambiguity, or exhausted limit, stop and ask the user.
 - Before the first handoff, verify that every required worker role can launch
-  with its effective model. A task-launch failure caused by an unavailable model
-  is a configuration blocker, not an implementation attempt or reviewer result.
+  with its effective model.
 - Before reviewer dispatch, record a scoped diff fingerprint and worktree
   status. Compare both after the reviewer returns; never accept a result if the
   worktree changed during its review.
@@ -55,8 +54,7 @@ roles; the roles themselves cannot launch child subagents.
   phase. The existing scoped diff remains unapproved until the required review
   and final checks succeed.
 - Count the initial implementation as attempt one; every revision consumes one
-  additional attempt. A reviewer may request at most ten findings across the
-  entire loop.
+  additional attempt. The ten-finding limit spans the entire loop.
 - If the attempt limit is reached, ask before any extra work. A user's approval
   for one exception authorizes only that named, bounded pass. A new reviewer
   finding requires a new explicit exception.
@@ -93,8 +91,9 @@ parent accepts a worker result only when it matches the active role and round.
 If a worker returns an empty or malformed result, ask that same worker once to
 reprint its result without doing more work; otherwise stop for the user.
 
-A task-launch error has no worker result. Treat it as a configuration blocker;
-do not retry it as another implementation attempt or ask a different worker to
+A task-launch error (for example, an unavailable model) has no worker result.
+Treat it as a configuration blocker under Configuration and Resumption; it is
+not an implementation attempt or reviewer result, and no other worker may
 perform its role.
 
 Do not paste a large diff into a subagent prompt. For a large change, tell the

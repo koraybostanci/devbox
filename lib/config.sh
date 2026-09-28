@@ -32,18 +32,69 @@ is_allowed_env_key() {
     return 1
 }
 
-# Parse `KEY=value` (optionally `export KEY=value`), stripping one layer of
-# matching single or double quotes. No escape sequences are interpreted.
-env_value() {
-    local expression="$1"
+unset_env_keys() {
+    local key
 
-    expression="${expression#"${expression%%[![:space:]]*}"}"
-    expression="${expression%"${expression##*[![:space:]]}"}"
-    case "$expression" in
-        \"*\") expression="${expression#\"}"; expression="${expression%\"}" ;;
-        \'*\') expression="${expression#\'}"; expression="${expression%\'}" ;;
+    for key in "${ENV_KEYS[@]}"; do
+        unset "$key"
+    done
+}
+
+env_label() {
+    case "$1" in
+        GIT_NAME) printf 'Git name' ;;
+        GIT_EMAIL) printf 'Git email' ;;
+        POSTGRES_USER) printf 'PostgreSQL user' ;;
+        POSTGRES_DB) printf 'PostgreSQL database' ;;
+        POSTGRES_PORT) printf 'PostgreSQL port' ;;
+        DEVBOX_CPU) printf 'VM CPUs' ;;
+        DEVBOX_MEMORY) printf 'VM memory in GiB' ;;
+        DEVBOX_DISK) printf 'VM disk in GiB' ;;
+        DEVBOX_USE_HOST_PROXY) printf 'Pass host proxy settings into the guest (true/false)' ;;
+        *) printf '%s' "$1" ;;
     esac
-    printf '%s' "$expression"
+}
+
+env_builtin_default() {
+    case "$1" in
+        POSTGRES_USER | POSTGRES_DB) printf 'dev' ;;
+        POSTGRES_PORT) printf '15432' ;;
+        DEVBOX_CPU | DEVBOX_MEMORY) printf '4' ;;
+        DEVBOX_DISK) printf '60' ;;
+        DEVBOX_USE_HOST_PROXY) printf 'false' ;;
+    esac
+}
+
+# Print why a value is invalid for its key, or nothing when it is valid. VM
+# resources are rendered into the Colima configuration and service identifiers
+# into the guest, so anything unexpected is rejected here.
+env_value_error() {
+    local key="$1" value="$2"
+
+    case "$key" in
+        GIT_NAME | GIT_EMAIL)
+            case "$value" in
+                '' | 'Your Name' | 'you@personal.com') printf 'is required' ;;
+            esac
+            ;;
+        POSTGRES_USER | POSTGRES_DB)
+            [[ "$value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] ||
+                printf 'must be 1-63 ASCII letters, digits, dots, dashes, or underscores'
+            ;;
+        POSTGRES_PORT)
+            [[ "$value" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$value" -le 65535 ] ||
+                printf 'must be a port from 1 to 65535'
+            ;;
+        DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK)
+            [[ "$value" =~ ^[1-9][0-9]*$ ]] || printf 'must be a positive integer'
+            ;;
+        DEVBOX_USE_HOST_PROXY)
+            case "$value" in
+                true | false) ;;
+                *) printf 'must be true or false' ;;
+            esac
+            ;;
+    esac
 }
 
 # Resolve the host configuration file: an explicit DEVBOX_ENV_FILE wins,
@@ -56,82 +107,59 @@ devbox_env_file() {
     printf '%s/.env\n' "${DEVBOX_DIR:-$PWD}"
 }
 
-validate_env_file() {
-    local env_file="${1:-$(devbox_env_file)}"
-    local line key line_number=0
-
-    [ -f "$env_file" ] || die "Missing $env_file; run 'devbox init' first"
-    [ "$(file_mode "$env_file")" = "600" ] ||
-        die "$env_file must have mode 0600 (run: chmod 600 '$env_file')"
+# Read `KEY=value` lines (optionally `export KEY=value`) as data, stripping one
+# layer of matching single or double quotes; no escape sequences are
+# interpreted. Strict mode rejects malformed lines; lenient mode (used by
+# `devbox init`, which rewrites the file) reports and skips them.
+read_env_file() {
+    local env_file="$1" mode="$2" line key value line_number=0
 
     while IFS= read -r line || [ -n "$line" ]; do
         line_number=$((line_number + 1))
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
         if [[ ! "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]; then
-            die "$env_file:$line_number must be a KEY=value assignment"
+            [ "$mode" = lenient ] || die "$env_file:$line_number must be a KEY=value assignment"
+            warn "$env_file:$line_number is not a KEY=value assignment; ignoring"
+            continue
         fi
         key="${BASH_REMATCH[2]}"
-        is_allowed_env_key "$key" ||
-            warn "$env_file:$line_number ignores unsupported variable $key"
+        if ! is_allowed_env_key "$key"; then
+            if [ "$mode" = lenient ]; then
+                warn "$env_file:$line_number removes unsupported variable $key"
+            else
+                warn "$env_file:$line_number ignores unsupported variable $key"
+            fi
+            continue
+        fi
+        value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+        printf -v "$key" '%s' "$value"
     done <"$env_file"
 }
 
 load_env() {
-    local key line value_expression env_file resource_key resource_value
+    local env_file key error
 
     env_file="$(devbox_env_file)"
-    validate_env_file "$env_file"
+    [ -f "$env_file" ] || die "Missing $env_file; run 'devbox init' first"
+    [ "$(file_mode "$env_file")" = "600" ] ||
+        die "$env_file must have mode 0600 (run: chmod 600 '$env_file')"
+    unset_env_keys
+    read_env_file "$env_file" strict
     for key in "${ENV_KEYS[@]}"; do
-        unset "$key"
-    done
-    while IFS= read -r line || [ -n "$line" ]; do
-        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-        [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]
-        key="${BASH_REMATCH[2]}"
-        is_allowed_env_key "$key" || continue
-        value_expression="${line#*=}"
-        printf -v "$key" '%s' "$(env_value "$value_expression")"
-    done <"$env_file"
-
-    if [ -z "${GIT_NAME:-}" ] || [ "$GIT_NAME" = "Your Name" ]; then
-        die "Set GIT_NAME in $env_file"
-    fi
-    if [ -z "${GIT_EMAIL:-}" ] || [ "$GIT_EMAIL" = "you@personal.com" ]; then
-        die "Set GIT_EMAIL in $env_file"
-    fi
-
-    DEVBOX_CPU="${DEVBOX_CPU:-4}"
-    DEVBOX_MEMORY="${DEVBOX_MEMORY:-4}"
-    DEVBOX_DISK="${DEVBOX_DISK:-60}"
-    POSTGRES_USER="${POSTGRES_USER:-dev}"
-    POSTGRES_DB="${POSTGRES_DB:-dev}"
-    POSTGRES_PORT="${POSTGRES_PORT:-15432}"
-    DEVBOX_USE_HOST_PROXY="${DEVBOX_USE_HOST_PROXY:-false}"
-
-    [[ "$POSTGRES_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$POSTGRES_PORT" -le 65535 ] ||
-        die "$env_file: POSTGRES_PORT must be a port from 1 to 65535 (found '$POSTGRES_PORT')"
-    case "$DEVBOX_USE_HOST_PROXY" in
-        true | false) ;;
-        *) die "$env_file: DEVBOX_USE_HOST_PROXY must be true or false (found '$DEVBOX_USE_HOST_PROXY')" ;;
-    esac
-    for resource_key in POSTGRES_USER POSTGRES_DB; do
-        resource_value="${!resource_key}"
-        [[ "$resource_value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] ||
-            die "$env_file: $resource_key must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
-    done
-
-    # These values are rendered straight into the Colima configuration and
-    # passed as `colima start` flags, so reject anything that is not a positive
-    # integer before it can reach the VM.
-    for resource_key in DEVBOX_CPU DEVBOX_MEMORY DEVBOX_DISK; do
-        resource_value="${!resource_key}"
-        [[ "$resource_value" =~ ^[1-9][0-9]*$ ]] ||
-            die "$env_file: $resource_key must be a positive integer (found '$resource_value')"
+        [ -n "${!key:-}" ] || printf -v "$key" '%s' "$(env_builtin_default "$key")"
+        error="$(env_value_error "$key" "${!key}")"
+        [ -z "$error" ] || die "$env_file: $key $error (found '${!key}')"
     done
 }
 
-# Quote a value for a `KEY="value"` line that env_value can read back. Values
-# mixing both quote styles are rejected by the caller.
+# Quote a value for a `KEY="value"` line that read_env_file can read back.
+# Values mixing both quote styles are rejected by the caller.
 env_quote() {
     local value="$1"
 
@@ -146,168 +174,56 @@ env_quote() {
     esac
 }
 
-host_git_config() {
-    local key="$1" fallback="$2" value=""
-
-    if command -v git >/dev/null 2>&1; then
-        value="$(git config --global "$key" 2>/dev/null || true)"
-    fi
-    printf '%s\n' "${value:-$fallback}"
-}
-
-env_label() {
-    case "$1" in
-        GIT_NAME) printf 'Git name' ;;
-        GIT_EMAIL) printf 'Git email' ;;
-        POSTGRES_USER) printf 'PostgreSQL user' ;;
-        POSTGRES_DB) printf 'PostgreSQL database' ;;
-        POSTGRES_PORT) printf 'PostgreSQL port' ;;
-        DEVBOX_CPU) printf 'VM CPUs' ;;
-        DEVBOX_MEMORY) printf 'VM memory in GiB' ;;
-        DEVBOX_DISK) printf 'VM disk in GiB' ;;
-        DEVBOX_USE_HOST_PROXY) printf 'Pass host proxy settings into the guest' ;;
-        *) printf '%s' "$1" ;;
-    esac
-}
-
 # Default for a prompt: the value already in the configuration file, otherwise
 # the host Git identity or the built-in default.
 env_default() {
-    local key="$1" current="${!key:-}"
+    local key="$1"
 
-    if [ -n "$current" ]; then
-        printf '%s\n' "$current"
+    if [ -n "${!key:-}" ]; then
+        printf '%s' "${!key}"
         return
     fi
     case "$key" in
-        GIT_NAME) host_git_config user.name "Your Name" ;;
-        GIT_EMAIL) host_git_config user.email "you@personal.com" ;;
-        POSTGRES_USER) printf 'dev\n' ;;
-        POSTGRES_DB) printf 'dev\n' ;;
-        POSTGRES_PORT) printf '15432\n' ;;
-        DEVBOX_CPU) printf '4\n' ;;
-        DEVBOX_MEMORY) printf '4\n' ;;
-        DEVBOX_DISK) printf '60\n' ;;
-        DEVBOX_USE_HOST_PROXY) printf 'false\n' ;;
-        *) printf '\n' ;;
+        GIT_NAME) git config --global user.name 2>/dev/null || true ;;
+        GIT_EMAIL) git config --global user.email 2>/dev/null || true ;;
+        *) env_builtin_default "$key" ;;
     esac
 }
 
-# Read the existing configuration leniently, so `devbox init` can offer current
-# values as defaults even when the file needs repair. Unsupported and malformed
-# lines are reported because the rewrite drops them.
-load_env_defaults() {
-    local env_file="$1" line key value_expression line_number=0
+# Prompt until the answer is valid; empty input or EOF keeps the default. On a
+# terminal an invalid answer is re-prompted; without one it is fatal.
+prompt_env_value() {
+    local key="$1" label default value error
 
-    while IFS= read -r line || [ -n "$line" ]; do
-        line_number=$((line_number + 1))
-        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ ! "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]; then
-            warn "$env_file:$line_number is not a KEY=value assignment; ignoring"
-            continue
-        fi
-        key="${BASH_REMATCH[2]}"
-        if ! is_allowed_env_key "$key"; then
-            warn "$env_file:$line_number removes unsupported variable $key"
-            continue
-        fi
-        value_expression="${line#*=}"
-        printf -v "$key" '%s' "$(env_value "$value_expression")"
-    done <"$env_file"
-}
-
-# Print `label [default]: ` and read one value; empty input or EOF keeps the
-# default.
-prompt_value() {
-    local label="$1" default="$2" value
-
-    if [ -n "$default" ]; then
-        printf '%s [%s]: ' "$label" "$default" >&2
-    else
-        printf '%s: ' "$label" >&2
-    fi
-    if IFS= read -r value; then
-        [ -n "$value" ] || value="$default"
-    else
-        value="$default"
-        printf '\n' >&2
-    fi
-    printf '%s' "$value"
-}
-
-# Required text value. On a terminal an invalid answer is re-prompted; without
-# one (piped or closed stdin) the caller reports the failure.
-prompt_required() {
-    local label="$1" default="$2" value
-
+    label="$(env_label "$key")"
+    default="$(env_default "$key")"
     while :; do
-        value="$(prompt_value "$label" "$default")"
-        case "$value" in
-            '' | 'Your Name' | 'you@personal.com')
-                if [ -t 0 ]; then
-                    warn "$label is required"
-                    continue
-                fi
-                return 1
-                ;;
-        esac
-        printf '%s' "$value"
-        return 0
+        if [ -n "$default" ]; then
+            printf '%s [%s]: ' "$label" "$default" >&2
+        else
+            printf '%s: ' "$label" >&2
+        fi
+        if IFS= read -r value; then
+            [ -n "$value" ] || value="$default"
+        else
+            value="$default"
+            printf '\n' >&2
+        fi
+        error="$(env_value_error "$key" "$value")"
+        if [ -z "$error" ]; then
+            printf -v "$key" '%s' "$value"
+            return
+        fi
+        [ -t 0 ] || die "$label $error"
+        warn "$label $error"
     done
 }
 
-prompt_service_identifier() {
-    local label="$1" default="$2" value
+prompt_env_values() {
+    local key
 
-    while :; do
-        value="$(prompt_value "$label" "$default")"
-        if [[ "$value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]]; then
-            printf '%s' "$value"
-            return 0
-        fi
-        if [ -t 0 ]; then
-            warn "$label must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
-            continue
-        fi
-        return 1
-    done
-}
-
-prompt_number() {
-    local label="$1" default="$2" maximum="${3:-}" value
-
-    while :; do
-        value="$(prompt_value "$label" "$default")"
-        if [[ "$value" =~ ^[1-9][0-9]*$ ]] &&
-            { [ -z "$maximum" ] || { [[ "$value" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$value" -le "$maximum" ]; }; }; then
-            printf '%s' "$value"
-            return 0
-        fi
-        if [ -t 0 ]; then
-            if [ -n "$maximum" ]; then
-                warn "$label must be between 1 and $maximum"
-            else
-                warn "$label must be a positive integer"
-            fi
-            continue
-        fi
-        return 1
-    done
-}
-
-prompt_boolean() {
-    local label="$1" default="$2" value
-
-    while :; do
-        value="$(prompt_value "$label (true/false)" "$default")"
-        case "$value" in
-            true | false) printf '%s' "$value"; return 0 ;;
-        esac
-        if [ -t 0 ]; then
-            warn "$label must be true or false"
-            continue
-        fi
-        return 1
+    for key in "${ENV_KEYS[@]}"; do
+        prompt_env_value "$key"
     done
 }
 
@@ -340,51 +256,14 @@ write_env_file() {
     mv "$temporary" "$env_file"
 }
 
-# Prompt for every supported key, keeping existing values as defaults.
-prompt_env_values() {
-    local key value label
-
-    for key in "${ENV_KEYS[@]}"; do
-        label="$(env_label "$key")"
-        value="$(env_default "$key")"
-        case "$key" in
-            POSTGRES_USER | POSTGRES_DB)
-                value="$(prompt_service_identifier "$label" "$value")" ||
-                    die "$label must be 1-63 ASCII letters, digits, dots, dashes, or underscores"
-                ;;
-            POSTGRES_PORT)
-                value="$(prompt_number "$label" "$value" 65535)" ||
-                    die "$label must be a port from 1 to 65535"
-                ;;
-            DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK)
-                value="$(prompt_number "$label" "$value")" ||
-                    die "$label must be a positive integer"
-                ;;
-            DEVBOX_USE_HOST_PROXY)
-                value="$(prompt_boolean "$label" "$value")" ||
-                    die "$label must be true or false"
-                ;;
-            *)
-                value="$(prompt_required "$label" "$value")" ||
-                    die "$label is required"
-                ;;
-        esac
-        printf -v "$key" '%s' "$value"
-    done
-}
-
 initialize_local_config() {
-    local env_file key
+    local env_file
 
     check_host_platform
 
     env_file="$(devbox_env_file)"
-    for key in "${ENV_KEYS[@]}"; do
-        unset "$key"
-    done
-    if [ -f "$env_file" ]; then
-        load_env_defaults "$env_file"
-    fi
+    unset_env_keys
+    [ ! -f "$env_file" ] || read_env_file "$env_file" lenient
 
     log "Configure devbox (press Enter to keep the value in brackets):"
     prompt_env_values

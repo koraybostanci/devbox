@@ -126,25 +126,10 @@ owned by `devbox`, using `unix:///run/user/<uid>/docker.sock` and the `rootless`
 Docker context. Its images and containers are user-owned; this does not replace
 or upgrade Colima's rootful Engine, which remains reserved for `devbox services`.
 
-Ubuntu's actual ARM64 Chromium snap is available at `/snap/bin/chromium` and is
-the Puppeteer runtime default in the guest. Devbox's managed `.zshenv` block
-sets `PUPPETEER_EXECUTABLE_PATH` to that path only when it is unset or empty, so
-a non-empty value inherited before zsh starts wins. The managed block runs
-before pre-existing `.zshenv` content, so a later user/project setting there
-also wins. A project command can override the default for one invocation:
-
-```sh
-PUPPETEER_EXECUTABLE_PATH=/path/to/chromium npm test
-env -u PUPPETEER_EXECUTABLE_PATH npm ci
-env -u PUPPETEER_EXECUTABLE_PATH npm test
-```
-
-The first command selects a different executable; the latter two leave
-Puppeteer free to use the browser bundled with that project. Keep any
-`PUPPETEER_SKIP_DOWNLOAD=true` choice project-local as well (for example, set it
-only on that project's `npm ci` command when using a system browser); Devbox
-does not set it globally. Existing `.zshenv` content is preserved and remains
-after the managed block, so its later settings can override Devbox defaults.
+Ubuntu's ARM64 Chromium snap at `/snap/bin/chromium` is the default
+`PUPPETEER_EXECUTABLE_PATH` unless the variable is already set or a project
+overrides it; see
+[docs/architecture.md](docs/architecture.md#rootless-docker-and-chromium).
 
 ## Authentication (optional)
 
@@ -176,26 +161,12 @@ devbox uninstall             # remove the devbox symlink
 
 ## Security
 
-- The profile explicitly disables host filesystem mounts and does not reuse the
-  host SSH agent. The VM disk (including workspaces, provider credentials, and
-  service secrets) resides on the host under Colima storage, normally below
-  `~/.colima`; protect that storage and host backups accordingly.
-- The guest retains ordinary network access, including reachability to the
-  host gateway and any host services listening there, unless separately
-  restricted. Disabling mounts is not network isolation.
-- The daily identity is the unprivileged `devbox` account (no sudo, no Docker
-  group, and no access to the rootful Docker socket). Its separate rootless
-  daemon runs as `devbox`. Guest agents run as that same account and can access
-  its workspace, credentials, and rootless containers; there is no per-agent
-  guest-user sandbox.
-- Agent instructions forbid using host mounts, the host gateway, SSH,
-  forwarding, or other channels to access the host. This is policy guidance,
-  not technical network enforcement; ordinary external network use remains
-  allowed.
-- Host proxy settings are cleared from Colima invocations by default. The
-  explicit `DEVBOX_USE_HOST_PROXY=true` opt-in propagates the host's exported
-  proxy variables into the guest and Colima-managed rootful Docker daemon on VM
-  start. Proxy URLs (including embedded credentials) persist on the VM disk.
-- Provisioning scripts are streamed over SSH, checksum-verified inside the
-  guest, and run from a root-owned read-only copy; direct SSH is only
-  authorized after the guest passes its readiness checks.
+There are no host filesystem mounts and the host SSH agent is not forwarded,
+but the VM disk (workspace, credentials, service secrets) lives on the host
+under `~/.colima`, and the guest keeps ordinary network access, including to
+the host gateway. The daily `devbox` account has no sudo, no supplementary
+groups, and no access to the rootful Docker socket; guest agents share that
+account. Agent host-boundary instructions are policy, not network enforcement.
+Provisioning is checksum-verified inside the guest and direct SSH is only
+authorized after readiness checks pass. See
+[docs/architecture.md](docs/architecture.md) for the full boundary.

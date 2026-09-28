@@ -8,107 +8,24 @@ configure_git() {
     gh config set git_protocol https --host github.com
 }
 
-managed_opencode_path_is_safe() {
-    case "$1" in
-        '' | . | .. | /* | ../* | */../* | */.. | */./* | */.) return 1 ;;
-        *//* ) return 1 ;;
-    esac
-    return 0
-}
-
-managed_opencode_target_path_is_safe() {
-    local target="$1" path="$2" parent remainder component
-
-    managed_opencode_path_is_safe "$path" || return 1
-    parent="$target"
-    remainder="$path"
-    while [ "$remainder" != "${remainder#*/}" ]; do
-        component="${remainder%%/*}"
-        if [ -e "$parent/$component" ] || [ -L "$parent/$component" ]; then
-            [ -d "$parent/$component" ] && [ ! -L "$parent/$component" ] || return 1
-        fi
-        parent="$parent/$component"
-        remainder="${remainder#*/}"
-    done
-    [ ! -L "$parent/$remainder" ] && [ ! -d "$parent/$remainder" ]
-}
-
-remove_managed_opencode_file() {
-    local target="$1" path="$2" parent remainder component
-
-    managed_opencode_path_is_safe "$path" || return 1
-    parent="$target"
-    remainder="$path"
-    while [ "$remainder" != "${remainder#*/}" ]; do
-        component="${remainder%%/*}"
-        [ ! -L "$parent/$component" ] || return 1
-        parent="$parent/$component"
-        remainder="${remainder#*/}"
-    done
-    [ ! -L "$parent/$remainder" ] || return 1
-    rm -f -- "$parent/$remainder" || return 1
-
-    parent="$(dirname "$target/$path")"
-    while [ "$parent" != "$target" ]; do
-        rmdir "$parent" 2>/dev/null || break
-        parent="$(dirname "$parent")"
-    done
-}
-
 # Sync provisioned files without owning the whole user directory. A manifest
 # lets later runs remove only files that an earlier provision run managed.
 sync_managed_opencode_tree() {
-    local source="$1" target="$2" manifest="$3"
-    local current_manifest manifest_temporary path
+    local source="$1" target="$2" manifest="$3" path
 
-    [ -d "$source" ] && [ ! -L "$source" ] || return 1
     mkdir -p "$target"
-    [ -d "$target" ] && [ ! -L "$target" ] || return 1
-    if [ -e "$manifest" ] || [ -L "$manifest" ]; then
-        [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
-    fi
-
-    current_manifest="$(mktemp "$target/.devbox-current.XXXXXX")" || return 1
-    if ! (cd "$source" && find . -type f -print | LC_ALL=C sort | sed 's#^\./##') >"$current_manifest"; then
-        rm -f -- "$current_manifest"
-        return 1
-    fi
-    while IFS= read -r path || [ -n "$path" ]; do
-        managed_opencode_target_path_is_safe "$target" "$path" || {
-            rm -f -- "$current_manifest"
-            return 1
-        }
-    done <"$current_manifest"
-
     if [ -f "$manifest" ]; then
         while IFS= read -r path || [ -n "$path" ]; do
-            managed_opencode_path_is_safe "$path" || {
-                rm -f -- "$current_manifest"
-                return 1
-            }
-            if ! grep -Fqx -- "$path" "$current_manifest"; then
-                remove_managed_opencode_file "$target" "$path" || {
-                    rm -f -- "$current_manifest"
-                    return 1
-                }
-            fi
+            [ -n "$path" ] && [ ! -e "$source/$path" ] || continue
+            rm -f -- "$target/$path"
+            path="$(dirname "$path")"
+            while [ "$path" != . ] && rmdir "$target/$path" 2>/dev/null; do
+                path="$(dirname "$path")"
+            done
         done <"$manifest"
     fi
-
-    cp -R "$source/." "$target/" || {
-        rm -f -- "$current_manifest"
-        return 1
-    }
-    manifest_temporary="$(mktemp "$(dirname "$manifest")/.devbox-managed.XXXXXX")" || {
-        rm -f -- "$current_manifest"
-        return 1
-    }
-    cp "$current_manifest" "$manifest_temporary" && chmod 600 "$manifest_temporary" &&
-        mv "$manifest_temporary" "$manifest" || {
-        rm -f -- "$current_manifest" "$manifest_temporary"
-        return 1
-    }
-    rm -f -- "$current_manifest"
+    cp -R "$source/." "$target/"
+    (cd "$source" && find . -type f | LC_ALL=C sort | sed 's#^\./##') >"$manifest"
 }
 
 configure_opencode() {
@@ -130,108 +47,50 @@ configure_claude() {
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 }
 
-managed_zshenv_target() {
-    local path="$1" link_target depth=0
-
-    while [ -L "$path" ]; do
-        [ "$depth" -lt 40 ] || return 1
-        link_target="$(readlink "$path")" || return 1
-        case "$link_target" in
-            /*) path="$link_target" ;;
-            *) path="$(dirname "$path")/$link_target" ;;
-        esac
-        depth=$((depth + 1))
-    done
-    printf '%s\n' "$path"
-}
-
-# Keep the user's .zshenv (or its dotfiles target) and place Devbox defaults
-# before it, so user and project-specific settings can override those defaults.
+# Keep the user's .zshenv (or its dotfiles target) and place devbox defaults in
+# a managed block before it, so user and project settings can override them.
 sync_managed_zshenv() {
-    local source_file="$1" destination="$2" target parent temporary
+    local source_file="$1" target="$2" link mode=644 temporary depth
     local begin='# >>> devbox managed zshenv >>>' end='# <<< devbox managed zshenv <<<'
-    local mode=644 owner current_uid line
 
-    [ -f "$source_file" ] && [ ! -L "$source_file" ] || return 1
-    target="$(managed_zshenv_target "$destination")" || return 1
-    parent="$(dirname "$target")"
-    [ -d "$parent" ] || return 1
-
-    if [ -e "$target" ] || [ -L "$target" ]; then
-        [ -f "$target" ] && [ ! -L "$target" ] || {
-            printf 'ERROR: refusing to replace non-regular zshenv file: %s\n' "$target" >&2
-            return 1
-        }
-        if [ "$(uname -s)" = Darwin ]; then
-            owner="$(stat -f '%u' "$target")" || return 1
-            mode="$(stat -f '%Lp' "$target")" || return 1
-        else
-            owner="$(stat -c '%u' "$target")" || return 1
-            mode="$(stat -c '%a' "$target")" || return 1
-        fi
-        current_uid="$(id -u)" || return 1
-        [ "$owner" = "$current_uid" ] || {
-            printf 'ERROR: refusing to replace zshenv not owned by this user: %s\n' "$target" >&2
-            return 1
-        }
-    fi
-
-    temporary="$(mktemp "$parent/.zshenv.devbox.XXXXXX")" || return 1
-    printf '%s\n' "$begin" >"$temporary" || {
-        rm -f "$temporary"
-        return 1
-    }
-    while IFS= read -r line || [ -n "$line" ]; do
-        printf '%s\n' "$line" >>"$temporary" || {
-            rm -f "$temporary"
-            return 1
-        }
-    done <"$source_file"
-    printf '%s\n' "$end" >>"$temporary" || {
-        rm -f "$temporary"
-        return 1
-    }
-
+    for depth in 1 2 3 4 5 6 7 8; do
+        [ -L "$target" ] || break
+        link="$(readlink "$target")"
+        case "$link" in
+            /*) target="$link" ;;
+            *) target="$(dirname "$target")/$link" ;;
+        esac
+    done
     if [ -f "$target" ]; then
-        awk -v begin="$begin" -v end="$end" '
-            $0 == begin {
-                if (inside || found) {
-                    invalid = 1
-                    exit
-                }
-                inside = 1
-                found = 1
-                next
-            }
-            $0 == end {
-                if (!inside) {
-                    invalid = 1
-                    exit
-                }
-                inside = 0
-                next
-            }
-            !inside { print }
-            END { if (inside || invalid) exit 1 }
-        ' "$target" >>"$temporary" || {
-            rm -f "$temporary"
-            printf 'ERROR: malformed Devbox-managed block in %s\n' "$target" >&2
-            return 1
-        }
+        if [ "$(uname -s)" = Darwin ]; then
+            mode="$(stat -f '%Lp' "$target")"
+        else
+            mode="$(stat -c '%a' "$target")"
+        fi
     fi
 
-    chmod "$mode" "$temporary" || {
+    temporary="$(mktemp "$(dirname "$target")/.zshenv.devbox.XXXXXX")"
+    {
+        printf '%s\n' "$begin"
+        cat "$source_file"
+        printf '%s\n' "$end"
+        [ ! -f "$target" ] || awk -v begin="$begin" -v end="$end" '
+            $0 == begin { if (inside || found) exit 1; inside = found = 1; next }
+            $0 == end { if (!inside) exit 1; inside = 0; next }
+            !inside { print }
+            END { if (inside) exit 1 }
+        ' "$target"
+    } >"$temporary" || {
         rm -f "$temporary"
+        printf 'ERROR: malformed devbox-managed block in %s\n' "$target" >&2
         return 1
     }
-    if [ -f "$target" ] && cmp -s "$temporary" "$target"; then
+    chmod "$mode" "$temporary"
+    if cmp -s "$temporary" "$target"; then
         rm -f "$temporary"
-        return 0
+    else
+        mv -f "$temporary" "$target"
     fi
-    mv -f "$temporary" "$target" || {
-        rm -f "$temporary"
-        return 1
-    }
 }
 
 configure_shell() {

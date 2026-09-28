@@ -3,16 +3,15 @@
 DEVBOX_PROFILE="devbox"
 DEVBOX_GUEST_USER="devbox"
 DEVBOX_GUEST_HOME="/home/$DEVBOX_GUEST_USER"
-DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_HOME/.config/devbox"
-DEVBOX_GUEST_ROOT="/var/lib/devbox"
-DEVBOX_GUEST_PROVISION_ROOT="$DEVBOX_GUEST_ROOT/provision"
+DEVBOX_GUEST_PROVISION_ROOT="/var/lib/devbox/provision"
 DEVBOX_COLIMA_PROXY_OPT_IN=false
+DEVBOX_PROXY_KEYS=(
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY WS_PROXY NO_PROXY
+    http_proxy https_proxy all_proxy ftp_proxy ws_proxy no_proxy
+)
 
 configure_devbox_paths() {
-    local colima_home state_root
-
-    colima_home="${COLIMA_HOME:-$HOME/.colima}"
-    [ "$colima_home" = "$HOME/.colima" ] ||
+    [ "${COLIMA_HOME:-$HOME/.colima}" = "$HOME/.colima" ] ||
         die "devbox requires the standard Colima home $HOME/.colima; unset COLIMA_HOME"
     DEVBOX_COLIMA_HOME="$HOME/.colima"
     DEVBOX_LIMA_HOME="$DEVBOX_COLIMA_HOME/_lima"
@@ -20,13 +19,10 @@ configure_devbox_paths() {
         '' | "$DEVBOX_LIMA_HOME") ;;
         *) die "devbox requires LIMA_HOME to be unset or $DEVBOX_LIMA_HOME" ;;
     esac
-    DEVBOX_CONFIG_ROOT="$HOME/.config/devbox"
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
-    DEVBOX_DOCKER_CONFIG="$DEVBOX_CONFIG_ROOT/docker"
-    state_root="${XDG_STATE_HOME:-$HOME/.local/state}/devbox"
-    DEVBOX_LOCK_DIR="$state_root/locks"
-    export DEVBOX_LOCK_DIR
+    DEVBOX_DOCKER_CONFIG="$HOME/.config/devbox/docker"
+    DEVBOX_LOCK_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devbox/locks"
 }
 
 check_devbox_dependencies() {
@@ -43,48 +39,29 @@ check_devbox_dependencies() {
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
 }
 
-devbox_profile_exists() {
-    [ -e "$DEVBOX_COLIMA_PROFILE" ]
-}
+# Run Colima against the devbox profile with an isolated Docker configuration,
+# so the VM's Docker context never leaks into the host Docker CLI. Lima treats
+# an empty proxy variable as an instruction to remove any previously propagated
+# proxy from the guest, so every proxy variable is cleared unless this is a
+# `start` with the explicit opt-in.
+devbox_colima() {
+    local key
+    local -a proxy_env=()
 
-prepare_devbox_docker_config() {
+    for key in "${DEVBOX_PROXY_KEYS[@]}"; do
+        if [ "${1:-}" = start ] && [ "$DEVBOX_COLIMA_PROXY_OPT_IN" = true ]; then
+            proxy_env+=("$key=${!key-}")
+        else
+            proxy_env+=("$key=")
+        fi
+    done
     mkdir -p "$DEVBOX_DOCKER_CONFIG"
     chmod 700 "$DEVBOX_DOCKER_CONFIG"
-}
-
-# Run Colima against the devbox profile with an isolated Docker configuration,
-# so the VM's Docker context never leaks into the host Docker CLI.
-devbox_colima() {
-    local colima_bin pass_proxy=false
-
-    prepare_devbox_docker_config
-    colima_bin="$(command -v colima 2>/dev/null || true)"
-    [ -n "$colima_bin" ] && [ -x "$colima_bin" ] ||
-        die "Missing host dependency: colima"
-    if [ "${1:-}" = start ] && [ "$DEVBOX_COLIMA_PROXY_OPT_IN" = true ]; then
-        pass_proxy=true
-    fi
-    if [ "$pass_proxy" = true ]; then
-        HTTP_PROXY="${HTTP_PROXY-}" HTTPS_PROXY="${HTTPS_PROXY-}" \
-            ALL_PROXY="${ALL_PROXY-}" FTP_PROXY="${FTP_PROXY-}" \
-            WS_PROXY="${WS_PROXY-}" NO_PROXY="${NO_PROXY-}" \
-            http_proxy="${http_proxy-}" https_proxy="${https_proxy-}" \
-            all_proxy="${all_proxy-}" ftp_proxy="${ftp_proxy-}" \
-            ws_proxy="${ws_proxy-}" no_proxy="${no_proxy-}" \
-            COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
-            LIMA_HOME="$DEVBOX_LIMA_HOME" \
-            DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
-            "$colima_bin" "$@"
-    else
-        # Lima treats empty proxy variables as an instruction to remove any
-        # previously propagated system proxy from the guest.
-        HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= FTP_PROXY= WS_PROXY= NO_PROXY= \
-            http_proxy= https_proxy= all_proxy= ftp_proxy= ws_proxy= no_proxy= \
-            COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
-            LIMA_HOME="$DEVBOX_LIMA_HOME" \
-            DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
-            "$colima_bin" "$@"
-    fi
+    env "${proxy_env[@]}" \
+        COLIMA_HOME="$DEVBOX_COLIMA_HOME" \
+        LIMA_HOME="$DEVBOX_LIMA_HOME" \
+        DOCKER_CONFIG="$DEVBOX_DOCKER_CONFIG" \
+        colima "$@"
 }
 
 # Print the `colima list` record for the devbox profile.
@@ -96,9 +73,7 @@ devbox_profile_record() {
 devbox_state() {
     local record
 
-    record="$(devbox_profile_record)" || {
-        die "could not determine the devbox VM state"
-    }
+    record="$(devbox_profile_record)" || die "could not determine the devbox VM state"
     awk '{ print $2 }' <<<"$record"
 }
 
@@ -122,7 +97,6 @@ validate_devbox_colima_config() {
 render_devbox_colima_config() {
     local content temporary
 
-    load_env
     mkdir -p "$DEVBOX_COLIMA_PROFILE"
     content="$(<"$DEVBOX_DIR/colima.yaml")"
     content="${content//'{{CPU}}'/$DEVBOX_CPU}"
@@ -154,22 +128,8 @@ devbox_guest_interactive() {
 }
 
 devbox_as_guest() {
-    devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" -- env \
-        HOME="$DEVBOX_GUEST_HOME" \
-        PWD="$DEVBOX_GUEST_HOME" \
-        bash -c '
-        set -Eeuo pipefail
-        home="$1"
-        shift
-        [ -d "$home" ] && [ ! -L "$home" ] || {
-            printf "ERROR: devbox guest home is invalid: %s\\n" "$home" >&2
-            exit 1
-        }
-        cd -- "$home"
-        export HOME="$home"
-        export PWD="$PWD"
-        exec "$@"
-    ' _ "$DEVBOX_GUEST_HOME" "$@"
+    devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" -- env HOME="$DEVBOX_GUEST_HOME" \
+        bash -c 'cd -- "$HOME" && exec "$@"' _ "$@"
 }
 
 require_running_devbox_vm() {
@@ -219,30 +179,35 @@ devbox_bundle_digest() {
     )
 }
 
-# Archive the provisioning tree and digest the same bytes. The guest re-computes
-# the digest before executing anything, so a tree that changes mid-command fails
-# closed instead of shipping unverified content.
+# The guest-side equivalent of devbox_bundle_digest, prepended to the remote
+# payloads below.
+DEVBOX_GUEST_BUNDLE_DIGEST='
+bundle_digest() (
+    cd "$1"
+    find . -type f ! -path ./.devbox-bundle.sha256 -print | LC_ALL=C sort | while IFS= read -r path; do
+        printf "%s\t%s\n" "${path#./}" "$(sha256sum "$path" | cut -d " " -f1)"
+    done | sha256sum | cut -d " " -f1
+)
+'
+
 create_devbox_bundle_archive() {
-    DEVBOX_BUNDLE_ARCHIVE="$(mktemp "${TMPDIR:-/tmp}/devbox-bundle.XXXXXX")"
-    DEVBOX_BUNDLE_DIGEST="$(devbox_bundle_digest "$DEVBOX_DIR/provision")"
-    (
-        cd "$DEVBOX_DIR"
-        if [ "$(uname -s)" = "Darwin" ]; then
-            COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$DEVBOX_BUNDLE_ARCHIVE" provision
-        else
-            COPYFILE_DISABLE=1 tar -cf "$DEVBOX_BUNDLE_ARCHIVE" provision
-        fi
-    )
-    chmod 400 "$DEVBOX_BUNDLE_ARCHIVE"
+    local archive="$1"
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$archive" -C "$DEVBOX_DIR" provision
+    else
+        tar -cf "$archive" -C "$DEVBOX_DIR" provision
+    fi
 }
 
 # Stream the provisioning tree to the guest and install it as the single
-# root-owned, read-only input at /var/lib/devbox/provision. The tree digest is
-# re-computed inside the guest before anything is executed.
+# root-owned, read-only input at /var/lib/devbox/provision. The digest is
+# re-computed inside the guest before anything is executed, so a tree that
+# changed after hashing fails closed.
 stream_devbox_bundle() {
     local digest="$1" archive="$2"
 
-    devbox_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c "$DEVBOX_GUEST_BUNDLE_DIGEST"'
         set -Eeuo pipefail
         digest="$1"
         root=/var/lib/devbox
@@ -251,38 +216,17 @@ stream_devbox_bundle() {
             printf "ERROR: devbox bundle digest is invalid\n" >&2
             exit 1
         }
-        { [ ! -e "$root" ] && [ ! -L "$root" ]; } ||
-            { [ -d "$root" ] && [ ! -L "$root" ]; } || {
-            printf "ERROR: devbox root directory is invalid\n" >&2
-            exit 1
-        }
         install -d -o root -g root -m 755 "$root"
         temporary="$(mktemp -d "$root/.provision.XXXXXX")"
         trap "rm -rf \"$temporary\"" EXIT
         tar --warning=no-unknown-keyword -xf - -C "$temporary"
-        [ ! -L "$temporary/provision" ] &&
-            ! find "$temporary/provision" -type l -print -quit | grep -q . || {
+        # The digest covers regular files only; reject links outright.
+        if [ -L "$temporary/provision" ] ||
+            find "$temporary/provision" -type l -print -quit | grep -q .; then
             printf "ERROR: transferred devbox bundle contains a symlink\n" >&2
             exit 1
-        }
-        [ -f "$temporary/provision/scripts/system.sh" ]
-        [ -f "$temporary/provision/scripts/state.sh" ]
-        [ -f "$temporary/provision/scripts/tools.sh" ]
-        [ -f "$temporary/provision/scripts/verify.sh" ]
-        [ -f "$temporary/provision/scripts/authorize-key.sh" ]
-        [ -f "$temporary/provision/scripts/services.sh" ]
-        bundle_digest() {
-            local provision_root="$1"
-
-            (
-                cd "$provision_root"
-                find . -type f ! -path "./.devbox-bundle.sha256" -print | LC_ALL=C sort | while IFS= read -r path; do
-                    printf "%s\\t%s\\n" "${path#./}" "$(sha256sum "$path" | awk "{print \$1}")"
-                done | sha256sum | awk "{print \$1}"
-            )
-        }
-        actual="$(bundle_digest "$temporary/provision")"
-        [ "$actual" = "$digest" ] || {
+        fi
+        [ "$(bundle_digest "$temporary/provision")" = "$digest" ] || {
             printf "ERROR: transferred devbox bundle digest does not match\n" >&2
             exit 1
         }
@@ -290,77 +234,48 @@ stream_devbox_bundle() {
         find "$temporary/provision" -type d -exec chmod 755 {} +
         find "$temporary/provision" -type f -exec chmod 644 {} +
         chown -R root:root "$temporary/provision"
-        if [ -e "$target" ] || [ -L "$target" ]; then
-            [ -d "$target" ] && [ ! -L "$target" ] || {
-                printf "ERROR: existing devbox provisioning input is not a directory\n" >&2
-                exit 1
-            }
-            rm -rf "$target"
-        fi
+        rm -rf "$target"
         mv "$temporary/provision" "$target"
     ' _ "$digest" <"$archive"
 }
 
-# Quietly re-verify the installed provisioning tree against its digest, so a
-# matching marker never skips over a corrupted or tampered tree.
+# Re-verify the installed provisioning tree against its digest, so a matching
+# marker never skips over a corrupted or tampered tree.
 devbox_guest_bundle_is_valid() {
     local digest="$1"
 
-    devbox_admin_guest sudo bash -c '
+    devbox_admin_guest sudo bash -c "$DEVBOX_GUEST_BUNDLE_DIGEST"'
         set -Eeuo pipefail
-        digest="$1"
         target=/var/lib/devbox/provision
-        [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || exit 1
-        [ -d "$target" ] && [ ! -L "$target" ] || exit 1
-        ! find "$target" -type l -print -quit | grep -q . || exit 1
-        [ "$(cat "$target/.devbox-bundle.sha256" 2>/dev/null || true)" = "$digest" ] || exit 1
-        bundle_digest() {
-            local provision_root="$1"
-
-            (
-                cd "$provision_root"
-                find . -type f ! -path "./.devbox-bundle.sha256" -print | LC_ALL=C sort | while IFS= read -r path; do
-                    printf "%s\\t%s\\n" "${path#./}" "$(sha256sum "$path" | awk "{print \$1}")"
-                done | sha256sum | awk "{print \$1}"
-            )
-        }
-        [ "$(bundle_digest "$target")" = "$digest" ]
+        [ "$(cat "$target/.devbox-bundle.sha256" 2>/dev/null)" = "$1" ] &&
+            ! find "$target" -type l -print -quit | grep -q . &&
+            [ "$(bundle_digest "$target")" = "$1" ]
     ' _ "$digest"
 }
 
 render_devbox_guest_config() {
-    local key value
-    local -a guest_keys=(
-        GIT_NAME GIT_EMAIL
-        POSTGRES_USER POSTGRES_DB POSTGRES_PORT
-    )
+    local key
 
-    for key in "${guest_keys[@]}"; do
-        value="${!key:-}"
-        printf 'export %s=%s\n' "$key" "$(shell_quote "$value")"
+    for key in GIT_NAME GIT_EMAIL POSTGRES_USER POSTGRES_DB POSTGRES_PORT; do
+        printf 'export %s=%q\n' "$key" "${!key:-}"
     done
 }
 
 # Seed the guest-local configuration and stage the service definition from the
-# provisioning bundle. Runs as root; the guest copy is authoritative after the
-# first seed.
+# provisioning bundle. The guest copy is authoritative after the first seed.
 stage_devbox_guest_state() {
-    load_env
-    render_devbox_guest_config | devbox_admin_guest sudo env \
-        DEVBOX_PROVISION_ROOT="$DEVBOX_GUEST_PROVISION_ROOT" \
-        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/state.sh"
+    render_devbox_guest_config |
+        devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/state.sh"
 }
 
 # start/stop/status for the staged services, run as root in the guest.
 devbox_services_compose() {
-    local action="$1"
-
-    devbox_admin_guest sudo \
-        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/services.sh" "$action"
+    devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/services.sh" "$1"
 }
 
 devbox_guest_provision_digest() {
-    devbox_admin_guest sudo bash -c 'cat /home/devbox/.local/state/devbox/provision.sha256 2>/dev/null || true'
+    devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" \
+        cat "$DEVBOX_GUEST_HOME/.local/state/devbox/provision.sha256" 2>/dev/null || true
 }
 
 run_devbox_guest_provisioning() {
@@ -368,21 +283,14 @@ run_devbox_guest_provisioning() {
 
     stream_devbox_bundle "$digest" "$archive" || return
     log "Provisioning devbox guest tools from bundle $digest..."
-    devbox_admin_guest sudo env \
-        DEVBOX_PROVISION_ROOT="$DEVBOX_GUEST_PROVISION_ROOT" \
-        DEVBOX_GUEST_USER="$DEVBOX_GUEST_USER" \
-        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/system.sh" || return
+    devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/system.sh" || return
     stage_devbox_guest_state || return
     # verify.sh records the digest marker once every check passes.
-    devbox_as_guest env \
-        DEVBOX_PROVISION_ROOT="$DEVBOX_GUEST_PROVISION_ROOT" \
-        DEVBOX_GUEST_CONFIG_ROOT="$DEVBOX_GUEST_CONFIG_ROOT" \
-        DEVBOX_BUNDLE_DIGEST="$digest" \
-        bash -c '
+    devbox_as_guest env DEVBOX_BUNDLE_DIGEST="$digest" bash -c '
         set -Eeuo pipefail
-        bash "$DEVBOX_PROVISION_ROOT/scripts/tools.sh"
-        bash "$DEVBOX_PROVISION_ROOT/scripts/verify.sh"
-    ' || return
+        bash "$1/tools.sh"
+        bash "$1/verify.sh"
+    ' _ "$DEVBOX_GUEST_PROVISION_ROOT/scripts"
 }
 
 # Print the identity file from Colima's SSH configuration. Colima rewrites the
@@ -408,44 +316,15 @@ devbox_identity_file() {
     printf '%s\n' "$identity_file"
 }
 
-devbox_host_public_key() {
+# Authorize the host's Colima SSH key for the unprivileged devbox guest user.
+# Colima's own administrative access is untouched.
+authorize_devbox_host_key() {
     local colima_config="$1" identity_file
 
     identity_file="$(devbox_identity_file "$colima_config")" ||
         die "Colima SSH configuration has no readable identity file for $DEVBOX_PROFILE"
-    ssh-keygen -y -f "$identity_file"
-}
-
-# Authorize the host's Colima SSH key for the unprivileged devbox guest user.
-# Colima's own administrative access is untouched.
-authorize_devbox_host_key() {
-    local colima_config="$1" key
-
-    key="$(devbox_host_public_key "$colima_config")" || return
-    printf '%s\n' "$key" | devbox_admin_guest sudo \
-        bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/authorize-key.sh"
-}
-
-# Remove the old devbox marker block while preserving the user's SSH config.
-filter_devbox_ssh_config() {
-    local config="$1"
-
-    [ -e "$config" ] || return 0
-    awk '
-        /^# BEGIN devbox[[:space:]]*$/ {
-            inside = 1
-            next
-        }
-        /^# END devbox[[:space:]]*$/ {
-            if (inside) {
-                inside = 0
-                next
-            }
-        }
-        inside { next }
-        { print }
-        END { if (inside) exit 1 }
-    ' "$config"
+    ssh-keygen -y -f "$identity_file" |
+        devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/authorize-key.sh"
 }
 
 # Rewrite Colima's SSH configuration into the managed `Host devbox` block: force
@@ -468,149 +347,78 @@ render_devbox_ssh_managed_block() {
 }
 
 # Write the managed SSH alias. The user adds `Include ~/.ssh/devbox.conf` once
-# at the top of ~/.ssh/config; devbox only updates its own file afterwards.
+# at the top of ~/.ssh/config; devbox only replaces its own file, and only with
+# an alias that is reachable.
 write_devbox_ssh_config() {
-    local colima_config="$1"
-    local ssh_dir="$HOME/.ssh" managed stage_dir staged_managed temporary
+    local colima_config="$1" staged
 
-    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/devbox-ssh.XXXXXX")" ||
-        die "failed to stage the devbox SSH configuration"
-    staged_managed="$stage_dir/devbox.conf"
-    render_devbox_ssh_managed_block "$colima_config" >"$staged_managed" || {
-        command rm -rf "$stage_dir"
-        die "Colima failed to generate the devbox SSH configuration"
-    }
-    if ! grep -q '^Host devbox$' "$staged_managed" ||
-        ! grep -Eqi '^[[:space:]]*HostName[[:space:]]+' "$colima_config" ||
-        ! grep -Eqi '^[[:space:]]*Port[[:space:]]+' "$colima_config" ||
-        ! grep -q '^[[:space:]]*IdentityFile[[:space:]]' "$staged_managed"; then
-        command rm -rf "$stage_dir"
+    mkdir -p "$HOME/.ssh"
+    staged="$(mktemp "$HOME/.ssh/.devbox.conf.XXXXXX")"
+    if ! render_devbox_ssh_managed_block "$colima_config" >"$staged" ||
+        ! grep -qx 'Host devbox' "$staged" ||
+        ! grep -Eqi '^[[:space:]]*HostName[[:space:]]' "$staged" ||
+        ! grep -Eqi '^[[:space:]]*Port[[:space:]]' "$staged" ||
+        ! grep -Eqi '^[[:space:]]*IdentityFile[[:space:]]' "$staged"; then
+        command rm -f "$staged"
         die "Colima returned an invalid devbox SSH configuration"
     fi
-    chmod 600 "$staged_managed" || {
-        command rm -rf "$stage_dir"
-        die "failed to secure the staged devbox SSH configuration"
-    }
-    if ! ssh -F "$staged_managed" -o BatchMode=yes -o ConnectTimeout=10 devbox true >/dev/null 2>&1; then
-        command rm -rf "$stage_dir"
+    chmod 600 "$staged"
+    if ! ssh -F "$staged" -o BatchMode=yes -o ConnectTimeout=10 devbox true >/dev/null 2>&1; then
+        command rm -f "$staged"
         die "generated SSH host 'devbox' is not reachable; inspect 'ssh -G devbox' and rerun 'devbox start'"
     fi
-
-    mkdir -p "$ssh_dir" || {
-        command rm -rf "$stage_dir"
-        die "failed to create the devbox SSH configuration directory"
-    }
-    [ -d "$ssh_dir" ] && [ ! -L "$ssh_dir" ] || {
-        command rm -rf "$stage_dir"
-        die "devbox SSH configuration directory is invalid"
-    }
-    managed="$ssh_dir/devbox.conf"
-    temporary="$(mktemp "$ssh_dir/.devbox.conf.XXXXXX")" || {
-        command rm -rf "$stage_dir"
-        die "failed to stage the devbox SSH configuration"
-    }
-    cp "$staged_managed" "$temporary" && chmod 600 "$temporary" && mv "$temporary" "$managed" || {
-        command rm -rf "$stage_dir" "$temporary"
-        die "failed to update $managed"
-    }
-    command rm -rf "$stage_dir"
-}
-
-ensure_devbox_guest_ssh_access() {
-    local stage_dir
-
-    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/devbox-ssh.XXXXXX")" ||
-        die "failed to stage the devbox SSH configuration"
-    if ! devbox_colima ssh-config "$DEVBOX_PROFILE" >"$stage_dir/colima.conf"; then
-        command rm -rf "$stage_dir"
-        die "Colima failed to generate the devbox SSH configuration"
-    fi
-    authorize_devbox_host_key "$stage_dir/colima.conf" || {
-        command rm -rf "$stage_dir"
-        return 1
-    }
-    write_devbox_ssh_config "$stage_dir/colima.conf" || {
-        command rm -rf "$stage_dir"
-        return 1
-    }
-    command rm -rf "$stage_dir"
+    mv "$staged" "$HOME/.ssh/devbox.conf"
 }
 
 remove_devbox_ssh_config() {
-    local ssh_dir="$HOME/.ssh" config="$HOME/.ssh/config" temporary
-
-    # Remove marker blocks left by older versions, but leave the one-time
-    # Include line in place so a later start works without editing user config.
-    if [ -f "$config" ] && [ ! -L "$config" ] && grep -q '^# BEGIN devbox[[:space:]]*$' "$config"; then
-        temporary="$(mktemp "$ssh_dir/.config.XXXXXX")" || return 1
-        if ! filter_devbox_ssh_config "$config" >"$temporary"; then
-            command rm -f "$temporary"
-            die "$config contains malformed devbox markers"
-        fi
-        chmod "$(file_mode "$config")" "$temporary" && mv "$temporary" "$config" || {
-            command rm -f "$temporary"
-            die "failed to update $config"
-        }
-    fi
-    command rm -f "$ssh_dir/devbox.conf"
+    command rm -f "$HOME/.ssh/devbox.conf"
 }
 
+# Converge the guest from the provisioning bundle, then refresh direct SSH
+# access. `start` skips an unchanged, intact bundle; `provision` always runs.
 provision_devbox_guest() (
-    local force="${1:-false}" host_digest guest_digest
+    local mode="$1" work digest
 
-    create_devbox_bundle_archive || return
-    trap 'command rm -f "$DEVBOX_BUNDLE_ARCHIVE"' EXIT
-    host_digest="$DEVBOX_BUNDLE_DIGEST"
-    guest_digest="$(devbox_guest_provision_digest)" || return
-    if [ "$force" = false ] && [ "$host_digest" = "$guest_digest" ]; then
-        if devbox_guest_bundle_is_valid "$host_digest"; then
-            log "devbox provisioning is current."
-            stage_devbox_guest_state || return
-            ensure_devbox_guest_ssh_access || return
-            return
+    work="$(mktemp -d "${TMPDIR:-/tmp}/devbox.XXXXXX")"
+    trap "command rm -rf '$work'" EXIT
+    digest="$(devbox_bundle_digest "$DEVBOX_DIR/provision")"
+    if [ "$mode" = start ] && [ "$(devbox_guest_provision_digest)" = "$digest" ] &&
+        devbox_guest_bundle_is_valid "$digest"; then
+        log "devbox provisioning is current."
+        stage_devbox_guest_state
+    else
+        create_devbox_bundle_archive "$work/bundle.tar"
+        # Only authorize direct SSH once the guest passed the provisioning
+        # checks; a failed run removes any previously managed access.
+        if ! run_devbox_guest_provisioning "$digest" "$work/bundle.tar"; then
+            remove_devbox_ssh_config
+            return 1
         fi
-        log "devbox provisioning bundle is missing or invalid; refreshing."
     fi
-    # Only authorize direct SSH once the guest passed the provisioning checks;
-    # a failed run removes any previously managed access.
-    if ! run_devbox_guest_provisioning "$host_digest" "$DEVBOX_BUNDLE_ARCHIVE"; then
-        remove_devbox_ssh_config || true
-        return 1
-    fi
-    ensure_devbox_guest_ssh_access || return
+    devbox_colima ssh-config "$DEVBOX_PROFILE" >"$work/colima.conf"
+    authorize_devbox_host_key "$work/colima.conf"
+    write_devbox_ssh_config "$work/colima.conf"
 )
 
 stop_devbox_vm() {
-    local force="${1:-false}" state
+    local force="$1" state=""
 
-    if [ ! -e "$DEVBOX_COLIMA_PROFILE" ]; then
-        log "devbox VM is already stopped."
-        return
+    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
+        state="$(devbox_state)"
     fi
-    state="$(devbox_state)"
     case "$state" in
         '' | Stopped) log "devbox VM is already stopped." ;;
-        Running)
-            if [ "$force" = true ]; then
-                devbox_colima stop --force "$DEVBOX_PROFILE"
-            else
-                devbox_colima stop "$DEVBOX_PROFILE"
-            fi
-            ;;
+        Running) devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE" ;;
         *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
 }
 
 show_devbox_status() {
-    local record
+    local record=""
 
-    if [ ! -e "$DEVBOX_COLIMA_PROFILE" ]; then
-        log "devbox: Not created"
-        return
+    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
+        record="$(devbox_profile_record)" || die "could not determine the devbox VM state"
     fi
-    record="$(devbox_profile_record)" || {
-        die "could not determine the devbox VM state"
-    }
     if [ -z "$record" ]; then
         log "devbox: Not created"
         return
@@ -618,25 +426,22 @@ show_devbox_status() {
     printf 'devbox: %s\n' "${record#* }"
 }
 
+# Lifecycle commands hold the lock until the process exits; acquire_lock's EXIT
+# trap releases it on success and failure alike.
 run_devbox() {
-    local action="${1:-}" force=false status
+    local action="${1:-}" force="" confirm
     shift || true
     configure_devbox_paths
+    check_devbox_dependencies
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>"
+            [ $# -eq 0 ] || die "Usage: devbox $action"
             check_host_platform
-            check_devbox_dependencies
+            load_env
             acquire_lock lifecycle
             start_devbox_vm
-            if provision_devbox_guest "$([ "$action" = provision ] && printf true || printf false)"; then
-                release_lock
-            else
-                status=$?
-                release_lock
-                return "$status"
-            fi
+            provision_devbox_guest "$action"
             ;;
         connect)
             [ $# -eq 0 ] || die "Usage: devbox connect"
@@ -653,11 +458,10 @@ run_devbox() {
             show_devbox_status
             ;;
         services)
-            case "${1:-}" in
+            case "$*" in
                 start | stop | status) ;;
                 *) die "Usage: devbox services <start|stop|status>" ;;
             esac
-            [ $# -eq 1 ] || die "Usage: devbox services <start|stop|status>"
             require_running_devbox_vm
             devbox_services_compose "$1"
             ;;
@@ -670,36 +474,27 @@ run_devbox() {
             devbox_guest devbox db "$@"
             ;;
         stop)
-            case "${1:-}" in
+            case "$*" in
                 '') ;;
-                --force) force=true; shift ;;
+                --force) force=1 ;;
                 *) die "Usage: devbox stop [--force]" ;;
             esac
-            [ $# -eq 0 ] || die "Usage: devbox stop [--force]"
             acquire_lock lifecycle
             stop_devbox_vm "$force"
-            release_lock
             ;;
         destroy)
             [ $# -eq 0 ] || die "Usage: devbox destroy"
             acquire_lock lifecycle
-            if ! devbox_profile_exists; then
-                remove_devbox_ssh_config
-                release_lock
+            if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
+                printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
+                read -r confirm
+                [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
+                devbox_colima delete --data --force "$DEVBOX_PROFILE"
+                log "Destroyed devbox VM runtime data. No host project or data directories were used."
+            else
                 log "devbox: Not created"
-                return
             fi
-            printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
-            read -r confirm
-            [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
-            devbox_colima delete --data --force "$DEVBOX_PROFILE" || {
-                status=$?
-                release_lock
-                return "$status"
-            }
             remove_devbox_ssh_config
-            release_lock
-            log "Destroyed devbox VM runtime data. No host project or data directories were used."
             ;;
         *) die "Usage: devbox <start|provision|connect|exec|status|services|auth|db|stop|destroy>" ;;
     esac

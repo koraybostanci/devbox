@@ -41,10 +41,6 @@ file_mode() {
     fi
 }
 
-shell_quote() {
-    printf '%q' "$1"
-}
-
 # Follow a symlink chain to its final target without requiring the path to
 # exist. Used for checkout and configuration symlinks.
 resolve_symlink_target() {
