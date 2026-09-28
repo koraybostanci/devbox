@@ -193,16 +193,17 @@ env_default() {
 # Prompt until the answer is valid; empty input or EOF keeps the default. On a
 # terminal an invalid answer is re-prompted; without one it is fatal.
 prompt_env_value() {
-    local key="$1" label default value error
+    local key="$1" label prompt default value error
 
     label="$(env_label "$key")"
+    prompt="$label"
+    [ "$key" != DEVBOX_USE_HOST_PROXY ] || prompt="$label (true/false)"
     default="$(env_default "$key")"
-    [ "$key" != DEVBOX_USE_HOST_PROXY ] || label="$label (true/false)"
     while :; do
         if [ -n "$default" ]; then
-            printf '%s [%s]: ' "$label" "$default" >&2
+            printf '%s [%s]: ' "$prompt" "$default" >&2
         else
-            printf '%s: ' "$label" >&2
+            printf '%s: ' "$prompt" >&2
         fi
         if IFS= read -r value; then
             [ -n "$value" ] || value="$default"
