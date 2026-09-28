@@ -89,7 +89,7 @@ Guest-local configuration lives under `/home/devbox/.config/devbox/`
 
 ## Services
 
-PostgreSQL (`postgres:18.3`) and Valkey (`valkey/valkey:8.1`) are defined by
+PostgreSQL (`postgres:18.6`) and Valkey (`valkey/valkey:9.2`) are defined by
 `provision/config/services/compose.yaml`. Provisioning stages the definition and
 credentials at `/var/lib/devbox/services/` (root-owned, mode 0600) with
 persistent data below `services/data/`, but does not start the containers.
