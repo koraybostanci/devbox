@@ -50,7 +50,7 @@ env_label() {
         DEVBOX_CPU) printf 'VM CPUs' ;;
         DEVBOX_MEMORY) printf 'VM memory in GiB' ;;
         DEVBOX_DISK) printf 'VM disk in GiB' ;;
-        DEVBOX_USE_HOST_PROXY) printf 'Pass host proxy settings into the guest (true/false)' ;;
+        DEVBOX_USE_HOST_PROXY) printf 'Pass host proxy settings into the guest' ;;
         *) printf '%s' "$1" ;;
     esac
 }
@@ -197,6 +197,7 @@ prompt_env_value() {
 
     label="$(env_label "$key")"
     default="$(env_default "$key")"
+    [ "$key" != DEVBOX_USE_HOST_PROXY ] || label="$label (true/false)"
     while :; do
         if [ -n "$default" ]; then
             printf '%s [%s]: ' "$label" "$default" >&2

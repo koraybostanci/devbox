@@ -32,7 +32,7 @@ done < <(find . \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/c
 bash -n "${shell_files[@]}"
 
 # The host runs macOS /bin/bash 3.2; keep bash 4+ constructs out of host code.
-if grep -nE 'mapfile|readarray|declare -[gA]|local -n|\$\{[A-Za-z_]+(,,|\^\^)|\[\[ -v ' devbox lib/*.sh; then
+if grep -nE 'mapfile|readarray|coproc|(declare|local|typeset) -[gAn]|\$\{[A-Za-z_]+(,,|\^\^|@[QEPAa])|;;&|;&|\[\[ -v ' devbox lib/*.sh; then
     fail "host scripts must stay compatible with bash 3.2"
 fi
 
@@ -43,6 +43,16 @@ fi
 if "$ROOT/devbox" bogus >/dev/null 2>&1; then
     fail "unknown command was accepted"
 fi
+for bad_args in 'services bogus' 'stop --bogus' 'stop --force extra'; do
+    # shellcheck disable=SC2086
+    if bad_output="$(PATH=/usr/bin:/bin "$ROOT/devbox" $bad_args 2>&1)" ||
+        [[ "$bad_output" != *Usage:* ]]; then
+        fail "'devbox $bad_args' was not rejected with a usage message"
+    fi
+done
+# Commands that need no VM work without Colima installed.
+[ "$(HOME="$validation_root/no-colima" PATH=/usr/bin:/bin "$ROOT/devbox" status)" = 'devbox: Not created' ] ||
+    fail "devbox status required Colima for a VM that does not exist"
 launcher_version="$("$ROOT/devbox" version)" || fail "devbox version failed"
 [ "$launcher_version" = "$(cat "$ROOT/VERSION")" ] ||
     fail "devbox version printed '$launcher_version' instead of the VERSION contents"
@@ -359,14 +369,15 @@ ln -s one "$ssh_unit_root/links/two"
 # --- lifecycle lock ---------------------------------------------------------
 # Lifecycle commands rely on the EXIT trap to release the lock, even on failure.
 lock_dir="$validation_root/locks"
-if DEVBOX_LOCK_DIR="$lock_dir" /bin/bash -c '
+lock_status=0
+lock_output="$(DEVBOX_LOCK_DIR="$lock_dir" /bin/bash -c '
     source "$ROOT/lib/common.sh"
     acquire_lock lifecycle
     [ -f "$DEVBOX_LOCK_DIR/lifecycle/pid" ] || exit 3
     die "simulated failure"
-' 2>/dev/null; then
-    fail "the lock test did not fail as expected"
-fi
+' 2>&1)" || lock_status=$?
+[ "$lock_status" = 1 ] && [[ "$lock_output" == *'simulated failure'* ]] ||
+    fail "the lock test did not fail as expected ($lock_status: $lock_output)"
 [ ! -e "$lock_dir/lifecycle" ] || fail "a failed lifecycle command left its lock behind"
 
 # --- host configuration -------------------------------------------------------

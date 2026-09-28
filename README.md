@@ -49,8 +49,9 @@ ARM64 Chromium from Ubuntu's stable snap.
 ### Configuration
 
 `devbox init` asks for the settings and writes `.env` (mode 0600, gitignored);
-rerun `devbox init` to change them. The defaults come from the host Git
-identity and the built-in values shown in brackets:
+rerun `devbox init` to change them. Prompts default to the current value, the
+host Git identity, or the built-in value in brackets. A written file looks
+like:
 
 ```sh
 export GIT_NAME="Your Name"

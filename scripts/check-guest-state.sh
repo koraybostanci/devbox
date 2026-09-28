@@ -176,8 +176,8 @@ mount_fixture="$validation_root/mount-fixture"
 mkdir -p "$mount_fixture/data/devbox-home" "$mount_fixture/home"
 PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
     DEVBOX_GUEST_HOME="$mount_fixture/home" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/state.sh"
-    [ "$(devbox_lima_data_root)" = "$DEVBOX_DATA_ROOT" ]
     devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
         "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
 ' || fail "Lima data-disk home readiness check rejected the intended mount"
@@ -189,6 +189,15 @@ if PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixtur
 '; then
     fail "Lima data-disk home readiness accepted the wrong bind source"
 fi
+lima_root_stub="$validation_root/lima-root-bin"
+mkdir -p "$lima_root_stub"
+printf '#!/bin/bash\nprintf "/\\n/boot\\n/mnt/lima-colima-devbox\\n"\n' >"$lima_root_stub/findmnt"
+chmod +x "$lima_root_stub/findmnt"
+[ "$(PATH="$lima_root_stub:/usr/bin:/bin" /bin/bash -c '
+    source "$1"
+    devbox_lima_data_root
+' _ "$ROOT/provision/scripts/lib/state.sh")" = /mnt/lima-colima-devbox ] ||
+    fail "the Lima data root was not selected from the ext4 mounts"
 no_data_stub="$validation_root/no-data-bin"
 mkdir -p "$no_data_stub"
 printf '#!/bin/bash\nexit 0\n' >"$no_data_stub/findmnt"
@@ -215,6 +224,7 @@ printf 'user skill\n' >"$opencode_sync_root/target/skills/user-added.md"
 printf 'removed.md\n' >"$opencode_sync_root/agents.manifest"
 printf 'removed.md\n' >"$opencode_sync_root/skills.manifest"
 ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/configure.sh"
     sync_managed_opencode_tree "$1" "$2" "$3"
     sync_managed_opencode_tree "$4" "$5" "$6"
@@ -230,6 +240,7 @@ ROOT="$ROOT" /bin/bash -c '
 [ -f "$opencode_sync_root/target/skills/current.md" ] || fail "current managed skill was not copied"
 rm "$opencode_sync_root/source/agents/current.md" "$opencode_sync_root/source/skills/current.md"
 ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/configure.sh"
     sync_managed_opencode_tree "$1" "$2" "$3"
     sync_managed_opencode_tree "$4" "$5" "$6"
@@ -263,6 +274,7 @@ ROOT="$ROOT" /bin/bash -c '
 key_home="$validation_root/key-home"
 mkdir -p "$key_home"
 ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/authorize-key.sh"
     printf "ssh-ed25519 AAAA devbox\n" | devbox_install_authorized_key "$1"
     printf "ssh-ed25519 BBBB devbox\n" | devbox_install_authorized_key "$1"

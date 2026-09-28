@@ -55,6 +55,7 @@ devbox_colima() {
             proxy_env+=("$key=")
         fi
     done
+    command -v colima >/dev/null 2>&1 || die "Missing host dependency: colima"
     mkdir -p "$DEVBOX_DOCKER_CONFIG"
     chmod 700 "$DEVBOX_DOCKER_CONFIG"
     env "${proxy_env[@]}" \
@@ -395,7 +396,8 @@ provision_devbox_guest() (
             return 1
         fi
     fi
-    devbox_colima ssh-config "$DEVBOX_PROFILE" >"$work/colima.conf"
+    devbox_colima ssh-config "$DEVBOX_PROFILE" >"$work/colima.conf" ||
+        die "Colima failed to generate the devbox SSH configuration"
     authorize_devbox_host_key "$work/colima.conf"
     write_devbox_ssh_config "$work/colima.conf"
 )
@@ -432,12 +434,12 @@ run_devbox() {
     local action="${1:-}" force="" confirm
     shift || true
     configure_devbox_paths
-    check_devbox_dependencies
 
     case "$action" in
         start | provision)
             [ $# -eq 0 ] || die "Usage: devbox $action"
             check_host_platform
+            check_devbox_dependencies
             load_env
             acquire_lock lifecycle
             start_devbox_vm
