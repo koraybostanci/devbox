@@ -29,13 +29,10 @@ ignored with a warning. `POSTGRES_PASSWORD` is generated inside the guest and
 is never read from the host. `POSTGRES_USER` and `POSTGRES_DB` accept 1–63 ASCII
 letters, digits, dots, dashes, or underscores.
 
-Host proxy variables are cleared from Colima's environment by default. If the
-guest needs the current host process's exported proxy settings, set
+If the guest needs the current host process's exported proxy settings, set
 `DEVBOX_USE_HOST_PROXY="true"` in `.env`, then run `devbox stop` and
-`devbox start` to apply the change. Proxy URLs that contain credentials are
-propagated into the guest and Docker daemon and persist on the VM disk, which
-resides on the host under Colima storage. This does not restrict guest network
-access or reachability to host-gateway services.
+`devbox start` to apply the change; see
+[architecture.md](architecture.md#host--guest-boundary) for what that exposes.
 
 ## VM state or SSH
 
@@ -70,10 +67,8 @@ If the alias does not work, inspect the effective result with:
 ssh -G devbox
 ```
 
-An unterminated `# BEGIN devbox` block left by an older version is removed by
-`devbox destroy`; otherwise, remove that old block manually. If a system-wide
-or user-level SSH setting overrides the alias, move the Include above the
-conflicting user-level options and rerun `devbox start`.
+If a system-wide or user-level SSH setting overrides the alias, move the
+Include above the conflicting user-level options and rerun `devbox start`.
 
 ## Another command is running
 
@@ -104,16 +99,12 @@ increasing `DEVBOX_DISK`.
 
 The guest root disk is a fixed-size image disk (~20 GiB), separate from the
 Colima data disk that `DEVBOX_DISK` sizes. The `devbox` home is bind-mounted
-onto the data disk so toolchains and caches use it. The first converge on an
-existing VM moves the current home contents onto the data disk (and clears the
-root-disk copy) before mounting, so it can be applied with a plain
-`devbox start`. If provisioning still runs out of space:
+from the data disk so toolchains and caches use it; provisioning fails rather
+than leave the home on the root disk. If provisioning still runs out of space:
 
 - Confirm the bind mount with `devbox exec df -h /home/devbox` (it should show
-  the larger data disk, not `/dev/root`).
-- Provisioning now fails rather than leaving the home on the root disk if the
-  Lima ext4 data disk cannot be found. Inspect the guest mount with
-  `devbox exec findmnt -T /home/devbox` before retrying.
+  the larger data disk, not `/dev/root`), or inspect it with
+  `devbox exec findmnt -T /home/devbox`.
 - Back up anything you need first: `devbox destroy` deletes the entire VM disk,
   including the guest workspace `/home/devbox/workspace`, installed toolchains
   and caches, service data, and credentials. For example:
@@ -145,17 +136,6 @@ Use a port from 1–65535. The guest copy is authoritative after the first
 provision, so `POSTGRES_PORT` changes in `.env` are ignored; deleting
 `~/.config/devbox/config` makes the next provision re-seed it from `.env`.
 
-## Security boundary
-
-There are no host filesystem mounts, but the VM's virtual disk (including the
-workspace, provider credentials, and service secrets) is stored on the host
-under Colima storage, normally below `~/.colima`. The guest retains ordinary
-network access and can reach host-gateway services unless separately
-restricted. Guest agents share the `devbox` account and its files; they are not
-isolated from one another. Agent instructions forbid host access through mounts,
-the gateway, SSH, forwarding, or other channels, but this is policy guidance,
-not technical network enforcement. Ordinary external network use is allowed.
-
 ## Checkout moved or renamed
 
 The VM profile is keyed by name and carries no host path, so moving or renaming
@@ -164,7 +144,6 @@ to keep the current values) to refresh the `devbox` symlink on your `PATH`.
 
 ## Upgrading devbox
 
-An existing VM converges in place on the next `devbox start`; the managed SSH
-key is refreshed for both the standard and the legacy guest locations, so no
-recreation is required. `devbox destroy` followed by `devbox start` remains the
-clean path when you want a fresh guest.
+An existing VM converges in place on the next `devbox start`. `devbox destroy`
+followed by `devbox start` remains the clean path when you want a fresh guest,
+and is required for a VM whose home still lives on the root disk.

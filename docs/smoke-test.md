@@ -71,9 +71,12 @@ grep -q '^Include ~/.ssh/devbox.conf$' ~/.ssh/config  # persistent Include remai
 [ ! -e ~/.ssh/devbox.conf ]                          # managed file removed
 ```
 
-If you have a VM created by an older devbox version, run `devbox start` once
-and confirm `ssh devbox true` still works: the managed key is refreshed for
-both the standard and legacy guest locations, so the VM converges in place.
+On an existing VM, run `devbox provision` once and confirm the readiness checks
+pass and `ssh devbox true` still works.
+
+The host scripts run under macOS `/bin/bash` 3.2, which CI does not cover, so
+exercise `devbox init`, `devbox exec echo -t`, `devbox connect`, and
+`devbox auth status` on the Mac as part of this run.
 
 Host files are untouched by `devbox destroy`; the workspace and guest
 credentials are gone with the VM.

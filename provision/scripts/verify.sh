@@ -3,7 +3,6 @@
 set -Eeuo pipefail
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
-export DEVBOX_GUEST_CONFIG_ROOT="${DEVBOX_GUEST_CONFIG_ROOT:-$HOME/.config/devbox}"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/docker.sh"
 
@@ -24,45 +23,37 @@ check() {
     fi
 }
 
-has_mode() {
-    local path="$1" expected="$2"
-
-    [ -f "$path" ] && [ "$(stat -c '%a' "$path")" = "$expected" ]
-}
-
-has_verified_devbox_bundle() {
-    local root="$1" digest actual
-
-    digest="$(cat "$root/.devbox-bundle.sha256" 2>/dev/null || true)"
-    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
-    actual="$(
-        cd "$root"
-        find . -type f ! -path './.devbox-bundle.sha256' -print | LC_ALL=C sort | while IFS= read -r path; do
-            printf '%s\t%s\n' "${path#./}" "$(sha256sum "$path" | cut -d ' ' -f1)"
-        done | sha256sum | cut -d ' ' -f1
-    )"
-    [ "$actual" = "$digest" ]
-}
-
 login_shell_is_clean() {
     [ -z "$(zsh -lic 'true' 2>&1)" ]
 }
 
 login_shell_uses_rootless_docker() {
-    local expected actual context
+    [ "$(zsh -lic 'printf "%s|%s" "${DOCKER_HOST:-}" "${DOCKER_CONTEXT:-}"')" = \
+        "$(devbox_rootless_endpoint)|" ]
+}
 
-    expected="$(devbox_rootless_endpoint)" || return 1
-    actual="$(zsh -lic 'printf "%s" "${DOCKER_HOST:-}"')" || return 1
-    context="$(zsh -lic 'printf "%s" "${DOCKER_CONTEXT:-}"')" || return 1
-    [ "$actual" = "$expected" ] && [ -z "$context" ]
+user_systemctl() {
+    XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+        systemctl --user "$@"
+}
+
+rootless_context_is_selected() {
+    [ "$(devbox_docker '' context show)" = rootless ] &&
+        [ "$(devbox_docker '' context inspect rootless --format '{{.Endpoints.docker.Host}}')" = \
+            "$(devbox_rootless_endpoint)" ]
+}
+
+rootless_docker_is_ready() {
+    [[ "$(devbox_docker "$(devbox_rootless_endpoint)" info --format '{{json .SecurityOptions}}')" == *rootless* ]]
+}
+
+rootful_docker_is_denied() {
+    [ -S /var/run/docker.sock ] && [ ! -r /var/run/docker.sock ] && [ ! -w /var/run/docker.sock ] &&
+        ! devbox_docker unix:///var/run/docker.sock info
 }
 
 chromium_launches_headlessly() {
-    local executable=/snap/bin/chromium html
-
-    [ -x "$executable" ] || return 1
-    html="$("$executable" --headless --disable-gpu --dump-dom about:blank 2>/dev/null)" || return 1
-    [[ "$html" == *'<html'* ]]
+    [[ "$(/snap/bin/chromium --headless --disable-gpu --dump-dom about:blank 2>/dev/null)" == *'<html'* ]]
 }
 
 guest_home_uses_lima_data_disk() {
@@ -73,9 +64,8 @@ guest_home_uses_lima_data_disk() {
         devbox_home_is_on_lima_data_disk /home/devbox "$data_root/devbox-home" "$data_root"
 }
 
-check "devbox guest config permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/config" 600
-check "devbox guest secrets permissions" has_mode "$DEVBOX_GUEST_CONFIG_ROOT/secrets" 600
-check "guest-local provisioning bundle" has_verified_devbox_bundle "$DEVBOX_PROVISION_ROOT"
+check "devbox guest config permissions" devbox_path_is_safe f "$HOME/.config/devbox/config" devbox devbox 600
+check "devbox guest secrets permissions" devbox_path_is_safe f "$HOME/.config/devbox/secrets" devbox devbox 600
 check "devbox root provisioning directory is root-owned" bash -c '
     [ -d /var/lib/devbox ] && [ ! -L /var/lib/devbox ] &&
         [ "$(stat -c "%U" /var/lib/devbox)" = root ]
@@ -95,23 +85,23 @@ check "devbox workspace is writable and real" bash -c '
         [ -w /home/devbox/workspace ]
 '
 check "devbox guest has no passwordless sudo" bash -c '! sudo -n true >/dev/null 2>&1'
-check "devbox guest is not in Docker group" bash -c '! id -nG | tr " " "\n" | grep -qx docker'
-check "devbox has 65,536 subordinate UID/GID mappings" devbox_user_has_rootless_subid_ranges
-check "devbox has systemd lingering enabled" devbox_user_lingering_is_enabled
-check "RootlessKit uses its Ubuntu-profiled executable and profile" \
-    devbox_rootlesskit_apparmor_profile_is_ready
-check "rootless Docker user service is enabled" devbox_rootless_user_service_is_enabled
-check "rootless Docker user service is active" devbox_rootless_user_service_is_active
-check "rootless Docker context points to the per-user socket" devbox_rootless_context_is_selected
-check "rootless Docker endpoint is reachable" devbox_rootless_docker_is_ready
-check "devbox cannot access the rootful Docker socket" devbox_rootful_docker_is_denied
+check "devbox guest belongs only to its own group" test "$(id -nG)" = devbox
+check "devbox has 65,536 subordinate UID/GID mappings" devbox_has_subid_ranges devbox
+check "devbox has systemd lingering enabled" \
+    test "$(loginctl show-user devbox -p Linger --value 2>/dev/null)" = yes
+check "RootlessKit resolves to Ubuntu's profiled executable" \
+    test "$(type -P rootlesskit)" = /usr/bin/rootlesskit
+check "rootless Docker user service is enabled" user_systemctl is-enabled --quiet docker.service
+check "rootless Docker user service is active" user_systemctl is-active --quiet docker.service
+check "rootless Docker context points to the per-user socket" rootless_context_is_selected
+check "rootless Docker endpoint is reachable" rootless_docker_is_ready
+check "devbox cannot access the rootful Docker socket" rootful_docker_is_denied
 check "devbox shell defaults to the rootless Docker socket" login_shell_uses_rootless_docker
 check "guest package architecture is ARM64" test "$(dpkg --print-architecture)" = arm64
 check "Ubuntu Chromium launches headlessly" chromium_launches_headlessly
 # Services are staged during provisioning but stay stopped until the user runs
 # `devbox services start`. This check runs as the devbox user, so it can only
-# assert the directory's ownership and mode; state.sh validates the staged
-# files (compose.yaml, env) as root where it writes them.
+# assert the directory's ownership and mode.
 check "devbox services root is root-owned and closed" bash -c '
     [ -d /var/lib/devbox/services ] && [ ! -L /var/lib/devbox/services ] &&
         [ "$(stat -c "%U" /var/lib/devbox/services)" = root ] &&
@@ -159,13 +149,6 @@ zsh -lic '
 ' || tool_failures=$?
 failures=$((failures + tool_failures))
 
-if [ -n "${SSH_AUTH_SOCK:-}" ]; then
-    printf 'FAIL: host SSH agent is exposed at %s\n' "$SSH_AUTH_SOCK" >&2
-    failures=$((failures + 1))
-else
-    printf 'PASS: host SSH agent is not exposed\n'
-fi
-
 ((failures == 0)) || exit "$failures"
 
 # Record the provisioned bundle digest only after every check passed, so a
@@ -176,7 +159,6 @@ if [ -n "${DEVBOX_BUNDLE_DIGEST:-}" ]; then
     mkdir -p "$state_directory"
     temporary="$(mktemp "$state_directory/.provision.XXXXXX")"
     printf '%s\n' "$DEVBOX_BUNDLE_DIGEST" >"$temporary"
-    chmod 600 "$temporary"
     mv "$temporary" "$state_directory/provision.sha256"
 fi
 

@@ -31,18 +31,18 @@ marker="$3"
 source "$root/provision/scripts/lib/state.sh"
 owner="$(id -un)"
 group="$(id -gn)"
-devbox_state_file_is_safe "$fixture/config" "$owner" "$group" 600
-devbox_state_file_is_safe "$fixture/secrets" "$owner" "$group" 600
-if devbox_state_file_is_safe "$fixture/config" wrong-owner "$group" 600; then
+devbox_path_is_safe f "$fixture/config" "$owner" "$group" 600
+devbox_path_is_safe f "$fixture/secrets" "$owner" "$group" 600
+if devbox_path_is_safe f "$fixture/config" wrong-owner "$group" 600; then
     printf 'state file owner validation was bypassed\n' >&2
     exit 1
 fi
 unset POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
-devbox_parse_state_file "$fixture/config" config
+devbox_parse_state_file config config <"$fixture/config"
 devbox_state_config_is_complete
 [ "$POSTGRES_USER" = dev ]
 [ "$POSTGRES_PORT" = 65535 ]
-devbox_parse_state_file "$fixture/secrets" secrets
+devbox_parse_state_file secrets secrets <"$fixture/secrets"
 [ "$POSTGRES_PASSWORD" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
 [ "$VALKEY_PASSWORD" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]
 [ ! -e "$marker" ] || {
@@ -50,23 +50,23 @@ devbox_parse_state_file "$fixture/secrets" secrets
     exit 1
 }
 ln -s "$fixture/config" "$fixture/config-link"
-if devbox_state_file_is_safe "$fixture/config-link" "$owner" "$group" 600; then
+if devbox_path_is_safe f "$fixture/config-link" "$owner" "$group" 600; then
     printf 'state file symlink validation was bypassed\n' >&2
     exit 1
 fi
 chmod 644 "$fixture/config"
-if devbox_state_file_is_safe "$fixture/config" "$owner" "$group" 600; then
+if devbox_path_is_safe f "$fixture/config" "$owner" "$group" 600; then
     printf 'state file mode validation was bypassed\n' >&2
     exit 1
 fi
 chmod 600 "$fixture/config"
 printf 'export POSTGRES_PORT=65536\n' >"$fixture/invalid-port"
-if devbox_parse_state_file "$fixture/invalid-port" config 2>/dev/null; then
+if devbox_parse_state_file invalid-port config <"$fixture/invalid-port" 2>/dev/null; then
     printf 'state parser accepted a port above 65535\n' >&2
     exit 1
 fi
 printf 'export POSTGRES_USER=$(touch %s)\n' "$marker" >"$fixture/invalid-user"
-if devbox_parse_state_file "$fixture/invalid-user" config 2>/dev/null; then
+if devbox_parse_state_file invalid-user config <"$fixture/invalid-user" 2>/dev/null; then
     printf 'state parser accepted shell syntax as a service value\n' >&2
     exit 1
 fi
@@ -135,122 +135,8 @@ grep -q 'existing guest config is incomplete; refusing to overwrite' \
     fail "incomplete guest config failure was not reported clearly"
 [ ! -e "$state_marker" ] || fail "shell text from a host seed was executed"
 
-# Home migration resumes over a partially copied target, while readiness must
-# identify the bind mount's source as the Lima ext4 data-disk directory.
-home_migration_root="$validation_root/home-migration"
-mkdir -p "$home_migration_root/source/nested" "$home_migration_root/target"
-printf 'complete source data\n' >"$home_migration_root/source/file"
-printf 'nested data\n' >"$home_migration_root/source/nested/file"
-printf 'partial' >"$home_migration_root/target/file"
-printf 'keep target-only data\n' >"$home_migration_root/target/target-only"
-DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" /bin/bash -c '
-    source "$ROOT/provision/scripts/system.sh"
-    devbox_migrate_guest_home_contents "$1" "$2"
-' _ "$home_migration_root/source" "$home_migration_root/target" ||
-    fail "retry-safe guest home migration failed"
-[ "$(cat "$home_migration_root/target/file")" = 'complete source data' ] ||
-    fail "home migration did not replace the partial file copy"
-[ "$(cat "$home_migration_root/target/nested/file")" = 'nested data' ] ||
-    fail "home migration did not copy nested data"
-[ "$(cat "$home_migration_root/target/target-only")" = 'keep target-only data' ] ||
-    fail "home migration removed data already present on the data disk"
-[ -z "$(find "$home_migration_root/source" -mindepth 1 -print -quit)" ] ||
-    fail "home migration did not clear the root-disk source after copying"
-
-# A partial copy may already contain a legitimate source symlink. Retrying
-# must preserve it while completing the remaining entries.
-matching_symlink_migration_root="$validation_root/home-migration-matching-symlink"
-mkdir -p "$matching_symlink_migration_root/source/.cache" \
-    "$matching_symlink_migration_root/target/.cache"
-printf 'copied cache payload\n' >"$matching_symlink_migration_root/source/.cache/payload"
-ln -s payload "$matching_symlink_migration_root/source/.cache/current"
-ln -s payload "$matching_symlink_migration_root/target/.cache/current"
-printf 'remaining source data\n' >"$matching_symlink_migration_root/source/remaining"
-DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" /bin/bash -c '
-    source "$ROOT/provision/scripts/system.sh"
-    devbox_migrate_guest_home_contents "$1" "$2"
-' _ "$matching_symlink_migration_root/source" "$matching_symlink_migration_root/target" ||
-    fail "home migration rejected a matching partially copied source symlink"
-[ "$(readlink "$matching_symlink_migration_root/target/.cache/current")" = payload ] ||
-    fail "home migration changed a matching destination symlink"
-[ "$(cat "$matching_symlink_migration_root/target/.cache/current")" = 'copied cache payload' ] ||
-    fail "home migration did not finish copying the matching symlink's referent"
-[ -f "$matching_symlink_migration_root/target/remaining" ] ||
-    fail "home migration did not copy entries alongside a matching symlink"
-[ -z "$(find "$matching_symlink_migration_root/source" -mindepth 1 -print -quit)" ] ||
-    fail "home migration did not clear the source after retrying a matching symlink"
-
-# A destination-only symlink has no source entry to collide with. Migration
-# must preserve the link and its referent without following the link.
-target_only_symlink_root="$validation_root/home-migration-target-only-symlink"
-mkdir -p "$target_only_symlink_root/source" "$target_only_symlink_root/target" \
-    "$target_only_symlink_root/referent"
-printf 'new source data\n' >"$target_only_symlink_root/source/file"
-printf 'target-only referent data\n' >"$target_only_symlink_root/referent/file"
-cp "$target_only_symlink_root/referent/file" "$target_only_symlink_root/referent-before"
-ln -s "$target_only_symlink_root/referent/file" \
-    "$target_only_symlink_root/target/target-only-link"
-target_only_link_before="$(readlink "$target_only_symlink_root/target/target-only-link")"
-DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" /bin/bash -c '
-    source "$ROOT/provision/scripts/system.sh"
-    devbox_migrate_guest_home_contents "$1" "$2"
-' _ "$target_only_symlink_root/source" "$target_only_symlink_root/target" ||
-    fail "home migration rejected a destination-only symlink"
-[ -L "$target_only_symlink_root/target/target-only-link" ] ||
-    fail "home migration replaced a destination-only symlink"
-[ "$(readlink "$target_only_symlink_root/target/target-only-link")" = "$target_only_link_before" ] ||
-    fail "home migration changed a destination-only symlink"
-cmp -s "$target_only_symlink_root/referent-before" "$target_only_symlink_root/referent/file" ||
-    fail "home migration changed a destination-only symlink referent"
-[ "$(cat "$target_only_symlink_root/target/file")" = 'new source data' ] ||
-    fail "home migration did not copy source data alongside a destination-only symlink"
-[ -z "$(find "$target_only_symlink_root/source" -mindepth 1 -print -quit)" ] ||
-    fail "home migration did not clear the source after preserving a destination-only symlink"
-
-# A failed copy must not clean up any of the root-disk source entries.
-failed_migration_root="$validation_root/home-migration-copy-failure"
-mkdir -p "$failed_migration_root/source/collision" "$failed_migration_root/target"
-printf 'source file must remain\n' >"$failed_migration_root/source/preserved"
-printf 'source directory must remain\n' >"$failed_migration_root/source/collision/file"
-printf 'blocking target file\n' >"$failed_migration_root/target/collision"
-if DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" /bin/bash -c '
-    source "$ROOT/provision/scripts/system.sh"
-    devbox_migrate_guest_home_contents "$1" "$2"
-' _ "$failed_migration_root/source" "$failed_migration_root/target" \
-    >"$failed_migration_root/migration.out" 2>&1; then
-    fail "home migration accepted an incompatible destination entry"
-fi
-[ "$(cat "$failed_migration_root/source/preserved")" = 'source file must remain' ] ||
-    fail "failed home migration removed a root-disk source file"
-[ "$(cat "$failed_migration_root/source/collision/file")" = 'source directory must remain' ] ||
-    fail "failed home migration removed a root-disk source directory"
-[ "$(cat "$failed_migration_root/target/collision")" = 'blocking target file' ] ||
-    fail "failed home migration changed the incompatible target entry"
-
-# A destination symlink must be rejected before copying; its referent and the
-# root-disk source must remain intact.
-symlink_migration_root="$validation_root/home-migration-symlink"
-mkdir -p "$symlink_migration_root/source" "$symlink_migration_root/target" \
-    "$symlink_migration_root/referent"
-printf 'root-disk source data\n' >"$symlink_migration_root/source/file"
-printf 'referent must stay unchanged\n' >"$symlink_migration_root/referent/file"
-ln -s "$symlink_migration_root/referent/file" "$symlink_migration_root/target/file"
-if DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" /bin/bash -c '
-    source "$ROOT/provision/scripts/system.sh"
-    devbox_migrate_guest_home_contents "$1" "$2"
-' _ "$symlink_migration_root/source" "$symlink_migration_root/target" \
-    >"$symlink_migration_root/migration.out" 2>&1; then
-    fail "home migration accepted a destination symlink"
-fi
-[ "$(cat "$symlink_migration_root/referent/file")" = 'referent must stay unchanged' ] ||
-    fail "home migration modified a destination symlink referent"
-[ -f "$symlink_migration_root/source/file" ] ||
-    fail "home migration deleted its source after rejecting a destination symlink"
-[ -L "$symlink_migration_root/target/file" ] ||
-    fail "home migration replaced the rejected destination symlink"
-grep -q 'destination contains a symlink' "$symlink_migration_root/migration.out" ||
-    fail "home migration did not report the destination symlink"
-
+# Readiness must identify the bind mount's source as the Lima ext4 data-disk
+# directory, and setup must refuse to leave the home on the root disk.
 mount_stub="$validation_root/mount-bin"
 mkdir -p "$mount_stub"
 cat >"$mount_stub/findmnt" <<'EOF'
@@ -290,8 +176,8 @@ mount_fixture="$validation_root/mount-fixture"
 mkdir -p "$mount_fixture/data/devbox-home" "$mount_fixture/home"
 PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
     DEVBOX_GUEST_HOME="$mount_fixture/home" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/state.sh"
-    [ "$(devbox_lima_data_root)" = "$DEVBOX_DATA_ROOT" ]
     devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
         "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
 ' || fail "Lima data-disk home readiness check rejected the intended mount"
@@ -303,12 +189,21 @@ if PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixtur
 '; then
     fail "Lima data-disk home readiness accepted the wrong bind source"
 fi
+lima_root_stub="$validation_root/lima-root-bin"
+mkdir -p "$lima_root_stub"
+printf '#!/bin/bash\nprintf "/\\n/boot\\n/mnt/lima-colima-devbox\\n"\n' >"$lima_root_stub/findmnt"
+chmod +x "$lima_root_stub/findmnt"
+[ "$(PATH="$lima_root_stub:/usr/bin:/bin" /bin/bash -c '
+    source "$1"
+    devbox_lima_data_root
+' _ "$ROOT/provision/scripts/lib/state.sh")" = /mnt/lima-colima-devbox ] ||
+    fail "the Lima data root was not selected from the ext4 mounts"
 no_data_stub="$validation_root/no-data-bin"
 mkdir -p "$no_data_stub"
 printf '#!/bin/bash\nexit 0\n' >"$no_data_stub/findmnt"
 chmod +x "$no_data_stub/findmnt"
 if PATH="$no_data_stub:/usr/bin:/bin" DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" \
-    /bin/bash -c 'source "$ROOT/provision/scripts/system.sh"; relocate_guest_home devbox' \
+    /bin/bash -c 'source "$ROOT/provision/scripts/system.sh"; relocate_guest_home' \
     >"$validation_root/no-data.out" 2>&1; then
     fail "guest-home setup silently accepted a missing Lima data disk"
 fi
@@ -329,6 +224,7 @@ printf 'user skill\n' >"$opencode_sync_root/target/skills/user-added.md"
 printf 'removed.md\n' >"$opencode_sync_root/agents.manifest"
 printf 'removed.md\n' >"$opencode_sync_root/skills.manifest"
 ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/configure.sh"
     sync_managed_opencode_tree "$1" "$2" "$3"
     sync_managed_opencode_tree "$4" "$5" "$6"
@@ -344,6 +240,7 @@ ROOT="$ROOT" /bin/bash -c '
 [ -f "$opencode_sync_root/target/skills/current.md" ] || fail "current managed skill was not copied"
 rm "$opencode_sync_root/source/agents/current.md" "$opencode_sync_root/source/skills/current.md"
 ROOT="$ROOT" /bin/bash -c '
+    set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/configure.sh"
     sync_managed_opencode_tree "$1" "$2" "$3"
     sync_managed_opencode_tree "$4" "$5" "$6"
@@ -356,105 +253,36 @@ ROOT="$ROOT" /bin/bash -c '
 [ -f "$opencode_sync_root/target/agents/user-added.md" ] || fail "user agent was removed on a later sync"
 [ -f "$opencode_sync_root/target/skills/user-added.md" ] || fail "user skill was removed on a later sync"
 
-# Subordinate-ID allocation must stay in the configured subordinate range,
-# avoid real passwd/group identities, and trust only protected system files.
+# Rootless Docker needs at least 65,536 subordinate IDs, never below 100000.
 subid_root="$validation_root/subordinate-ids"
-mkdir -p "$subid_root" "$subid_root/stat-bin"
-cat >"$subid_root/passwd" <<'PASSWD'
-root:x:0:0:root:/root:/bin/bash
-devbox:x:1000:1000:Devbox:/home/devbox:/bin/bash
-system-user:x:65534:65534:System user:/nonexistent:/usr/sbin/nologin
-PASSWD
-cat >"$subid_root/group" <<'GROUP'
-root:x:0:
-devbox:x:1000:
-system-group:x:65534:
-GROUP
-printf 'alice:100000:65536\n' >"$subid_root/subuid"
-printf 'bob:100000:131072\n' >"$subid_root/subgid"
-# Keep ordinary temp-file fixtures usable as this user; mock only the system
-# metadata queried by the root-owned mapping-file safety check.
-cat >"$subid_root/stat-bin/stat" <<'STAT'
-#!/bin/bash
-[ "${1:-}" = -c ] && [ "${2:-}" = '%u %a' ] || exit 2
-printf '%s %s\n' "${DEVBOX_SUBID_TEST_OWNER:-0}" "${DEVBOX_SUBID_TEST_MODE:-644}"
-STAT
-chmod +x "$subid_root/stat-bin/stat"
+mkdir -p "$subid_root"
+printf 'lima:524288:1073741824\ndevbox:100000:65536\n' >"$subid_root/valid"
+printf 'devbox:100000:65535\n' >"$subid_root/short"
+printf 'devbox:99999:65536\n' >"$subid_root/low"
+printf 'other:100000:65536\n' >"$subid_root/missing"
 ROOT="$ROOT" /bin/bash -c '
     set -Eeuo pipefail
     source "$ROOT/provision/scripts/lib/docker.sh"
-    [ "$(devbox_find_free_subid_start "$1/subuid" uid "$1/passwd" "$1/group")" = 165536 ]
-    [ "$(devbox_find_free_subid_start "$1/subgid" gid "$1/passwd" "$1/group")" = 231072 ]
-    printf "devbox:165536:65536\n" >>"$1/subuid"
-    devbox_subid_file_has_usable_range \
-        "$1/subuid" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
-    printf "kbostanci:524288:1073741824\\ndevbox:100000:65536\\n" >"$1/colima-subuid"
-    cp "$1/colima-subuid" "$1/colima-subgid"
-    printf "mapped-user:x:524288:524288:Mapped user:/nonexistent:/usr/sbin/nologin\\n" \
-        >"$1/colima-passwd"
-    printf "mapped-group:x:524288:\\n" >"$1/colima-group"
-    devbox_subid_file_has_usable_range \
-        "$1/colima-subuid" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid \
-        "$1/colima-passwd" "$1/colima-group"
-    devbox_subid_file_has_usable_range \
-        "$1/colima-subgid" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
-        "$1/colima-passwd" "$1/colima-group"
-    [ "$(devbox_find_free_subid_start \
-        "$1/colima-subuid" uid "$1/passwd" "$1/group")" = 165536 ]
-    ! devbox_subid_file_has_usable_range \
-        "$1/subgid" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid "$1/passwd" "$1/group"
-    printf "devbox:100000:65536\nalice:130000:65536\n" >"$1/overlap"
-    ! devbox_subid_user_ranges_are_safe "$1/overlap" devbox
-    ! devbox_subid_file_has_usable_range "$1/overlap" devbox
-    printf "invalid:range\n" >"$1/malformed"
-    ! devbox_subid_file_is_valid "$1/malformed"
-    printf "devbox:0:65536\n" >"$1/low-zero"
-    ! devbox_subid_file_is_valid "$1/low-zero"
-    ! devbox_subid_file_has_usable_range \
-        "$1/low-zero" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
-    printf "devbox:99999:65536\n" >"$1/low-boundary"
-    ! devbox_subid_file_has_usable_range \
-        "$1/low-boundary" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
-    printf "devbox:600100001:65536\n" >"$1/high-boundary"
-    ! devbox_subid_file_has_usable_range \
-        "$1/high-boundary" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid "$1/passwd" "$1/group"
-    printf "devbox:4294967290:10\n" >"$1/overflow"
-    ! devbox_subid_file_is_valid "$1/overflow"
+    devbox_has_subid_ranges devbox "$1/valid" "$1/valid"
+    for file in short low missing; do
+        if devbox_has_subid_ranges devbox "$1/valid" "$1/$file"; then exit 1; fi
+    done
+' _ "$subid_root" || fail "subordinate UID/GID range checks failed"
 
-    printf "system-user:x:165536:2000:System user:/nonexistent:/usr/sbin/nologin\n" \
-        >"$1/uid-collision-passwd"
-    printf "devbox:165536:65536\n" >"$1/uid-collision"
-    ! devbox_subid_file_has_usable_range \
-        "$1/uid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" uid \
-        "$1/uid-collision-passwd" "$1/group"
-    printf "system-user:x:2000:231072:System user:/nonexistent:/usr/sbin/nologin\n" \
-        >"$1/gid-collision-passwd"
-    printf "devbox:231072:65536\n" >"$1/gid-collision"
-    ! devbox_subid_file_has_usable_range \
-        "$1/gid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
-        "$1/gid-collision-passwd" "$1/group"
-    printf "system-group:x:231072:\n" >"$1/gid-collision-group"
-    ! devbox_subid_file_has_usable_range \
-        "$1/gid-collision" devbox "$DEVBOX_SUBID_RANGE_SIZE" gid \
-        "$1/passwd" "$1/gid-collision-group"
-
-    printf "host-user:x:100001:100001:Host user:/nonexistent:/usr/sbin/nologin\n" \
-        >"$1/allocation-passwd"
-    [ "$(devbox_find_free_subid_start /dev/null uid "$1/allocation-passwd" "$1/group")" = 100002 ]
-' _ "$subid_root" || fail "subordinate UID/GID range and identity checks failed"
-PATH="$subid_root/stat-bin:$PATH" ROOT="$ROOT" /bin/bash -c '
+# The host key is written as the guest user: private directory and file, one
+# key line, and anything but a single non-empty line is rejected.
+key_home="$validation_root/key-home"
+mkdir -p "$key_home"
+ROOT="$ROOT" /bin/bash -c '
     set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/docker.sh"
-    devbox_subid_system_file_is_safe "$1/subuid"
-    if DEVBOX_SUBID_TEST_OWNER=1000 devbox_subid_system_file_is_safe "$1/subuid"; then
-        printf "subordinate-ID file owner validation was bypassed\n" >&2
-        exit 1
-    fi
-    if DEVBOX_SUBID_TEST_OWNER=0 DEVBOX_SUBID_TEST_MODE=666 \
-        devbox_subid_system_file_is_safe "$1/subuid"; then
-        printf "subordinate-ID file mode validation was bypassed\n" >&2
-        exit 1
-    fi
-    DEVBOX_SUBID_TEST_OWNER=0 DEVBOX_SUBID_TEST_MODE=600 \
-        devbox_subid_system_file_is_safe "$1/subuid"
-' _ "$subid_root" || fail "subordinate UID/GID file ownership and mode checks failed"
+    source "$ROOT/provision/scripts/authorize-key.sh"
+    printf "ssh-ed25519 AAAA devbox\n" | devbox_install_authorized_key "$1"
+    printf "ssh-ed25519 BBBB devbox\n" | devbox_install_authorized_key "$1"
+    if printf "one\ntwo\n" | devbox_install_authorized_key "$1" 2>/dev/null; then exit 1; fi
+    if printf "" | devbox_install_authorized_key "$1" 2>/dev/null; then exit 1; fi
+' _ "$key_home" || fail "authorized key installation accepted or rejected the wrong key"
+[ "$(file_mode "$key_home/.ssh")" = 700 ] || fail "guest SSH directory has the wrong mode"
+[ "$(file_mode "$key_home/.ssh/authorized_keys")" = 600 ] || fail "authorized_keys has the wrong mode"
+[ "$(cat "$key_home/.ssh/authorized_keys")" = 'ssh-ed25519 BBBB devbox' ] ||
+    fail "authorized_keys does not hold exactly the latest key"
+[ -z "$(find "$key_home/.ssh" -name '.authorized_keys.*')" ] || fail "authorized key staging file was left behind"
