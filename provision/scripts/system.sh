@@ -33,7 +33,7 @@ relocate_guest_home() {
         }
         mkdir -p "$home"
         mount --bind "$target" "$home"
-        sudo -u devbox cp -rnT /etc/skel "$home"
+        sudo -u devbox cp -rT --update=none /etc/skel "$home"
     fi
     devbox_home_is_on_lima_data_disk "$home" "$target" "$data_root" || {
         printf 'ERROR: %s is not bind-mounted from the Lima data disk at %s\n' "$home" "$target" >&2
