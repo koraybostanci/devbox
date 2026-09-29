@@ -1,10 +1,15 @@
 #!/bin/bash
 
 install_claude() {
+    local package_root
+
     stage "Claude Code $CLAUDE_CODE_VERSION"
     npm install --global --silent --include=optional \
         --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+    package_root="$(npm root --global)/@anthropic-ai/claude-code"
+    [ -f "$package_root/install.cjs" ]
+    (cd "$package_root" && node install.cjs)
     claude --version | grep -qF "$CLAUDE_CODE_VERSION"
 }
 
