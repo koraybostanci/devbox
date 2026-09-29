@@ -142,6 +142,113 @@ grep -qF 'unset DOCKER_CONTEXT' "$rootless_zshenv" ||
 if grep -R -nE '^[[:space:]]*(export[[:space:]]+)?PUPPETEER_SKIP_DOWNLOAD=' provision/config/zsh; then
     fail "PUPPETEER_SKIP_DOWNLOAD must remain project-scoped, not global"
 fi
+grep -qF 'snap install chromium --channel=stable' provision/scripts/system.sh ||
+    fail "system provisioning must install actual Ubuntu Chromium from the stable snap"
+grep -qF 'devbox_configure_rootless_docker' provision/scripts/tools.sh ||
+    fail "the unprivileged tools phase must configure rootless Docker"
+grep -qF 'cd "$package_root" && node install.cjs' provision/scripts/lib/apps.sh ||
+    fail "Claude Code provisioning must run its installer script"
+grep -qE '^[[:space:]]+vim$' provision/scripts/system.sh ||
+    fail "system provisioning must install the Vim command-line editor"
+grep -qF 'export EDITOR=vim' provision/config/zsh/zshrc ||
+    fail "the guest shell must default to Vim for command-line editing"
+grep -qE '^[[:space:]]+apparmor$' provision/scripts/system.sh ||
+    fail "system provisioning must install Ubuntu's AppArmor package"
+grep -qF 'version **29.5 or newer**' docs/architecture.md ||
+    fail "the rootless host-network Engine version requirement must be documented"
+grep -qF 'read-only `/:/host:ro,rslave` mount' docs/architecture.md ||
+    fail "Finsights' read-only guest-root mount semantics must be documented"
+grep -qF 'node exporter' docs/architecture.md || grep -qF 'Node Exporter' docs/architecture.md ||
+    fail "Finsights Node Exporter least-privilege guidance must be documented"
+grep -qF 'depend on the Engine server version and rootless runtime' docs/architecture.md ||
+    fail "rootless host namespace behavior must be qualified"
+grep -qF 'does not elevate access' docs/architecture.md ||
+    fail "rootless guest-root bind-mount permission limits must be documented"
+grep -qF 'VM smoke test against the actual rootless daemon is required' docs/architecture.md ||
+    fail "actual guest metrics must require a rootless VM smoke test"
+for readiness_check in \
+    devbox_rootless_context_is_selected devbox_rootless_docker_is_ready \
+    devbox_rootful_docker_is_denied chromium_launches_headlessly \
+    devbox_rootlesskit_apparmor_profile_is_ready; do
+    grep -q "$readiness_check" provision/scripts/verify.sh ||
+        fail "guest readiness check is missing: $readiness_check"
+done
+if grep -R -nE \
+    'kernel\.apparmor_restrict_unprivileged_userns[[:space:]]*=[[:space:]]*0|sysctl[[:space:]].*apparmor_restrict_unprivileged_userns' \
+    provision/scripts; then
+    fail "RootlessKit provisioning must not disable AppArmor's user-namespace restriction"
+fi
+
+# Exercise Ubuntu's packaged RootlessKit profile loading without a VM or a
+# system AppArmor policy: only an enabled restriction should trigger the load.
+apparmor_unit_root="$validation_root/apparmor-unit"
+mkdir -p "$apparmor_unit_root/usr/bin" "$apparmor_unit_root/usr/local/bin"
+apparmor_setting="$apparmor_unit_root/restrict-userns"
+apparmor_profile="$apparmor_unit_root/rootlesskit-profile"
+apparmor_profiles="$apparmor_unit_root/loaded-profiles"
+apparmor_rootlesskit="$apparmor_unit_root/usr/bin/rootlesskit"
+apparmor_shadow="$apparmor_unit_root/usr/local/bin/rootlesskit"
+apparmor_error="$apparmor_unit_root/error"
+cat >"$apparmor_profile" <<'PROFILE'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile rootlesskit /usr/bin/rootlesskit flags=(unconfined) {
+  userns,
+  include if exists <local/rootlesskit>
+}
+PROFILE
+printf '#!/bin/sh\nexit 0\n' >"$apparmor_rootlesskit"
+printf '#!/bin/sh\nexit 0\n' >"$apparmor_shadow"
+chmod 755 "$apparmor_rootlesskit" "$apparmor_shadow"
+: >"$apparmor_profiles"
+(
+    source "$ROOT/provision/scripts/lib/docker.sh"
+    package_query_count=0
+    parser_call_count=0
+    dpkg-query() {
+        package_query_count=$((package_query_count + 1))
+        case "$1" in
+            -W) [ "$3" = apparmor ] && printf 'installed\n' ;;
+            -S) printf 'apparmor: %s\n' "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    apparmor_parser() {
+        [ "$1" = -r ] && [ "$2" = "$apparmor_profile" ] || return 1
+        parser_call_count=$((parser_call_count + 1))
+        printf 'rootlesskit (unconfined)\n' >>"$apparmor_profiles"
+    }
+
+    printf '0\n' >"$apparmor_setting"
+    devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" || exit 1
+    [ "$package_query_count" -eq 0 ] && [ "$parser_call_count" -eq 0 ] &&
+        [ ! -s "$apparmor_profiles" ] || exit 1
+
+    printf '1\n' >"$apparmor_setting"
+    devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" || exit 1
+    [ "$parser_call_count" -eq 1 ] || exit 1
+    grep -Fqx 'rootlesskit (unconfined)' "$apparmor_profiles" || exit 1
+    devbox_rootlesskit_apparmor_profile_is_ready \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" \
+        "$apparmor_rootlesskit" "$apparmor_rootlesskit" || exit 1
+    if [ "$(id -u)" -ne 0 ]; then
+        devbox_rootlesskit_apparmor_profile_is_ready \
+            "$apparmor_setting" "$apparmor_profile" "$apparmor_unit_root/unreadable-profiles" \
+            "$apparmor_rootlesskit" "$apparmor_rootlesskit" || exit 1
+    fi
+    devbox_rootlesskit_path_is_profiled "$apparmor_shadow" "$apparmor_rootlesskit" && exit 1
+
+    mv "$apparmor_profile" "$apparmor_profile.saved"
+    if devbox_prepare_rootlesskit_apparmor_profile \
+        "$apparmor_setting" "$apparmor_profile" "$apparmor_profiles" 2>"$apparmor_error"; then
+        exit 1
+    fi
+    grep -q "Ubuntu's packaged RootlessKit AppArmor profile is unavailable" \
+        "$apparmor_error" || exit 1
+) || fail "RootlessKit AppArmor profile checks failed"
 
 # The managed .zshenv block precedes, and preserves, existing user settings.
 zshenv_unit_root="$validation_root/zshenv-unit"
