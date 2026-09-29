@@ -105,7 +105,8 @@ Direct `docker` commands run as `devbox` use its rootless daemon at
 have separate data and permissions. Provisioning installs only the
 `docker-ce-rootless-extras` package matching the Engine Colima already
 installed, from the already-configured APT source; it never adds a repository
-or changes the rootful Engine. `useradd` allocates the account's 65,536
+or changes the rootful Engine. Rootless host networking requires Engine version **29.5 or newer**.
+`useradd` allocates the account's 65,536
 subordinate UIDs/GIDs, which provisioning verifies. When Ubuntu restricts
 unprivileged user namespaces, provisioning loads Ubuntu's packaged RootlessKit
 AppArmor profile rather than relaxing the restriction. The login shell defaults
@@ -123,6 +124,14 @@ use its bundled browser with `env -u PUPPETEER_EXECUTABLE_PATH npm test` (also
 use that form for the project's install command if it needs to download the
 bundled browser). `PUPPETEER_SKIP_DOWNLOAD` is never set globally and remains a
 project-scoped install choice for projects using a system browser.
+
+### Finsights host metrics
+
+For Finsights, use a read-only `/:/host:ro,rslave` mount for the guest root and
+keep Node Exporter at its least-privilege defaults. The read-only mount does not elevate access.
+Rootless host namespace behavior can depend on the Engine server version and rootless runtime.
+A VM smoke test against the actual rootless daemon is required before relying on
+guest metrics.
 
 ## Guest companion
 
