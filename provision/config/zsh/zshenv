@@ -4,5 +4,12 @@
 unset DOCKER_CONTEXT DOCKER_TLS DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
 
+# Devbox pins and updates Claude Code during provisioning; prevent its
+# background updater from replacing the npm-installed native binary. Keep
+# explicit `claude update` working with npm 12's script and optional-dep rules.
+export DISABLE_AUTOUPDATER=1
+export NPM_CONFIG_ALLOW_SCRIPTS="@anthropic-ai/claude-code"
+export NPM_CONFIG_INCLUDE=optional
+
 # Use Ubuntu's native ARM64 Chromium unless the user/project selected a browser.
 export PUPPETEER_EXECUTABLE_PATH="${PUPPETEER_EXECUTABLE_PATH:-/snap/bin/chromium}"
