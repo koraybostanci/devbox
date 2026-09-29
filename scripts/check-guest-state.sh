@@ -155,19 +155,54 @@ if [ -z "$path" ]; then
     exit 0
 fi
 case "$field:$path" in
-    TARGET:"$DEVBOX_DATA_ROOT/devbox-home") printf '%s\n' "$DEVBOX_DATA_ROOT" ;;
-    TARGET:"$DEVBOX_GUEST_HOME") printf '%s\n' "$DEVBOX_GUEST_HOME" ;;
+    TARGET:"$DEVBOX_DATA_ROOT") printf '%s\n' "$DEVBOX_DATA_ROOT" ;;
+    TARGET:"$DEVBOX_DATA_ROOT/devbox-home")
+        if [ "${DEVBOX_TARGET_IS_MOUNT:-false}" = true ]; then
+            printf '%s\n' "$DEVBOX_DATA_ROOT/devbox-home"
+        else
+            printf '%s\n' "$DEVBOX_DATA_ROOT"
+        fi
+        ;;
+    TARGET:"$DEVBOX_GUEST_HOME")
+        if [ "${DEVBOX_STACKED_HOME:-false}" = true ]; then
+            printf '%s\n%s\n' "$DEVBOX_GUEST_HOME" "$DEVBOX_GUEST_HOME"
+        else
+            printf '%s\n' "$DEVBOX_GUEST_HOME"
+        fi
+        ;;
     FSTYPE:*) printf 'ext4\n' ;;
-    SOURCE:"$DEVBOX_DATA_ROOT/devbox-home") printf '/dev/vdb\n' ;;
+    SOURCE:"$DEVBOX_DATA_ROOT") printf '/dev/vdb\n' ;;
+    SOURCE:"$DEVBOX_DATA_ROOT/devbox-home")
+        if [ "${DEVBOX_TARGET_IS_MOUNT:-false}" = true ]; then
+            printf '/dev/vdb[/devbox-home]\n'
+        else
+            printf '/dev/vdb\n'
+        fi
+        ;;
     SOURCE:"$DEVBOX_GUEST_HOME")
         if [ "${DEVBOX_BAD_HOME_SOURCE:-false}" = true ]; then
             printf '/dev/vdc[/devbox-home]\n'
+        elif [ "${DEVBOX_STACKED_HOME:-false}" = true ]; then
+            printf '/dev/vda1[/mnt/lima-colima-devbox/devbox-home]\n/dev/vdb[/devbox-home]\n'
         else
             printf '/dev/vdb[/devbox-home]\n'
         fi
         ;;
-    FSROOT:"$DEVBOX_DATA_ROOT/devbox-home") printf '/\n' ;;
-    FSROOT:"$DEVBOX_GUEST_HOME") printf '%s\n' "${DEVBOX_HOME_FSROOT:-/devbox-home}" ;;
+    FSROOT:"$DEVBOX_DATA_ROOT") printf '/\n' ;;
+    FSROOT:"$DEVBOX_DATA_ROOT/devbox-home")
+        if [ "${DEVBOX_TARGET_IS_MOUNT:-false}" = true ]; then
+            printf '/devbox-home\n'
+        else
+            printf '/\n'
+        fi
+        ;;
+    FSROOT:"$DEVBOX_GUEST_HOME")
+        if [ "${DEVBOX_STACKED_HOME:-false}" = true ]; then
+            printf '/mnt/lima-colima-devbox/devbox-home\n/devbox-home\n'
+        else
+            printf '%s\n' "${DEVBOX_HOME_FSROOT:-/devbox-home}"
+        fi
+        ;;
     *) exit 1 ;;
 esac
 EOF
@@ -181,6 +216,14 @@ PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/d
     devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
         "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
 ' || fail "Lima data-disk home readiness check rejected the intended mount"
+PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
+    DEVBOX_GUEST_HOME="$mount_fixture/home" DEVBOX_STACKED_HOME=true \
+    DEVBOX_TARGET_IS_MOUNT=true /bin/bash -c '
+    set -Eeuo pipefail
+    source "$ROOT/provision/scripts/lib/state.sh"
+    devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
+        "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
+' || fail "Lima data-disk home readiness rejected the visible mount in a stacked mount table"
 if PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
     DEVBOX_GUEST_HOME="$mount_fixture/home" DEVBOX_HOME_FSROOT=/ /bin/bash -c '
     source "$ROOT/provision/scripts/lib/state.sh"
