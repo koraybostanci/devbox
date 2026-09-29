@@ -25,7 +25,3 @@ atomic_copy() {
     chmod "$mode" "$temporary"
     mv "$temporary" "$destination"
 }
-
-version_equals() {
-    [ "$1" = "$2" ]
-}

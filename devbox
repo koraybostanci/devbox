@@ -13,10 +13,8 @@ while [ -L "$DEVBOX_SCRIPT" ]; do
     esac
 done
 DEVBOX_SCRIPT="$(cd -P "$(dirname "$DEVBOX_SCRIPT")" && pwd)/$(basename "$DEVBOX_SCRIPT")"
-BOOTSTRAP_DIR="$(dirname "$DEVBOX_SCRIPT")"
-source "$BOOTSTRAP_DIR/lib/common.sh"
-
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
+source "$DEVBOX_DIR/lib/common.sh"
 source "$DEVBOX_DIR/lib/config.sh"
 source "$DEVBOX_DIR/lib/devbox.sh"
 
@@ -75,16 +73,8 @@ case "$cmd" in
         ;;
     version)
         [ $# -eq 0 ] || die "Usage: devbox version"
-        version_file="$DEVBOX_DIR/VERSION"
-        if [ -f "$version_file" ]; then
-            version="$(cat "$version_file")"
-            version="${version#"${version%%[![:space:]]*}"}"
-            version="${version%"${version##*[![:space:]]}"}"
-            printf '%s\n' "$version"
-        else
-            version="$(git -C "$DEVBOX_DIR" describe --tags --always --dirty 2>/dev/null || true)"
-            printf '%s\n' "${version:-unknown}"
-        fi
+        read -r version <"$DEVBOX_DIR/VERSION" || [ -n "$version" ]
+        printf '%s\n' "$version"
         ;;
     init)
         [ $# -eq 0 ] || die "Usage: devbox init"

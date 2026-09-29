@@ -18,23 +18,19 @@ install_opencode() {
 
     stage "OpenCode $OPENCODE_VERSION"
     if command -v opencode >/dev/null 2>&1 &&
-        version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"; then
+        [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]; then
         return
     fi
 
-    npm uninstall --global --silent opencode-ai >/dev/null 2>&1 || true
     archive="$(mktemp)"
     directory="$(mktemp -d)"
-    curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+    download_verified \
         "https://opencode.ai/files/bin/$OPENCODE_VERSION/opencode-linux-arm64.tar.gz" \
-        -o "$archive"
-    printf '%s  %s\n' "$OPENCODE_SHA256" "$archive" | sha256sum -c -
+        "$OPENCODE_SHA256" "$archive"
     tar -xzf "$archive" -C "$directory"
-    [ -f "$directory/opencode" ]
-    mkdir -p "$HOME/.local/bin"
     install -m 755 "$directory/opencode" "$HOME/.local/bin/opencode"
     rm -rf "$archive" "$directory"
-    version_equals "$(opencode --version | sed 's/^opencode v//')" "$OPENCODE_VERSION"
+    [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]
 }
 
 # Runs as root from system.sh; the unprivileged tools.sh run cannot write
@@ -58,7 +54,6 @@ install_databricks() {
 install_yq() {
     local archive
     stage "yq $YQ_VERSION"
-    mkdir -p "$HOME/.local/bin"
     archive="$(mktemp)"
     download_verified \
         "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_arm64" \
@@ -82,7 +77,6 @@ install_shell_sources() {
 }
 
 install_apps() {
-    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
     install_claude
     install_opencode
     install_yq
