@@ -156,6 +156,12 @@ grep -qF 'snap install chromium --channel=stable' provision/scripts/system.sh ||
     fail "system provisioning must install actual Ubuntu Chromium from the stable snap"
 grep -qF 'devbox_configure_rootless_docker' provision/scripts/tools.sh ||
     fail "the unprivileged tools phase must configure rootless Docker"
+grep -qF 'cd "$package_root" && node install.cjs' provision/scripts/lib/apps.sh ||
+    fail "Claude Code provisioning must run its installer script"
+grep -qE '^[[:space:]]+vim$' provision/scripts/system.sh ||
+    fail "system provisioning must install the Vim command-line editor"
+grep -qF 'export EDITOR=vim' provision/config/zsh/zshrc ||
+    fail "the guest shell must default to Vim for command-line editing"
 grep -qE '^[[:space:]]+apparmor$' provision/scripts/system.sh ||
     fail "system provisioning must install Ubuntu's AppArmor package"
 grep -qF 'version **29.5 or newer**' docs/architecture.md ||

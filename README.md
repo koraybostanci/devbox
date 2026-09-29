@@ -40,11 +40,14 @@ from the checkout. `devbox uninstall` removes the symlink.
 ### What's provisioned
 
 Node.js and npm (via nvm), Python and pyenv, uv, Go, Rust, Java 21, Claude
-Code, OpenCode, the Databricks CLI, `yq`, `gh`, `jq`, and zsh with oh-my-zsh.
+Code, OpenCode, the Databricks CLI, `yq`, `gh`, `jq`, Vim, and zsh with oh-my-zsh.
 [`provision/versions.env`](provision/versions.env) is the source of truth for
 pinned versions; `gh`, `jq`, rootless Docker prerequisites, and snapd come from
 Ubuntu packages. The guest also has a per-user rootless Docker daemon and native
 ARM64 Chromium from Ubuntu's stable snap.
+
+Use `vim <file>` to edit files in the guest terminal; `$EDITOR` and `$VISUAL`
+are set to `vim` by default.
 
 ### Configuration
 

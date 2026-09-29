@@ -225,6 +225,7 @@ packages=(
     tk-dev
     uidmap
     unzip
+    vim
     wget
     xz-utils
     zip

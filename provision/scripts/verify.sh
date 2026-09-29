@@ -140,7 +140,7 @@ zsh -lic '
         fi
     }
 
-    for binary in git gh zsh pyenv jq; do
+    for binary in git gh zsh pyenv jq vim; do
         tool_check "$binary is available" command -v "$binary"
     done
     tool_check "Node.js version" test "$(node --version 2>/dev/null)" = "v$NODE_VERSION"
