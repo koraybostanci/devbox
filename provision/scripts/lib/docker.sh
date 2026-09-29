@@ -41,6 +41,17 @@ devbox_has_subid_ranges() {
     done
 }
 
+# Load Ubuntu's packaged RootlessKit AppArmor profile only when unprivileged
+# user namespaces are restricted. Never change the kernel restriction.
+devbox_prepare_rootlesskit_apparmor_profile() {
+    local setting_file="${1:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}"
+    local profile_file="${2:-/etc/apparmor.d/rootlesskit}"
+
+    if [ "$(cat "$setting_file" 2>/dev/null)" = 1 ]; then
+        apparmor_parser -r "$profile_file"
+    fi
+}
+
 # Root phase. Install the rootless extras matching Colima's Engine from its
 # already-configured APT source, without changing the rootful Engine.
 devbox_prepare_rootless_docker() {
@@ -63,11 +74,8 @@ devbox_prepare_rootless_docker() {
         return 1
     }
 
-    # Ubuntu restricts unprivileged user namespaces; its packaged profile grants
-    # them to /usr/bin/rootlesskit only. Load it rather than relaxing the sysctl.
-    if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
-        apparmor_parser -r /etc/apparmor.d/rootlesskit
-    fi
+    # The packaged profile grants user namespaces to /usr/bin/rootlesskit only.
+    devbox_prepare_rootlesskit_apparmor_profile || return 1
 
     devbox_has_subid_ranges devbox || {
         devbox_docker_error 'devbox has no subordinate UID/GID range of 65,536 IDs from 100000; recreate the VM'
