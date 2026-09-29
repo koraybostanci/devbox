@@ -140,34 +140,65 @@ devbox_lima_data_root() {
         awk 'index($0, "/mnt/lima-") == 1 { print; exit }'
 }
 
+# findmnt can report multiple entries for a path when mounts are stacked. The
+# last entry is the visible mount and is the one the home check must validate.
+devbox_findmnt_visible() {
+    local field="$1" path="$2" output
+
+    output="$(findmnt -n -o "$field" -T "$path" 2>/dev/null)" || return 1
+    [ -n "$output" ] || return 1
+    printf '%s\n' "$output" | awk 'NF { value = $0 } END { if (value != "") print value; else exit 1 }'
+}
+
 # Confirm that the guest home is the expected bind mount into Lima's ext4 data
 # disk, not merely a directory that happens to exist on the fixed-size root.
 devbox_home_is_on_lima_data_disk() {
     local guest_home="$1" target="$2" data_root="$3"
-    local data_target home_target data_source home_source data_device home_device
-    local data_fsroot home_fsroot expected_fsroot
+    local data_root_target data_target home_target data_root_source data_source home_source
+    local data_root_device data_device home_device data_root_fsroot data_fsroot home_fsroot expected_fsroot
 
     [ "$target" = "$data_root/devbox-home" ] || return 1
     [ -d "$guest_home" ] && [ ! -L "$guest_home" ] || return 1
     [ -d "$target" ] && [ ! -L "$target" ] || return 1
-    data_target="$(findmnt -n -o TARGET -T "$target" 2>/dev/null)" || return 1
-    [ "$data_target" = "$data_root" ] || return 1
-    [ "$(findmnt -n -o FSTYPE -T "$target" 2>/dev/null)" = ext4 ] || return 1
-    home_target="$(findmnt -n -o TARGET -T "$guest_home" 2>/dev/null)" || return 1
-    [ "$home_target" = "$guest_home" ] || return 1
 
-    data_source="$(findmnt -n -o SOURCE -T "$target" 2>/dev/null)" || return 1
-    home_source="$(findmnt -n -o SOURCE -T "$guest_home" 2>/dev/null)" || return 1
+    data_root_target="$(devbox_findmnt_visible TARGET "$data_root")" || return 1
+    [ "$data_root_target" = "$data_root" ] || return 1
+    [ "$(devbox_findmnt_visible FSTYPE "$data_root")" = ext4 ] || return 1
+    data_root_source="$(devbox_findmnt_visible SOURCE "$data_root")" || return 1
+    data_root_device="${data_root_source%%\[*}"
+    [ -n "$data_root_device" ] || return 1
+    data_root_fsroot="$(devbox_findmnt_visible FSROOT "$data_root")" || return 1
+
+    data_target="$(devbox_findmnt_visible TARGET "$target")" || return 1
+    case "$data_target" in
+        "$data_root" | "$target") ;;
+        *) return 1 ;;
+    esac
+    [ "$(devbox_findmnt_visible FSTYPE "$target")" = ext4 ] || return 1
+    data_source="$(devbox_findmnt_visible SOURCE "$target")" || return 1
     data_device="${data_source%%\[*}"
-    home_device="${home_source%%\[*}"
-    [ -n "$data_device" ] && [ "$home_device" = "$data_device" ] || return 1
+    [ "$data_device" = "$data_root_device" ] || return 1
+    data_fsroot="$(devbox_findmnt_visible FSROOT "$target")" || return 1
 
-    data_fsroot="$(findmnt -n -o FSROOT -T "$target" 2>/dev/null)" || return 1
-    home_fsroot="$(findmnt -n -o FSROOT -T "$guest_home" 2>/dev/null)" || return 1
-    if [ "$data_fsroot" = / ]; then
+    if [ "$data_root_fsroot" = / ]; then
         expected_fsroot=/devbox-home
     else
-        expected_fsroot="${data_fsroot%/}/devbox-home"
+        expected_fsroot="${data_root_fsroot%/}/devbox-home"
     fi
+    if [ "$data_target" = "$target" ]; then
+        [ "$data_fsroot" = "$expected_fsroot" ] || return 1
+        expected_fsroot="$data_fsroot"
+    else
+        [ "$data_fsroot" = "$data_root_fsroot" ] || return 1
+    fi
+
+    home_target="$(devbox_findmnt_visible TARGET "$guest_home")" || return 1
+    [ "$home_target" = "$guest_home" ] || return 1
+
+    home_source="$(devbox_findmnt_visible SOURCE "$guest_home")" || return 1
+    home_device="${home_source%%\[*}"
+    [ "$home_device" = "$data_device" ] || return 1
+
+    home_fsroot="$(devbox_findmnt_visible FSROOT "$guest_home")" || return 1
     [ "$home_fsroot" = "$expected_fsroot" ]
 }
