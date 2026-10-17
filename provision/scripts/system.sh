@@ -147,10 +147,3 @@ devbox_prepare_rootless_docker
 install_guest_chromium
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox
-
-# Root-only tools run from this root phase; the unprivileged tools phase cannot
-# write /usr/local/bin.
-set -a
-source "$DEVBOX_PROVISION_ROOT/versions.env"
-set +a
-install_databricks

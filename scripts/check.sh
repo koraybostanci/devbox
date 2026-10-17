@@ -174,7 +174,7 @@ fi
 # Every downloaded installer or artifact must carry a SHA-256 pin; a malformed
 # value would disable checksum verification inside the guest.
 for pin in GO_SHA256 NVM_INSTALL_SHA256 PYENV_INSTALLER_SHA256 UV_INSTALL_SHA256 \
-    OPENCODE_SHA256 DATABRICKS_INSTALL_SHA256 YQ_SHA256 OH_MY_ZSH_INSTALL_SHA256; do
+    OPENCODE_SHA256 DATABRICKS_CLI_SHA256 YQ_SHA256 OH_MY_ZSH_INSTALL_SHA256; do
     pin_value="$(awk -F= -v key="$pin" '$1 == key { gsub(/"/, "", $2); print $2 }' provision/versions.env)"
     [[ "$pin_value" =~ ^[0-9a-f]{64}$ ]] ||
         fail "provision/versions.env: $pin must be a SHA-256"

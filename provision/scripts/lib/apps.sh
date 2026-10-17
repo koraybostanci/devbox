@@ -36,21 +36,20 @@ install_opencode() {
     [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]
 }
 
-# Runs as root from system.sh; the unprivileged tools.sh run cannot write
-# /usr/local/bin.
+# Installs direct from the pinned release zip, unprivileged, into the user's
+# PATH; no upstream installer script is involved.
 install_databricks() {
-    local installer
+    local directory
     stage "Databricks CLI $DATABRICKS_VERSION"
     if command -v databricks >/dev/null 2>&1 && databricks version | grep -qF "v$DATABRICKS_VERSION"; then
         return
     fi
-    installer="$(mktemp)"
-    download_verified \
-        "https://raw.githubusercontent.com/databricks/setup-cli/v$DATABRICKS_VERSION/install.sh" \
-        "$DATABRICKS_INSTALL_SHA256" "$installer"
-    rm -f /usr/local/bin/databricks
-    sh "$installer"
-    rm -f "$installer"
+    directory="$(mktemp -d)"
+    run_pinned_installer \
+        "https://github.com/databricks/cli/releases/download/v$DATABRICKS_VERSION/databricks_cli_${DATABRICKS_VERSION}_linux_arm64.zip" \
+        "$DATABRICKS_CLI_SHA256" unzip -q -d "$directory"
+    install -m 755 "$directory/databricks" "$HOME/.local/bin/databricks"
+    rm -rf "$directory"
     databricks version | grep -qF "v$DATABRICKS_VERSION"
 }
 
@@ -83,5 +82,6 @@ install_apps() {
     install_claude
     install_opencode
     install_yq
+    install_databricks
     install_shell_sources
 }
