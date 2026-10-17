@@ -113,9 +113,8 @@ check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
 check "OpenCode v2 config" test -f "$HOME/.config/opencode/opencode.jsonc"
 check "OpenCode global guidance" test -f "$HOME/.config/opencode/AGENTS.md"
-check "OpenCode loop agents" test -f "$HOME/.config/opencode/agents/loop-implementer.md" -a \
-    -f "$HOME/.config/opencode/agents/loop-reviewer.md" -a \
-    -f "$HOME/.config/opencode/agents/loop-reviewer-deep.md"
+check "OpenCode multiphase skill" test -f "$HOME/.config/opencode/skills/multiphase/SKILL.md"
+check "OpenCode multiphase command" test -f "$HOME/.config/opencode/commands/multiphase.md"
 
 tool_failures=0
 zsh -lic '
