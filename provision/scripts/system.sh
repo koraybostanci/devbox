@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Sources resolve at runtime from $DEVBOX_PROVISION_ROOT, a root-owned bundled
+# tree that is not statically followable. This file-wide disable must stay
+# before the first command to have effect.
+# shellcheck disable=SC1091
+
 set -Eeuo pipefail
 trap 'printf "ERROR: system provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
@@ -17,6 +22,9 @@ relocate_guest_home() {
     local home=/home/devbox data_root target fstab_entry temporary
 
     data_root="$(devbox_lima_data_root)" || data_root=""
+    # `|| { ... }` is the intended failure branch: it only runs when the data
+    # root is missing or is not a mountpoint.
+    # shellcheck disable=SC2015
     [ -n "$data_root" ] && mountpoint -q "$data_root" || {
         printf 'ERROR: Lima ext4 data disk not found; refusing to leave /home/devbox on the root disk\n' >&2
         return 1

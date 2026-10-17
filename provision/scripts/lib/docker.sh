@@ -90,7 +90,9 @@ devbox_prepare_rootless_docker() {
 # Unprivileged tools phase, run as devbox. The rootful daemon stays enabled for
 # root-managed services; --force permits a second, per-user systemd service.
 devbox_configure_rootless_docker() {
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    # Split so a failed `id -u` cannot mask the export's return value.
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
     export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
     env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH \
         /usr/bin/dockerd-rootless-setuptool.sh install --force

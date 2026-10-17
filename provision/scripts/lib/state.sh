@@ -3,10 +3,12 @@
 
 # devbox_path_is_safe <f|d> PATH OWNER GROUP MODE: a regular file or directory,
 # never a symlink, with exactly this ownership and mode.
+# The test operator is built from the `<f|d>` contract; shellcheck cannot
+# parse the concatenation inside `[`, so `test` receives it as one word.
 devbox_path_is_safe() {
     local type="$1" path="$2" metadata
 
-    [ ! -L "$path" ] && [ -"$type" "$path" ] || return 1
+    [ ! -L "$path" ] && test "-$type" "$path" || return 1
     if [ "$(uname -s)" = Darwin ]; then
         metadata="$(stat -f '%Su %Sg %Lp' "$path")" || return 1
     else
@@ -93,6 +95,10 @@ devbox_random_secret() {
 # the first provision only, after the allowlisted parser accepts it.
 devbox_seed_guest_state() {
     local directory="$1" config="$1/config" secrets="$1/secrets" owner group temporary
+    # The allowlisted keys captured by devbox_parse_state_file are locked to
+    # this function's scope; they are set through `printf -v`, never read
+    # here directly.
+    # shellcheck disable=SC2034
     local POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
 
     owner="$(id -un)"
@@ -104,6 +110,9 @@ devbox_seed_guest_state() {
 
     if [ -e "$config" ] || [ -L "$config" ]; then
         devbox_path_is_safe f "$config" "$owner" "$group" 600 || return 1
+        # devbox_parse_state_file only consumes stdin; the second "$config" is
+        # the error-label wording printed by the parser, never a write.
+        # shellcheck disable=SC2094
         devbox_parse_state_file "$config" config <"$config" || return 1
         devbox_state_config_is_complete || {
             printf 'ERROR: existing guest config is incomplete; refusing to overwrite: %s\n' \
@@ -124,6 +133,9 @@ devbox_seed_guest_state() {
 
     if [ -e "$secrets" ] || [ -L "$secrets" ]; then
         devbox_path_is_safe f "$secrets" "$owner" "$group" 600 || return 1
+        # Same as the config parse: stdin-only consumption, "$secrets" is the
+        # parser's error label.
+        # shellcheck disable=SC2094
         devbox_parse_state_file "$secrets" secrets <"$secrets" || return 1
     fi
     if [ -z "${POSTGRES_PASSWORD:-}" ] || [ -z "${VALKEY_PASSWORD:-}" ]; then

@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# The grep patterns below are intentionally literal and the `A && B || C`
+# forms end in fail()/diagnosis blocks that always exit, so both info findings
+# are declared once instead of suppressing them per line.
+# This file-wide disable must stay before the first command to have effect.
+# shellcheck disable=SC2016,SC2015
+
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,6 +36,19 @@ while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
 done < <(find . \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/config/guest/devbox \) -print | sort)
 bash -n "${shell_files[@]}"
+
+# --- shellcheck ---------------------------------------------------------------
+# bash -n only proves parseability; linting the same list also rejects
+# unquoted-expansion- and capture-into-`[[`-class bugs that parse cleanly.
+# Suppression is allowed only through # shellcheck directives in the files.
+if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck "${shell_files[@]}"
+else
+    printf 'Warning: shellcheck is unavailable; skipping shell lint\n' >&2
+    if [ -n "${CI:-}" ]; then
+        fail "shellcheck is required in CI"
+    fi
+fi
 
 # The host runs macOS /bin/bash 3.2; keep bash 4+ constructs out of host code.
 if grep -nE 'mapfile|readarray|coproc|(declare|local|typeset) -[gAn]|\$\{[A-Za-z_]+(,,|\^\^|@[QEPAa])|;;&|;&|\[\[ -v ' devbox lib/*.sh; then

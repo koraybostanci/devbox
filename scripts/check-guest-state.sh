@@ -1,5 +1,9 @@
 #!/bin/bash
 # Sourced by check.sh after ROOT, validation_root, fail, and file_mode are set.
+# Sourced-fixture model: `validation_root` and the helper functions exist only
+# in check.sh, and the `|| fail` chains below always exit through fail(), so
+# both info findings are declared once instead of suppressing them per line.
+# shellcheck disable=SC2016,SC2154
 
 # Root state handling reads guest-writable config and secrets strictly as data.
 if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*\$(config|secrets)' provision/scripts/state.sh; then
@@ -245,6 +249,10 @@ no_data_stub="$validation_root/no-data-bin"
 mkdir -p "$no_data_stub"
 printf '#!/bin/bash\nexit 0\n' >"$no_data_stub/findmnt"
 chmod +x "$no_data_stub/findmnt"
+# `ROOT="$ROOT"` re-asserts the exported checkout root; the expansions still
+# happen in this shell before /bin/bash is forked, so the tool's note does not
+# apply.
+# shellcheck disable=SC2097,SC2098
 if PATH="$no_data_stub:/usr/bin:/bin" DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" \
     /bin/bash -c 'source "$ROOT/provision/scripts/system.sh"; relocate_guest_home' \
     >"$validation_root/no-data.out" 2>&1; then

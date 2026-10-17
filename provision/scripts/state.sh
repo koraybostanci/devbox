@@ -16,6 +16,9 @@ trap 'printf "ERROR: devbox state setup failed at line %s\n" "$LINENO" >&2' ERR
 cd /
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
+# The root read helper resolves within the staged provisioning tree, which is
+# not a statically followable path.
+# shellcheck disable=SC1091
 source "$DEVBOX_PROVISION_ROOT/scripts/lib/state.sh"
 
 directory=/home/devbox/.config/devbox
@@ -38,6 +41,9 @@ read_guest_state() {
 }
 
 unset POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+# The `|| { ... }` is the intended failure branch: it only runs when the guest
+# config is missing or an incomplete, never when the read succeeds.
+# shellcheck disable=SC2015
 read_guest_state config && devbox_state_config_is_complete || {
     printf 'ERROR: guest config is invalid or missing required PostgreSQL settings\n' >&2
     exit 1

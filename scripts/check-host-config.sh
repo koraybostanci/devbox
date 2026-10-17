@@ -1,6 +1,10 @@
 #!/bin/bash
 # Sourced by check.sh after ROOT, validation_root, fail, file_mode, and the
 # env_case helpers are set.
+# Sourced-fixture model: `validation_root` and the env_case helpers exist only
+# in check.sh, and the rejection patterns below are intentionally literal, so
+# both findings are declared once instead of suppressing them per line.
+# shellcheck disable=SC2016,SC2154
 
 # Host .env values are validated before they reach Colima or the guest.
 for value in 0 65536 999999; do

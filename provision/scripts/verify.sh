@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Sources resolve at runtime from $DEVBOX_PROVISION_ROOT and /var/lib/devbox,
+# never statically followable paths. This file-wide disable must stay before
+# the first command to have effect.
+# shellcheck disable=SC1091
+
 set -Eeuo pipefail
 
 export DEVBOX_PROVISION_ROOT="${DEVBOX_PROVISION_ROOT:-/var/lib/devbox/provision}"
@@ -66,10 +71,14 @@ guest_home_uses_lima_data_disk() {
 
 check "devbox guest config permissions" devbox_path_is_safe f "$HOME/.config/devbox/config" devbox devbox 600
 check "devbox guest secrets permissions" devbox_path_is_safe f "$HOME/.config/devbox/secrets" devbox devbox 600
+# The bash -c payloads below run inside the guest and are intentionally
+# single-quoted so nothing expands on the devbox side.
+# shellcheck disable=SC2016
 check "devbox root provisioning directory is root-owned" bash -c '
     [ -d /var/lib/devbox ] && [ ! -L /var/lib/devbox ] &&
         [ "$(stat -c "%U" /var/lib/devbox)" = root ]
 '
+# shellcheck disable=SC2016
 check "devbox provisioning input is root-owned, readable, and read-only" bash -c '
     [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] &&
         [ "$(stat -c "%U" "$DEVBOX_PROVISION_ROOT")" = root ] &&
@@ -102,6 +111,7 @@ check "Ubuntu Chromium launches headlessly" chromium_launches_headlessly
 # Services are staged during provisioning but stay stopped until the user runs
 # `devbox services start`. This check runs as the devbox user, so it can only
 # assert the directory's ownership and mode.
+# shellcheck disable=SC2016
 check "devbox services root is root-owned and closed" bash -c '
     [ -d /var/lib/devbox/services ] && [ ! -L /var/lib/devbox/services ] &&
         [ "$(stat -c "%U" /var/lib/devbox/services)" = root ] &&

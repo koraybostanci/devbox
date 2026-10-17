@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Constant consumed by lib/devbox.sh after the launcher sources both files.
+# shellcheck disable=SC2034
 MINIMUM_COLIMA_VERSION="0.10.3"
 ENV_KEYS=(
     GIT_NAME
@@ -241,6 +243,9 @@ write_env_file() {
         chmod 700 "$config_root"
     fi
     temporary="$(mktemp "$config_root/.env.XXXXXX")"
+    # The fresh mktemp target is only written here and never read back within
+    # this block, so this is not a read-write pipeline.
+    # shellcheck disable=SC2094
     {
         printf "# devbox configuration - edit this file and run 'devbox init' again.\n"
         printf "# Service secrets are generated inside the guest and never live here.\n"

@@ -59,6 +59,8 @@ sync_managed_zshenv() {
     local source_file="$1" target="$2" link mode=644 temporary depth
     local begin='# >>> devbox managed zshenv >>>' end='# <<< devbox managed zshenv <<<'
 
+    # depth only counts symlink hops; the 8-hop cap is the loop's literal list.
+    # shellcheck disable=SC2034
     for depth in 1 2 3 4 5 6 7 8; do
         [ -L "$target" ] || break
         link="$(readlink "$target")"

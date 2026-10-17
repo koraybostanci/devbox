@@ -22,6 +22,9 @@ configure_devbox_paths() {
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
     DEVBOX_DOCKER_CONFIG="$HOME/.config/devbox/docker"
+    # Default consumed by lib/common.sh's acquire_lock; the gate overrides it
+    # through the environment for its lock unit test.
+    # shellcheck disable=SC2034
     DEVBOX_LOCK_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devbox/locks"
 }
 
@@ -128,6 +131,8 @@ devbox_guest_interactive() {
     ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
 }
 
+# The payload is single-quoted so it is expanded inside the guest, not here.
+# shellcheck disable=SC2016
 devbox_as_guest() {
     devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" -- env HOME="$DEVBOX_GUEST_HOME" \
         bash -c 'cd -- "$HOME" && exec "$@"' _ "$@"
@@ -173,7 +178,7 @@ devbox_bundle_digest() {
     local provision_root="$1"
 
     (
-        cd "$provision_root"
+        cd "$provision_root" || exit
         find . -type f ! -path './.devbox-bundle.sha256' -print | LC_ALL=C sort | while IFS= read -r path; do
             printf '%s\t%s\n' "${path#./}" "$(shasum -a 256 "$path" | awk '{print $1}')"
         done | shasum -a 256 | awk '{print $1}'
@@ -181,7 +186,8 @@ devbox_bundle_digest() {
 }
 
 # The guest-side equivalent of devbox_bundle_digest, prepended to the remote
-# payloads below.
+# payloads below. Single-quoted: every expansion happens inside the guest.
+# shellcheck disable=SC2016
 DEVBOX_GUEST_BUNDLE_DIGEST='
 bundle_digest() (
     cd "$1"
@@ -204,7 +210,9 @@ create_devbox_bundle_archive() {
 # Stream the provisioning tree to the guest and install it as the single
 # root-owned, read-only input at /var/lib/devbox/provision. The digest is
 # re-computed inside the guest before anything is executed, so a tree that
-# changed after hashing fails closed.
+# changed after hashing fails closed. The payload stays single-quoted so it is
+# expanded inside the guest, not here.
+# shellcheck disable=SC2016
 stream_devbox_bundle() {
     local digest="$1" archive="$2"
 
@@ -241,7 +249,9 @@ stream_devbox_bundle() {
 }
 
 # Re-verify the installed provisioning tree against its digest, so a matching
-# marker never skips over a corrupted or tampered tree.
+# marker never skips over a corrupted or tampered tree. The payload stays
+# single-quoted so it is expanded inside the guest, not here.
+# shellcheck disable=SC2016
 devbox_guest_bundle_is_valid() {
     local digest="$1"
 
@@ -286,7 +296,9 @@ run_devbox_guest_provisioning() {
     log "Provisioning devbox guest tools from bundle $digest..."
     devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/system.sh" || return
     stage_devbox_guest_state || return
-    # verify.sh records the digest marker once every check passes.
+    # verify.sh records the digest marker once every check passes. The payload
+    # below is single-quoted so it is expanded inside the guest, not here.
+    # shellcheck disable=SC2016
     devbox_as_guest env DEVBOX_BUNDLE_DIGEST="$digest" bash -c '
         set -Eeuo pipefail
         bash "$1/tools.sh"
@@ -310,6 +322,9 @@ devbox_identity_file() {
             exit
         }
     ' "$colima_config")"
+    # Lima quotes the identity path; the leading ~ is a literal prefix that is
+    # stripped string-wise and replaced with $HOME, never expanded as a tilde.
+    # shellcheck disable=SC2088
     case "$identity_file" in
         "~/"*) identity_file="$HOME/${identity_file#\~/}" ;;
     esac
@@ -381,7 +396,8 @@ provision_devbox_guest() (
     local mode="$1" work digest
 
     work="$(mktemp -d "${TMPDIR:-/tmp}/devbox.XXXXXX")"
-    trap "command rm -rf '$work'" EXIT
+    # `$work` is final at this point, so expanding it into the trap is safe.
+    trap 'command rm -rf "$work"' EXIT
     digest="$(devbox_bundle_digest "$DEVBOX_DIR/provision")"
     if [ "$mode" = start ] && [ "$(devbox_guest_provision_digest)" = "$digest" ] &&
         devbox_guest_bundle_is_valid "$digest"; then

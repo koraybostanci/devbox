@@ -10,6 +10,9 @@ install_node() {
         "$NVM_INSTALL_SHA256" "$installer"
     PROFILE=/dev/null bash "$installer"
     rm -f "$installer"
+    # nvm.sh is third-party code installed by the pinned installer above and
+    # only exists on the already-provisioned guest, so it cannot be followed.
+    # shellcheck disable=SC1091
     source "$NVM_DIR/nvm.sh"
     nvm install "$NODE_VERSION"
     nvm alias default "$NODE_VERSION"

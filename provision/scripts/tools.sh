@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Sources resolve at runtime from $DEVBOX_PROVISION_ROOT and the user config,
+# neither of which is a statically followable path. This file-wide disable
+# must stay before the first command to have effect.
+# shellcheck disable=SC1091
+
 set -Eeuo pipefail
 trap 'printf "ERROR: guest provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
