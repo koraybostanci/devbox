@@ -4,6 +4,10 @@ install_claude() {
     local package_root
 
     stage "Claude Code $CLAUDE_CODE_VERSION"
+    if command -v claude >/dev/null 2>&1 &&
+        ensure_installed bash -c "claude --version | grep -oF '$CLAUDE_CODE_VERSION'" "$CLAUDE_CODE_VERSION"; then
+        return
+    fi
     npm install --global --silent --include=optional \
         --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
@@ -21,7 +25,7 @@ install_opencode() {
 
     stage "OpenCode $OPENCODE_VERSION"
     if command -v opencode >/dev/null 2>&1 &&
-        [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]; then
+        ensure_installed bash -c 'opencode --version | sed "s/^opencode v//"' "$OPENCODE_VERSION"; then
         return
     fi
 
@@ -56,6 +60,10 @@ install_databricks() {
 install_yq() {
     local archive
     stage "yq $YQ_VERSION"
+    if command -v yq >/dev/null 2>&1 &&
+        ensure_installed bash -c "yq --version | awk '{print \$NF}'" "$YQ_VERSION"; then
+        return
+    fi
     archive="$(mktemp)"
     download_verified \
         "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_arm64" \

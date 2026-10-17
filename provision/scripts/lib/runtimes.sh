@@ -4,6 +4,19 @@ install_node() {
     local installer
     stage "Node.js $NODE_VERSION"
     export NVM_DIR="$HOME/.nvm"
+    # nvm.sh is third-party code installed by the pinned installer below and
+    # only exists on the already-provisioned guest, so it cannot be followed.
+    # On a converged guest, sourcing it now activates the pinned default node
+    # and npm for the version guard; it is sourced again after an install.
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
+        # shellcheck disable=SC1091
+        source "$NVM_DIR/nvm.sh"
+    fi
+    if command -v node >/dev/null 2>&1 &&
+        ensure_installed node --version "v$NODE_VERSION" &&
+        ensure_installed npm --version "$NPM_VERSION"; then
+        return
+    fi
     installer="$(mktemp)"
     download_verified \
         "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" \
@@ -47,6 +60,10 @@ install_python() {
 install_uv() {
     local installer
     stage "uv $UV_VERSION"
+    if command -v uv >/dev/null 2>&1 &&
+        ensure_installed bash -c "uv --version | awk '{print \$2}'" "$UV_VERSION"; then
+        return
+    fi
     installer="$(mktemp)"
     download_verified \
         "https://astral.sh/uv/$UV_VERSION/install.sh" \
@@ -60,7 +77,8 @@ install_go() {
     local archive directory launcher
     stage "Go $GO_VERSION"
     launcher="$HOME/.local/bin/go"
-    if [ -x "$launcher" ] && [ "$(go version | awk '{print $3}' | sed 's/^go//')" = "$GO_VERSION" ]; then
+    if [ -x "$launcher" ] &&
+        ensure_installed bash -c "go version | awk '{print \$3}' | sed 's/^go//'" "$GO_VERSION"; then
         return
     fi
     archive="$(mktemp)"

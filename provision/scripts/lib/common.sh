@@ -37,6 +37,19 @@ run_pinned_installer() {
     return "$run_status"
 }
 
+# Early-exit guard shared by the version installers: run the version command
+# and return 0 only when its stdout answers exactly with `expected`, so a
+# converged re-provision skips the download. Like the pre-existing opencode
+# and go guards, the check trusts the binary's self-reported version -- the
+# same assumption those installers already make, no new weakening. A failing
+# command yields no output, so an absent or broken binary behaves like a
+# version mismatch and the caller falls back to a full (re)install.
+ensure_installed() {
+    local expected="${*: -1}"
+    set -- "${@:1:$#-1}"
+    [ "$("$@")" = "$expected" ]
+}
+
 atomic_copy() {
     local source_file="$1" destination="$2" mode="${3:-600}"
     local temporary

@@ -94,6 +94,16 @@ devbox_configure_rootless_docker() {
     XDG_RUNTIME_DIR="/run/user/$(id -u)"
     export XDG_RUNTIME_DIR
     export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    # A working daemon (rootless context present, user service active) is not
+    # reinstalled: `install --force` would redefine it on every re-provision.
+    # This is a simplification, not an added layer: less work per run, no
+    # markers, no new state. Re-assert the enablement, keep the context.
+    if devbox_docker '' context inspect rootless >/dev/null 2>&1 &&
+        systemctl --user is-active --quiet docker.service; then
+        systemctl --user enable --now docker.service
+        devbox_docker '' context use rootless >/dev/null
+        return
+    fi
     env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH \
         /usr/bin/dockerd-rootless-setuptool.sh install --force
     systemctl --user daemon-reload
