@@ -224,7 +224,7 @@ devbox_bundle_digest() {
 
     (
         cd "$provision_root" || exit
-        find . -type f ! -path './.devbox-bundle.sha256' -print | LC_ALL=C sort | while IFS= read -r path; do
+        find . -type f -print | LC_ALL=C sort | while IFS= read -r path; do
             printf '%s\t%s\n' "${path#./}" "$(shasum -a 256 "$path" | awk '{print $1}')"
         done | shasum -a 256 | awk '{print $1}'
     )
@@ -236,7 +236,7 @@ devbox_bundle_digest() {
 DEVBOX_GUEST_BUNDLE_DIGEST='
 bundle_digest() (
     cd "$1"
-    find . -type f ! -path ./.devbox-bundle.sha256 -print | LC_ALL=C sort | while IFS= read -r path; do
+    find . -type f -print | LC_ALL=C sort | while IFS= read -r path; do
         printf "%s\t%s\n" "${path#./}" "$(sha256sum "$path" | cut -d " " -f1)"
     done | sha256sum | cut -d " " -f1
 )
@@ -284,7 +284,6 @@ stream_devbox_bundle() {
             printf "ERROR: transferred devbox bundle digest does not match\n" >&2
             exit 1
         }
-        printf "%s\n" "$digest" >"$temporary/provision/.devbox-bundle.sha256"
         find "$temporary/provision" -type d -exec chmod 755 {} +
         find "$temporary/provision" -type f -exec chmod 644 {} +
         chown -R root:root "$temporary/provision"
@@ -293,8 +292,8 @@ stream_devbox_bundle() {
     ' _ "$digest" <"$archive"
 }
 
-# Re-verify the installed provisioning tree against its digest, so a matching
-# marker never skips over a corrupted or tampered tree. The payload stays
+# Re-verify the installed provisioning tree against its digest, so a corrupted
+# or tampered tree never passes skip-time verification. The payload stays
 # single-quoted so it is expanded inside the guest, not here.
 # shellcheck disable=SC2016
 devbox_guest_bundle_is_valid() {
@@ -303,8 +302,7 @@ devbox_guest_bundle_is_valid() {
     devbox_admin_guest sudo bash -c "$DEVBOX_GUEST_BUNDLE_DIGEST"'
         set -Eeuo pipefail
         target=/var/lib/devbox/provision
-        [ "$(cat "$target/.devbox-bundle.sha256" 2>/dev/null)" = "$1" ] &&
-            ! find "$target" -type l -print -quit | grep -q . &&
+        ! find "$target" -type l -print -quit | grep -q . &&
             [ "$(bundle_digest "$target")" = "$1" ]
     ' _ "$digest"
 }
@@ -414,6 +412,7 @@ write_devbox_ssh_config() {
     local colima_config="$1" staged
 
     mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
     staged="$(mktemp "$HOME/.ssh/.devbox.conf.XXXXXX")"
     if ! render_devbox_ssh_managed_block "$colima_config" >"$staged" ||
         ! grep -qx 'Host devbox' "$staged" ||

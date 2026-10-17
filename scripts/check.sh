@@ -739,6 +739,7 @@ reject_env() {
         fail "load_env accepted '$1'"
     fi
 }
+reject_env 'export GIT_NAME="John" # "Doe"'
 source "$ROOT/scripts/check-host-config.sh"
 
 # --- devbox init prompting and .env writing ---------------------------------
@@ -807,6 +808,23 @@ warning_output="$(/bin/bash -c '
     fail "lenient configuration reading did not report the malformed line"
 [[ "$warning_output" == *'GIT_NAME=X'* ]] ||
     fail "lenient configuration reading did not keep the valid value"
+
+# A mixed-quote ` #` value is an error in strict and is truncated before the
+# first ` #` in lenient; the stripper then removes the now-matching outer
+# quotes, so the kept value is the clean `John`, not the mangled `"Doe"` tail.
+lenient_name_env="$validation_root/lenient-name.env"
+printf 'export GIT_NAME="John" # "Doe"\nexport DEVBOX_CPU=4\n' >"$lenient_name_env"
+lenient_name_output="$(/bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    source "$ROOT/lib/config.sh"
+    unset_env_keys
+    read_env_file "$1" lenient
+    printf "GIT_NAME=%s\n" "$GIT_NAME"
+' _ "$lenient_name_env" 2>&1)" || fail "lenient configuration reading failed on a mangled quote"
+[[ "$lenient_name_output" == *'contains an unquoted space-hash'* ]] ||
+    fail "lenient configuration reading did not report the unquoted space-hash"
+[[ "$lenient_name_output" == *'GIT_NAME=John'* ]] ||
+    fail "lenient configuration reading did not truncate before the first space-hash"
 
 # --- devbox CLI symlink -------------------------------------------------------
 cli_unit_root="$validation_root/cli-unit"

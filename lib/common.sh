@@ -70,14 +70,18 @@ resolve_symlink_target() {
 
 install_cli() {
     local source_path="$1"
-    local bin_dir target installed installed_target source_target
+    local bin_dir target installed source_target
 
     bin_dir="$HOME/.local/bin"
     installed="$(command -v devbox 2>/dev/null || true)"
     source_target="$(resolve_symlink_target "$source_path")"
-    if [ -n "$installed" ] && [ -L "$installed" ]; then
-        installed_target="$(resolve_symlink_target "$installed")"
-        [ "$installed_target" = "$source_target" ] && bin_dir="$(dirname "$installed")"
+    if [ -n "$installed" ]; then
+        if [ -L "$installed" ] &&
+            [ "$(resolve_symlink_target "$installed")" = "$source_target" ]; then
+            bin_dir="$(dirname "$installed")"
+        else
+            warn "$installed is not a symlink to this checkout; PATH resolves 'devbox' there instead of $bin_dir/devbox"
+        fi
     fi
     target="$bin_dir/devbox"
     mkdir -p "$bin_dir"

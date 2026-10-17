@@ -4,7 +4,12 @@
 set -Eeuo pipefail
 
 DEVBOX_SCRIPT="$0"
-while [ -L "$DEVBOX_SCRIPT" ]; do
+# Count-based depth cap mirroring lib/common.sh's resolve_symlink_target: a
+# self-referential symlink must fail fast instead of hanging every invocation.
+# This runs before any lib can be sourced, so the error uses the bare form.
+DEVBOX_SYMLINK_DEPTH=0
+while [ -L "$DEVBOX_SCRIPT" ] && [ "$DEVBOX_SYMLINK_DEPTH" -lt 40 ]; do
+    DEVBOX_SYMLINK_DEPTH=$((DEVBOX_SYMLINK_DEPTH + 1))
     SCRIPT_LINK_DIR="$(cd -P "$(dirname "$DEVBOX_SCRIPT")" && pwd)"
     DEVBOX_SCRIPT="$(readlink "$DEVBOX_SCRIPT")"
     case "$DEVBOX_SCRIPT" in
@@ -12,6 +17,10 @@ while [ -L "$DEVBOX_SCRIPT" ]; do
         *) DEVBOX_SCRIPT="$SCRIPT_LINK_DIR/$DEVBOX_SCRIPT" ;;
     esac
 done
+if [ -L "$DEVBOX_SCRIPT" ]; then
+    printf 'ERROR: devbox launcher symlink chain exceeds 40 levels; a self-referential symlink is installed\n' >&2
+    exit 1
+fi
 DEVBOX_SCRIPT="$(cd -P "$(dirname "$DEVBOX_SCRIPT")" && pwd)/$(basename "$DEVBOX_SCRIPT")"
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
 source "$DEVBOX_DIR/lib/common.sh"
