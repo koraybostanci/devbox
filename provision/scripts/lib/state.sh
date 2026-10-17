@@ -24,8 +24,10 @@ devbox_state_valid_port() {
 }
 
 # Read the service values root needs from stdin as literal data; LABEL names
-# the source in errors. Other valid assignments (for example the guest Git
-# identity) are ignored, and no input is ever evaluated as shell code.
+# the source in errors. In the config kind, the guest Git identity is captured
+# with the service values so the unprivileged tools phase can consume the same
+# file as data. Other valid assignments are ignored, and no input is ever
+# evaluated as shell code.
 devbox_parse_state_file() {
     local label="$1" kind="$2" line key value line_number=0 seen_keys=" "
 
@@ -38,7 +40,8 @@ devbox_parse_state_file() {
         fi
         key="${BASH_REMATCH[2]}"
         case "$kind:$key" in
-            config:POSTGRES_USER | config:POSTGRES_DB | config:POSTGRES_PORT | config:VALKEY_PORT) ;;
+            config:POSTGRES_USER | config:POSTGRES_DB | config:POSTGRES_PORT | \
+                config:VALKEY_PORT | config:GIT_NAME | config:GIT_EMAIL) ;;
             secrets:POSTGRES_PASSWORD | secrets:VALKEY_PASSWORD) ;;
             *) continue ;;
         esac
@@ -57,6 +60,48 @@ devbox_parse_state_file() {
         esac
 
         case "$key" in
+            GIT_NAME | GIT_EMAIL)
+                # Host seeding renders the identity with
+                # `printf 'export %s=%q\n'`, so a space arrives as a
+                # backslash-space pair and a literal backslash as a double
+                # backslash. Reverse exactly those two mechanical forms as
+                # data on printable input: park each double backslash with a
+                # control-character sentinel first so it survives adjacency
+                # with a backslash-space form, then turn backslash-space into
+                # a space. Any other backslash escape (`\z`, octal, `\;`, ...)
+                # is rejected loudly rather
+                # than rewritten, and the sentinel cannot collide with input
+                # because non-printable input is turned away before it exists.
+                if ! [[ "$value" =~ ^[[:print:]]+$ ]]; then
+                    printf 'ERROR: invalid %s in %s:%s\n' \
+                        "$key" "$label" "$line_number" >&2
+                    return 1
+                fi
+                if [[ "$value" == *\\* ]]; then
+                    local doubled=$'\x01' slash_space="\\ "
+                    value="${value//\\\\/$doubled}"
+                    value="${value//"$slash_space"/ }"
+                    case "$value" in
+                        *\\*)
+                            printf 'ERROR: invalid %s in %s:%s\n' \
+                                "$key" "$label" "$line_number" >&2
+                            return 1
+                            ;;
+                    esac
+                    value="${value//"$doubled"/\\}"
+                fi
+
+                # A Git identity is printable single-line data: no control
+                # characters, no leading or terminal whitespace, and no `$` or
+                # backtick, so a seeded value can never even look like shell
+                # command substitution.
+                if ! [[ "$value" =~ ^[[:print:]]+$ ]] ||
+                    [[ "$value" == ' '* || "$value" == *' ' ||
+                        "$value" == *'$'* || "$value" == *'`'* ]]; then
+                    printf 'ERROR: invalid %s in %s:%s\n' "$key" "$label" "$line_number" >&2
+                    return 1
+                fi
+                ;;
             POSTGRES_USER | POSTGRES_DB)
                 [[ "$value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || {
                     printf 'ERROR: invalid %s in %s:%s\n' "$key" "$label" "$line_number" >&2
@@ -100,6 +145,8 @@ devbox_seed_guest_state() {
     # here directly.
     # shellcheck disable=SC2034
     local POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+    # shellcheck disable=SC2034
+    local GIT_NAME GIT_EMAIL
 
     owner="$(id -un)"
     group="$(id -gn)"

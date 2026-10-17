@@ -75,9 +75,26 @@ configure_devbox_guest_identity() {
 }
 
 install_guest_chromium() {
+    local attempt status=1
+
     systemctl enable --now snapd.socket
-    snap wait system seed.loaded
-    snap list chromium >/dev/null 2>&1 || snap install chromium --channel=stable
+    # snap wait blocks indefinitely without --timeout, so a stalled install
+    # seed would hang provisioning forever; bound it and fail with the snap's
+    # diagnosis instead.
+    snap wait --timeout=45m system seed.loaded
+    # snapd can transiently reject installs while the seed is still settling:
+    # retry, capture the last status, and fail closed on a final failure.
+    for attempt in 1 2 3; do
+        if snap list chromium >/dev/null 2>&1; then
+            status=0
+            break
+        fi
+        snap install chromium --channel=stable && status=0 || status=$?
+    done
+    [ "$status" = 0 ] || {
+        printf 'ERROR: chromium snap installation failed after %s attempts\n' "$attempt" >&2
+        return 1
+    }
     # snapd otherwise auto-refreshes Chromium between provisioning cycles,
     # silently moving the guest's browser ahead of the smoke-tested channel
     # state; hold the refresh so the pinned channel install stays in place.

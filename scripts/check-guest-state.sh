@@ -39,7 +39,8 @@ export POSTGRES_USER="dev"
 export POSTGRES_DB=dev
 export POSTGRES_PORT=65535
 export VALKEY_PORT=16379
-export GIT_NAME=\$(touch "$state_marker")
+export GIT_NAME="Devbox Fixture"
+export GIT_EMAIL=fixture@devbox.invalid
 export UNRELATED=\$(touch "$state_marker")
 EOF
 cat >"$state_fixture/secrets" <<EOF
@@ -64,10 +65,14 @@ if devbox_path_is_safe f "$fixture/config" wrong-owner "$group" 600; then
     exit 1
 fi
 unset POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+unset GIT_NAME GIT_EMAIL
 devbox_parse_state_file config config <"$fixture/config"
 devbox_state_config_is_complete
 [ "$POSTGRES_USER" = dev ]
 [ "$POSTGRES_PORT" = 65535 ]
+# The Git identity in the same file is captured from it as literal data.
+[ "$GIT_NAME" = "Devbox Fixture" ]
+[ "$GIT_EMAIL" = fixture@devbox.invalid ]
 devbox_parse_state_file secrets secrets <"$fixture/secrets"
 [ "$POSTGRES_PASSWORD" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
 [ "$VALKEY_PASSWORD" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]
@@ -96,6 +101,27 @@ if devbox_parse_state_file invalid-user config <"$fixture/invalid-user" 2>/dev/n
     printf 'state parser accepted shell syntax as a service value\n' >&2
     exit 1
 fi
+printf 'export GIT_NAME=$(touch %s)\n' "$marker" >"$fixture/invalid-git"
+if devbox_parse_state_file invalid-git config <"$fixture/invalid-git" 2>/dev/null; then
+    printf 'state parser accepted shell syntax as a Git identity\n' >&2
+    exit 1
+fi
+# A host-seeded identity arrives %q-rendered: the backslash-space form
+# unescapes to a real space and a backslashed escape sequence stays literal,
+# while escapes the parser does not model fail loudly.
+unset GIT_NAME
+printf 'export GIT_NAME=Jane\\ Doe\n' >"$fixture/git-name-space"
+devbox_parse_state_file git-name-space config <"$fixture/git-name-space"
+[ "$GIT_NAME" = 'Jane Doe' ]
+unset GIT_NAME
+printf 'export GIT_NAME=a\\\\b\n' >"$fixture/git-name-backslash"
+devbox_parse_state_file git-name-backslash config <"$fixture/git-name-backslash"
+[ "$GIT_NAME" = 'a\b' ]
+printf 'export GIT_NAME=\\z\n' >"$fixture/git-name-escape"
+if devbox_parse_state_file git-name-escape config <"$fixture/git-name-escape" 2>/dev/null; then
+    printf 'state parser rewrote an unsupported Git identity escape\n' >&2
+    exit 1
+fi
 [ ! -e "$marker" ]
 EOF
 /bin/bash "$validation_root/state-unit.sh" "$ROOT" "$state_fixture" "$state_marker" ||
@@ -107,7 +133,7 @@ cat >"$state_fixture/host-seed" <<EOF
 export POSTGRES_USER=dev
 export POSTGRES_DB=dev
 export POSTGRES_PORT=15432
-export GIT_NAME=\$(touch "$state_marker")
+export GIT_NAME="Devbox Seed"
 EOF
 run_prov_lib lib/state.sh devbox_seed_guest_state "$seed_directory" \
     <"$state_fixture/host-seed" || fail "guest-owned config and secret seeding failed"
