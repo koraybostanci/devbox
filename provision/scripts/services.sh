@@ -4,12 +4,10 @@
 set -Eeuo pipefail
 trap 'printf "ERROR: devbox services command failed at line %s\n" "$LINENO" >&2' ERR
 
-devbox_services_docker() {
-    # These root-managed containers must never follow devbox's inherited
-    # rootless host/context settings.
-    env -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH \
-        DOCKER_HOST=unix:///var/run/docker.sock docker "$@"
-}
+# Relative sources resolve at runtime from this script's own directory (the
+# staged provisioning bundle), never from a pre-set DEVBOX_PROVISION_ROOT.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker.sh"
 
 devbox_services_main() {
     local action="${1:-}" services=/var/lib/devbox/services
@@ -19,10 +17,13 @@ devbox_services_main() {
         printf 'devbox services are not provisioned; run devbox provision\n' >&2
         return 1
     }
+    # These root-managed containers must never follow devbox's inherited
+    # rootless host/context settings: devbox_docker drops the inherited
+    # Docker environment and pins the explicit rootful socket endpoint.
     case "$action" in
-        start) devbox_services_docker "${compose[@]}" up -d --wait ;;
-        stop) devbox_services_docker "${compose[@]}" down ;;
-        status) devbox_services_docker "${compose[@]}" ps ;;
+        start) devbox_docker unix:///var/run/docker.sock "${compose[@]}" up -d --wait ;;
+        stop) devbox_docker unix:///var/run/docker.sock "${compose[@]}" down ;;
+        status) devbox_docker unix:///var/run/docker.sock "${compose[@]}" ps ;;
         *)
             printf 'Usage: services.sh <start|stop|status>\n' >&2
             return 1

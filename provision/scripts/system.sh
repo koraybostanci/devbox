@@ -19,7 +19,7 @@ source "$DEVBOX_PROVISION_ROOT/scripts/lib/apps.sh"
 # (mounted under /mnt/lima-*), not the fixed-size root disk. A home that already
 # holds data on the root disk predates this layout; recreate the VM instead.
 relocate_guest_home() {
-    local home=/home/devbox data_root target fstab_entry temporary
+    local home=/home/devbox data_root target fstab_entry
 
     data_root="$(devbox_lima_data_root)" || data_root=""
     # `|| { ... }` is the intended failure branch: it only runs when the data
@@ -48,15 +48,19 @@ relocate_guest_home() {
         return 1
     }
     fstab_entry="$target $home none bind,nofail,x-systemd.requires-mounts-for=$data_root 0 0"
-    temporary="$(mktemp /etc/.fstab.XXXXXX)"
-    awk -v home="$home" 'NF < 2 || $1 ~ /^#/ || $2 != home { print }' /etc/fstab >"$temporary"
-    printf '%s\n' "$fstab_entry" >>"$temporary"
-    if cmp -s "$temporary" /etc/fstab; then
-        rm -f "$temporary"
-    else
-        chmod 644 "$temporary"
-        mv "$temporary" /etc/fstab
-    fi
+    # The rewrite is published from /etc's own directory with mode 644 applied
+    # before the mv, and an unchanged content keeps the current /etc/fstab.
+    devbox_publish_atomic /etc/fstab 644 --skip-if-same -- \
+        devbox_fstab_content /etc/fstab "$home" "$fstab_entry"
+}
+
+# Emit the fstab as-is apart from the managed home entry, replacing any prior
+# entry for that home, then re-adding the single managed entry.
+devbox_fstab_content() {
+    local fstab_file="$1" home="$2" fstab_entry="$3"
+
+    awk -v home="$home" 'NF < 2 || $1 ~ /^#/ || $2 != home { print }' "$fstab_file"
+    printf '%s\n' "$fstab_entry"
 }
 
 configure_devbox_guest_identity() {

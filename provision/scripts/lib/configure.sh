@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# The publish helper lives in common.sh; sources resolve from this file's own
+# directory so standalone unit runs see the same shared implementation.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 configure_git() {
     stage "Git identity and HTTPS defaults"
     git config --global user.name "$GIT_NAME"
@@ -33,19 +38,22 @@ sync_managed_opencode_tree() {
 
 configure_opencode() {
     local config_directory="$HOME/.config/opencode"
+    local managed_tree managed_trees=(
+        "$DEVBOX_PROVISION_ROOT/config/opencode/agents:$config_directory/agents:$config_directory/.devbox-managed-agents"
+        "$DEVBOX_PROVISION_ROOT/config/opencode/commands:$config_directory/commands:$config_directory/.devbox-managed-commands"
+        "$DEVBOX_PROVISION_ROOT/config/skills:$config_directory/skills:$config_directory/.devbox-managed-skills"
+    )
 
     stage "OpenCode configuration"
     mkdir -p "$config_directory/skills" "$config_directory/commands"
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/opencode.jsonc" "$config_directory/opencode.jsonc"
-    sync_managed_opencode_tree \
-        "$DEVBOX_PROVISION_ROOT/config/opencode/agents" \
-        "$config_directory/agents" "$config_directory/.devbox-managed-agents"
-    sync_managed_opencode_tree \
-        "$DEVBOX_PROVISION_ROOT/config/opencode/commands" \
-        "$config_directory/commands" "$config_directory/.devbox-managed-commands"
-    sync_managed_opencode_tree \
-        "$DEVBOX_PROVISION_ROOT/config/skills" \
-        "$config_directory/skills" "$config_directory/.devbox-managed-skills"
+    # One loop over the (source, target, manifest) triples; each sync keeps
+    # the manifest machinery, so user-owned files in the managed directories
+    # always survive.
+    for managed_tree in "${managed_trees[@]}"; do
+        IFS=':' read -r tree_source tree_target tree_manifest <<<"$managed_tree"
+        sync_managed_opencode_tree "$tree_source" "$tree_target" "$tree_manifest"
+    done
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/AGENTS.md" "$config_directory/AGENTS.md" 644
 }
 
@@ -56,7 +64,7 @@ configure_claude() {
 # Keep the user's .zshenv (or its dotfiles target) and place devbox defaults in
 # a managed block before it, so user and project settings can override them.
 sync_managed_zshenv() {
-    local source_file="$1" target="$2" link mode=644 temporary depth
+    local source_file="$1" target="$2" link mode=644 depth
     local begin='# >>> devbox managed zshenv >>>' end='# <<< devbox managed zshenv <<<'
 
     # depth only counts symlink hops; the 8-hop cap is the loop's literal list.
@@ -76,29 +84,38 @@ sync_managed_zshenv() {
             mode="$(stat -c '%a' "$target")"
         fi
     fi
-
-    temporary="$(mktemp "$(dirname "$target")/.zshenv.devbox.XXXXXX")"
-    {
-        printf '%s\n' "$begin"
-        cat "$source_file"
-        printf '%s\n' "$end"
-        [ ! -f "$target" ] || awk -v begin="$begin" -v end="$end" '
-            $0 == begin { if (inside || found) exit 1; inside = found = 1; next }
-            $0 == end { if (!inside) exit 1; inside = 0; next }
-            !inside { print }
-            END { if (inside) exit 1 }
-        ' "$target"
-    } >"$temporary" || {
-        rm -f "$temporary"
+    # The managed block is validated on the existing target first, so a
+    # malformed block is refused before anything is written; the publishing
+    # awk in devbox_build_managed_zshenv cannot fail after that. The helper
+    # keeps its temporary in the target's own directory, chmods the captured
+    # mode before the mv, and skips the mv when the assembled content already
+    # matches.
+    if [ -f "$target" ] && ! awk -v begin="$begin" -v end="$end" '
+        $0 == begin { if (inside || found) exit 1; inside = found = 1 }
+        $0 == end { if (!inside) exit 1; inside = 0 }
+        END { if (inside) exit 1 }
+        ' "$target" >/dev/null; then
         printf 'ERROR: malformed devbox-managed block in %s\n' "$target" >&2
         return 1
-    }
-    chmod "$mode" "$temporary"
-    if cmp -s "$temporary" "$target"; then
-        rm -f "$temporary"
-    else
-        mv -f "$temporary" "$target"
     fi
+    devbox_publish_atomic "$target" "$mode" --skip-if-same -- \
+        devbox_build_managed_zshenv "$source_file" "$target" "$begin" "$end"
+}
+
+# Emit the managed zshenv: devbox defaults inside a begin/end block, then the
+# existing target's own lines, which the caller already validated.
+devbox_build_managed_zshenv() {
+    local source_file="$1" target="$2" begin="$3" end="$4"
+
+    printf '%s\n' "$begin"
+    cat -- "$source_file"
+    printf '%s\n' "$end"
+    [ ! -f "$target" ] || awk -v begin="$begin" -v end="$end" '
+        $0 == begin { if (inside || found) exit 1; inside = found = 1; next }
+        $0 == end { if (!inside) exit 1; inside = 0; next }
+        !inside { print }
+        END { if (inside) exit 1 }
+    ' "$target"
 }
 
 configure_shell() {

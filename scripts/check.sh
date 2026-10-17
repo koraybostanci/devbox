@@ -385,7 +385,7 @@ PATH="$services_stub_bin:/usr/bin:/bin" SERVICE_CAPTURE="$services_capture" \
     /bin/bash -c '
         set -Eeuo pipefail
         source "$1"
-        devbox_services_docker compose ps
+        devbox_docker unix:///var/run/docker.sock compose ps
     ' _ "$ROOT/provision/scripts/services.sh" || fail "services Docker helper failed"
 grep -qx 'host=unix:///var/run/docker.sock' "$services_capture" ||
     fail "devbox services did not force the rootful Docker socket"

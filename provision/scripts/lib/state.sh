@@ -1,6 +1,11 @@
 #!/bin/bash
 # Data-only helpers for guest state and the Lima-backed home directory.
 
+# The publish helper lives in common.sh; sources resolve from this file's own
+# directory so standalone unit runs see the same shared implementation.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 # devbox_path_is_safe <f|d> PATH OWNER GROUP MODE: a regular file or directory,
 # never a symlink, with exactly this ownership and mode.
 # The test operator is built from the `<f|d>` contract; shellcheck cannot
@@ -141,8 +146,13 @@ devbox_random_secret() {
 # seed: it is kept on the first provision — apart from the synthesized Valkey
 # port line — after the allowlisted parser accepts it. Root consumes the
 # stdout pass as data; secrets never leave the guest outside their own file.
+devbox_publish_config_with_valkey_port() {
+    cat -- "$1"
+    printf 'VALKEY_PORT=%s\n' "$2"
+}
+
 devbox_seed_guest_state() {
-    local directory="$1" config="$1/config" secrets="$1/secrets" owner group temporary
+    local directory="$1" config="$1/config" secrets="$1/secrets" owner group
     # The allowlisted keys captured by devbox_parse_state_file are locked to
     # this function's scope; they are set through `printf -v`, never read
     # here directly.
@@ -171,28 +181,35 @@ devbox_seed_guest_state() {
         }
         cat >/dev/null
     else
-        temporary="$(mktemp "$directory/.config.XXXXXX")"
-        cat >"$temporary"
-        if ! devbox_parse_state_file "host seed" config <"$temporary" ||
+        # The seed publishes verbatim before it is parsed, and each staged
+        # file is validated as data after the publish: a failed validation
+        # (or a malformed synthesized port) removes the just-published file,
+        # so the end state matches the staging-first flow — no partial
+        # config or secrets are ever left behind.
+        devbox_publish_atomic "$config" 600
+        # devbox_parse_state_file only consumes stdin; the second "$config" is
+        # the error-label wording printed by the parser, never a write.
+        # shellcheck disable=SC2094
+        if ! devbox_parse_state_file "host seed" config <"$config" ||
             ! devbox_state_config_is_complete; then
-            rm -f -- "$temporary"
+            rm -f -- "$config"
             return 1
         fi
         # The Valkey port must be guest-readable for the companion's db info,
         # which must not depend on the root-only services/env. When the host
         # seed does not carry one, the devbox default is appended to the fresh
-        # config; the value is validated with the shared port check.
-        if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?VALKEY_PORT=' "$temporary"; then
+        # config; the value is validated with the shared port check, and the
+        # augmented content is published atomically through the same helper.
+        if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?VALKEY_PORT=' "$config"; then
             VALKEY_PORT=16379
             devbox_state_valid_port "$VALKEY_PORT" || {
-                rm -f -- "$temporary"
+                rm -f -- "$config"
                 return 1
             }
-            printf 'VALKEY_PORT=%s\n' "$VALKEY_PORT" >>"$temporary"
+            devbox_publish_atomic "$config" 600 -- \
+                devbox_publish_config_with_valkey_port "$config" "$VALKEY_PORT"
         fi
-        mv -f -- "$temporary" "$config"
     fi
-
     # An existing, guest-authoritative config may predate the Valkey port: the
     # default below only feeds the stdout emission, never that file.
     if [ -z "${VALKEY_PORT:-}" ]; then
@@ -219,13 +236,12 @@ devbox_seed_guest_state() {
         if [ -z "${VALKEY_PASSWORD:-}" ]; then
             VALKEY_PASSWORD="$(devbox_random_secret)"
         fi
-        temporary="$(mktemp "$directory/.secrets.XXXXXX")"
         # Plain `KEY=value`, not `export`: the zshrc keeps these as shell
         # variables only, and secrets must not leak into every child process
         # of a guest login shell.
-        printf 'POSTGRES_PASSWORD=%s\nVALKEY_PASSWORD=%s\n' \
-            "$POSTGRES_PASSWORD" "$VALKEY_PASSWORD" >"$temporary"
-        mv -f -- "$temporary" "$secrets"
+        devbox_publish_atomic "$secrets" 600 -- \
+            printf 'POSTGRES_PASSWORD=%s\nVALKEY_PASSWORD=%s\n' \
+                "$POSTGRES_PASSWORD" "$VALKEY_PASSWORD"
     fi
 
     # The canonical single pass root stages services/env from. Every value was

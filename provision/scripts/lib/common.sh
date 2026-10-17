@@ -60,3 +60,66 @@ atomic_copy() {
     chmod "$mode" "$temporary"
     mv "$temporary" "$destination"
 }
+
+# One copy of the mktemp/write/chmod/mv publish ceremony. With no `--`
+# producer arguments, stdin becomes the file at <destination>. With
+# `-- <producer> [args...]`, the producer's stdout is staged instead, and a
+# failing producer is cleaned up before anything is published. The temporary
+# file is created in the destination's own directory so the mv never crosses
+# filesystems, and it gets its final mode before the mv so no window exposes
+# the content at another permission. The invoking user performs every step,
+# so the published file is owned by that user and the caller must never pair
+# this helper with sudo or chown across ownership boundaries. With
+# --skip-if-same, content identical to the current destination is discarded
+# instead of published: the destination keeps its inode and mtime and the
+# helper still reports success.
+devbox_publish_atomic() {
+    local destination="$1" mode="$2" temporary skip_same=0 status=0
+
+    shift 2
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --skip-if-same) skip_same=1 ;;
+            --) shift; break ;;
+            *)
+                printf 'usage: devbox_publish_atomic <destination> <mode> [--skip-if-same] [-- <producer>...]\n' >&2
+                return 2
+                ;;
+        esac
+        shift
+    done
+    temporary="$(mktemp "$(dirname "$destination")/.devbox-publish.XXXXXX")" || return 1
+    if [ $# -eq 0 ]; then
+        if ! cat >"$temporary"; then
+            rm -f -- "$temporary"
+            return 1
+        fi
+    else
+        "$@" >"$temporary" || status=$?
+        if [ "$status" -ne 0 ]; then
+            rm -f -- "$temporary"
+            return "$status"
+        fi
+    fi
+    chmod "$mode" "$temporary"
+    if [ "$skip_same" = 1 ] && cmp -s "$temporary" "$destination"; then
+        rm -f -- "$temporary"
+        return 0
+    fi
+    mv -f "$temporary" "$destination"
+}
+
+# The readiness-gate dispatcher shared by verify.sh and its zsh battery:
+# print one PASS/FAIL line per named check and count failures in the caller's
+# `failures` variable. Failures print on stderr; a failing command's own
+# output is discarded.
+check() {
+    local description="$1"
+    shift
+    if "$@" >/dev/null 2>&1; then
+        printf 'PASS: %s\n' "$description"
+    else
+        printf 'FAIL: %s\n' "$description" >&2
+        failures=$((failures + 1))
+    fi
+}
