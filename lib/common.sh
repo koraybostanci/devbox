@@ -15,18 +15,28 @@ die() {
     exit 1
 }
 
+# Compare two versions as "current is at least minimum". An optional leading
+# 'v' and trailing '-suffix' are stripped, then both inputs must be
+# dotted-numeric with 1 to 3 components — anything else fails closed and the
+# caller dies with its own message. No component ever reaches bash arithmetic
+# unvalidated: "(( 10#3-1 ))" subtracts, which is how the old compare
+# false-rejected "0.10.3-1" against "0.10.3".
 version_at_least() {
-    local current="$1"
-    local minimum="$2"
-    local current_part minimum_part index
-    local IFS=.
+    local current="${1#v}" minimum="${2#v}"
+    local index current_part minimum_part
     local -a current_parts minimum_parts
-
+    current="${current%%-*}"
+    minimum="${minimum%%-*}"
+    [[ "$current" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || return 1
+    [[ "$minimum" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || return 1
+    local IFS='.'
     read -r -a current_parts <<<"$current"
     read -r -a minimum_parts <<<"$minimum"
+    # Missing components count as 0, so "2.10" < "2.10.1".
     for index in 0 1 2; do
         current_part="${current_parts[$index]:-0}"
         minimum_part="${minimum_parts[$index]:-0}"
+        [[ "$current_part" =~ ^[0-9]+$ && "$minimum_part" =~ ^[0-9]+$ ]] || return 1
         ((10#$current_part > 10#$minimum_part)) && return 0
         ((10#$current_part < 10#$minimum_part)) && return 1
     done

@@ -29,15 +29,24 @@ configure_devbox_paths() {
 }
 
 check_devbox_dependencies() {
-    local command_name colima_version
+    local command_name colima_first_line colima_version
     local -a missing=()
 
-    for command_name in colima ssh; do
+    for command_name in colima ssh ssh-keygen shasum; do
         command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
     done
     [ "${#missing[@]}" -eq 0 ] ||
         die "Missing host dependencies for devbox: ${missing[*]}. Install Colima from https://colima.run."
-    colima_version="$(devbox_colima version | awk 'NR == 1 {print $3}')"
+    # Also load the managed SSH configuration and hash provisioning bundles, so
+    # a partial toolchain fails here instead of mid-provision.
+    colima_first_line="$(devbox_colima version | awk 'NR == 1 { print }')"
+    colima_version="$(awk '{ print $3 }' <<<"$colima_first_line")"
+    # Dotted-numeric, optionally followed by a '-' suffix (e.g. 0.10.3-1 or
+    # 0.10.3-dirty, which version_at_least strips). HEAD/commit-sha builds, an
+    # empty field, or other garbage still fails here: the unparseable first
+    # line anchors the diagnosis for the user.
+    [[ "$colima_version" =~ ^[0-9]+(\.[0-9]+){0,2}(-[0-9A-Za-z.-]*)?$ ]] ||
+        die "Could not parse the Colima version from the first line of 'colima version': $colima_first_line"
     version_at_least "$colima_version" "$MINIMUM_COLIMA_VERSION" ||
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
 }

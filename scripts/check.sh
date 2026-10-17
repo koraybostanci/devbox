@@ -514,6 +514,62 @@ printf '%s\n' 'touch' 'a b;cd /tmp' >"$ssh_unit_root/expected-args"
 cmp -s "$ssh_unit_root/parsed-args" "$ssh_unit_root/expected-args" ||
     fail "devbox_guest quoting did not survive the guest shell re-parse"
 
+# --- version comparison and dependency hardening ----------------------------
+# version_at_least must strip an optional leading 'v' and trailing '-suffix',
+# require dotted-numeric input on both sides, and fail closed on anything
+# else. The grep gates above cannot prove ordering behavior; these units can.
+version_at_least '0.10.3-1' '0.10.3' ||
+    fail "version_at_least false-rejected the suffixed version 0.10.3-1"
+if version_at_least '0.10.2' '0.10.3'; then
+    fail "version_at_least accepted 0.10.2 as newer than 0.10.3"
+fi
+version_at_least '0.10.3' '0.10.3' || fail "version_at_least rejected equal versions"
+if version_at_least 'junk' '0.10.3'; then
+    fail "version_at_least did not fail closed on junk input"
+fi
+
+# check_devbox_dependencies must demand ssh-keygen and shasum alongside colima
+# and ssh, and must die embedding the raw first line of 'colima version' when
+# it does not parse. Stub colima to exercise each path without a host install.
+dep_stub_bin="$validation_root/dep-stub-bin"
+mkdir -p "$dep_stub_bin"
+for dep_stub in ssh ssh-keygen shasum; do
+    printf '#!/bin/bash\nexit 0\n' >"$dep_stub_bin/$dep_stub"
+    chmod +x "$dep_stub_bin/$dep_stub"
+done
+cat >"$dep_stub_bin/colima" <<'EOF'
+#!/bin/bash
+printf '%s\n' "${DEP_COLIMA_VERSION:-}"
+EOF
+chmod +x "$dep_stub_bin/colima"
+dep_unit() {
+    PATH="$dep_stub_bin:/usr/bin:/bin" DEP_COLIMA_VERSION="$1" \
+        DEVBOX_COLIMA_HOME="$validation_root/dep-colima-home" \
+        DEVBOX_LIMA_HOME="$validation_root/dep-colima-home/_lima" \
+        DEVBOX_DOCKER_CONFIG="$validation_root/dep-docker-config" \
+        /bin/bash -c '
+        set -Eeuo pipefail
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        check_devbox_dependencies
+    '
+}
+dep_unit 'colima version 0.10.3' >/dev/null ||
+    fail "check_devbox_dependencies rejected a current Colima install"
+if dep_output="$(dep_unit 'colima version 0.10.2' 2>&1)"; then
+    fail "check_devbox_dependencies accepted a too-old Colima install"
+fi
+[[ "$dep_output" == *'Colima 0.10.3 or newer is required (found 0.10.2)'* ]] ||
+    fail "a too-old Colima version produced the wrong diagnosis ($dep_output)"
+if dep_output="$(dep_unit 'colima version unparseable-x' 2>&1)"; then
+    fail "check_devbox_dependencies accepted an unparseable Colima version"
+fi
+[[ "$dep_output" == *'colima version unparseable-x'* ]] ||
+    fail "an unparseable Colima version did not embed the raw version line ($dep_output)"
+dep_unit 'colima version 0.10.3-1' >/dev/null ||
+    fail "check_devbox_dependencies false-rejected the suffixed Colima version 0.10.3-1"
+
 # --- lifecycle lock ---------------------------------------------------------
 # Lifecycle commands rely on the EXIT trap to release the lock, even on failure.
 lock_dir="$validation_root/locks"
