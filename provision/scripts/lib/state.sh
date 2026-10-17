@@ -135,9 +135,12 @@ devbox_random_secret() {
     head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'
 }
 
-# Seed the guest user's config and secrets. Runs as that user, so nothing here
-# crosses a privilege boundary. stdin is the host seed: it is kept verbatim on
-# the first provision only, after the allowlisted parser accepts it.
+# Seed the guest user's config and secrets, then emit the canonical, already
+# validated service assignments as plain `KEY=value` data on stdout. Runs as
+# that user, so nothing here crosses a privilege boundary. stdin is the host
+# seed: it is kept on the first provision — apart from the synthesized Valkey
+# port line — after the allowlisted parser accepts it. Root consumes the
+# stdout pass as data; secrets never leave the guest outside their own file.
 devbox_seed_guest_state() {
     local directory="$1" config="$1/config" secrets="$1/secrets" owner group temporary
     # The allowlisted keys captured by devbox_parse_state_file are locked to
@@ -175,8 +178,30 @@ devbox_seed_guest_state() {
             rm -f -- "$temporary"
             return 1
         fi
+        # The Valkey port must be guest-readable for the companion's db info,
+        # which must not depend on the root-only services/env. When the host
+        # seed does not carry one, the devbox default is appended to the fresh
+        # config; the value is validated with the shared port check.
+        if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?VALKEY_PORT=' "$temporary"; then
+            VALKEY_PORT=16379
+            devbox_state_valid_port "$VALKEY_PORT" || {
+                rm -f -- "$temporary"
+                return 1
+            }
+            printf 'VALKEY_PORT=%s\n' "$VALKEY_PORT" >>"$temporary"
+        fi
         mv -f -- "$temporary" "$config"
     fi
+
+    # An existing, guest-authoritative config may predate the Valkey port: the
+    # default below only feeds the stdout emission, never that file.
+    if [ -z "${VALKEY_PORT:-}" ]; then
+        VALKEY_PORT=16379
+    fi
+    devbox_state_valid_port "$VALKEY_PORT" || {
+        printf 'ERROR: VALKEY_PORT in the guest state is not a port from 1 to 65535\n' >&2
+        return 1
+    }
 
     if [ -e "$secrets" ] || [ -L "$secrets" ]; then
         devbox_path_is_safe f "$secrets" "$owner" "$group" 600 || return 1
@@ -186,12 +211,34 @@ devbox_seed_guest_state() {
         devbox_parse_state_file "$secrets" secrets <"$secrets" || return 1
     fi
     if [ -z "${POSTGRES_PASSWORD:-}" ] || [ -z "${VALKEY_PASSWORD:-}" ]; then
+        # Generated values are captured through the same variables the
+        # secrets-file parse would have set, so the emission below sees them.
+        if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+            POSTGRES_PASSWORD="$(devbox_random_secret)"
+        fi
+        if [ -z "${VALKEY_PASSWORD:-}" ]; then
+            VALKEY_PASSWORD="$(devbox_random_secret)"
+        fi
         temporary="$(mktemp "$directory/.secrets.XXXXXX")"
-        printf 'export POSTGRES_PASSWORD=%s\nexport VALKEY_PASSWORD=%s\n' \
-            "${POSTGRES_PASSWORD:-$(devbox_random_secret)}" \
-            "${VALKEY_PASSWORD:-$(devbox_random_secret)}" >"$temporary"
+        # Plain `KEY=value`, not `export`: the zshrc keeps these as shell
+        # variables only, and secrets must not leak into every child process
+        # of a guest login shell.
+        printf 'POSTGRES_PASSWORD=%s\nVALKEY_PASSWORD=%s\n' \
+            "$POSTGRES_PASSWORD" "$VALKEY_PASSWORD" >"$temporary"
         mv -f -- "$temporary" "$secrets"
     fi
+
+    # The canonical single pass root stages services/env from. Every value was
+    # validated above (allowlisted parser or generated hex/port constant), and
+    # the lines are plain `KEY=value` data with the same shape the root-side
+    # mapping enforces for file lines.
+    printf '%s\n' \
+        "POSTGRES_USER=$POSTGRES_USER" \
+        "POSTGRES_DB=$POSTGRES_DB" \
+        "POSTGRES_PORT=$POSTGRES_PORT" \
+        "VALKEY_PORT=$VALKEY_PORT" \
+        "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+        "VALKEY_PASSWORD=$VALKEY_PASSWORD"
 }
 
 devbox_lima_data_root() {

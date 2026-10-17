@@ -69,8 +69,23 @@ guest_home_uses_lima_data_disk() {
         devbox_home_is_on_lima_data_disk /home/devbox "$data_root/devbox-home" "$data_root"
 }
 
+# The staged bundle is the trust root for repeated provisioning: no entry may
+# be owned by anyone else, and no entry may be world-writable (which stands in
+# for the removed per-file `! -w` assertions, tree-wide, in either dimension a
+# guest user could gain write access).
+provisioning_tree_is_root_owned_and_closed() {
+    [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] || return 1
+    [ "$(stat -c '%U' "$DEVBOX_PROVISION_ROOT")" = root ] || return 1
+    if find "$DEVBOX_PROVISION_ROOT" \( ! -user root -o -perm -o+w \) -print -quit |
+        grep -q .; then
+        return 1
+    fi
+}
+
 check "devbox guest config permissions" devbox_path_is_safe f "$HOME/.config/devbox/config" devbox devbox 600
 check "devbox guest secrets permissions" devbox_path_is_safe f "$HOME/.config/devbox/secrets" devbox devbox 600
+check "devbox guest config directory permissions" \
+    devbox_path_is_safe d "$HOME/.config/devbox" devbox devbox 700
 # The bash -c payloads below run inside the guest and are intentionally
 # single-quoted so nothing expands on the devbox side.
 # shellcheck disable=SC2016
@@ -79,13 +94,13 @@ check "devbox root provisioning directory is root-owned" bash -c '
         [ "$(stat -c "%U" /var/lib/devbox)" = root ]
 '
 # shellcheck disable=SC2016
-check "devbox provisioning input is root-owned, readable, and read-only" bash -c '
+check "devbox provisioning input is root-owned and readable" bash -c '
     [ -d "$DEVBOX_PROVISION_ROOT" ] && [ ! -L "$DEVBOX_PROVISION_ROOT" ] &&
         [ "$(stat -c "%U" "$DEVBOX_PROVISION_ROOT")" = root ] &&
-        [ -r "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ] &&
-        [ ! -w "$DEVBOX_PROVISION_ROOT" ] &&
-        [ ! -w "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ]
+        [ -r "$DEVBOX_PROVISION_ROOT/scripts/tools.sh" ]
 '
+check "devbox provisioning tree has no non-root or writable entries" \
+    provisioning_tree_is_root_owned_and_closed
 check "devbox active user" test "$(id -un)" = devbox
 check "devbox guest home" test "$HOME" = /home/devbox
 check "devbox guest home is on the Lima data disk" guest_home_uses_lima_data_disk
