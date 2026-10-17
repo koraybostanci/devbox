@@ -73,7 +73,9 @@ case "$cmd" in
         ;;
     version)
         [ $# -eq 0 ] || die "Usage: devbox version"
-        read -r version <"$DEVBOX_DIR/VERSION" || [ -n "$version" ]
+        if ! read -r version <"$DEVBOX_DIR/VERSION" 2>/dev/null || [ -z "$version" ]; then
+            die "devbox VERSION file is missing or empty"
+        fi
         printf '%s\n' "$version"
         ;;
     init)

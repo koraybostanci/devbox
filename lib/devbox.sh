@@ -168,6 +168,11 @@ require_running_devbox_vm() {
     [ "$(devbox_state)" = Running ] || die "devbox VM is not running; run 'devbox start' first"
 }
 
+require_devbox_ssh_alias() {
+    [ -e "$HOME/.ssh/devbox.conf" ] ||
+        die "devbox SSH alias is missing; run 'devbox start'"
+}
+
 wait_for_devbox_ssh() {
     local attempts=60 attempt
 
@@ -182,11 +187,25 @@ wait_for_devbox_ssh() {
 }
 
 start_devbox_vm() {
-    local state
+    local state="" previous_copy=""
 
+    # When the VM is already running, save the rendered configuration before
+    # the fresh one overwrites it: resources apply only across a stop and
+    # start, so drift from the running VM must never pass silently.
+    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
+        state="$(devbox_state)"
+    fi
+    if [ "$state" = Running ] && [ -f "$DEVBOX_COLIMA_CONFIG" ]; then
+        previous_copy="$(mktemp "${TMPDIR:-/tmp}/devbox-colima.XXXXXX")"
+        cp "$DEVBOX_COLIMA_CONFIG" "$previous_copy"
+    fi
     render_devbox_colima_config
     DEVBOX_COLIMA_PROXY_OPT_IN="$DEVBOX_USE_HOST_PROXY"
-    state="$(devbox_state)"
+    if [ -n "$previous_copy" ]; then
+        cmp -s "$previous_copy" "$DEVBOX_COLIMA_CONFIG" ||
+            warn "configuration changed; resources apply on the next stop and start"
+        command rm -f "$previous_copy"
+    fi
     case "$state" in
         Running) ;;
         '' | Stopped)
@@ -452,7 +471,15 @@ stop_devbox_vm() {
     fi
     case "$state" in
         '' | Stopped) log "devbox VM is already stopped." ;;
-        Running) devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE" ;;
+        Running)
+            # Attempt a clean services shutdown first; an unclean one must
+            # never block stopping the VM.
+            if devbox_admin_guest bash -c 'test -f /var/lib/devbox/services/compose.yaml' >/dev/null 2>&1; then
+                devbox_services_compose stop ||
+                    warn "devbox services did not stop cleanly; continuing with the VM stop"
+            fi
+            devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE"
+            ;;
         *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
 }
@@ -490,11 +517,13 @@ run_devbox() {
         connect)
             [ $# -eq 0 ] || die "Usage: devbox connect"
             require_running_devbox_vm
+            require_devbox_ssh_alias
             devbox_guest_interactive zsh -l
             ;;
         exec)
             [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
             require_running_devbox_vm
+            require_devbox_ssh_alias
             devbox_guest "$@"
             ;;
         status)
@@ -531,7 +560,7 @@ run_devbox() {
             acquire_lock lifecycle
             if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
                 printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
-                read -r confirm
+                read -r confirm || die "Aborted"
                 [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
                 devbox_colima delete --data --force "$DEVBOX_PROFILE"
                 log "Destroyed devbox VM runtime data. No host project or data directories were used."

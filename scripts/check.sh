@@ -83,6 +83,31 @@ launcher_version="$("$ROOT/devbox" version)" || fail "devbox version failed"
 [ "$launcher_version" = "$(cat "$ROOT/VERSION")" ] ||
     fail "devbox version printed '$launcher_version' instead of the VERSION contents"
 
+# --- devbox version edge cases ------------------------------------------------
+# A missing or empty VERSION must exit nonzero with an ERROR line, not print
+# an empty version silently. The launcher tree is copied without VERSION (and with an
+# emptied one) under a HOME-isolated fixture; the launcher resolves its own
+# directory, so the copies prove the behavior without touching the checkout.
+version_fixture="$validation_root/version-fixture"
+version_home="$version_fixture/home"
+mkdir -p "$version_home"
+cp "$ROOT/devbox" "$version_fixture/devbox"
+cp -R "$ROOT/lib" "$version_fixture/lib"
+version_fixture_run() {
+    HOME="$version_home" "$version_fixture/devbox" "$@"
+}
+if version_edge_output="$(version_fixture_run version 2>&1)"; then
+    fail "devbox version accepted a missing VERSION file"
+fi
+[[ "$version_edge_output" == *'ERROR:'* ]] ||
+    fail "a missing VERSION file did not exit with an ERROR line ($version_edge_output)"
+: >"$version_fixture/VERSION"
+if version_edge_output="$(version_fixture_run version 2>&1)"; then
+    fail "devbox version accepted an empty VERSION file"
+fi
+[[ "$version_edge_output" == *'ERROR:'* ]] ||
+    fail "an empty VERSION file did not exit with an ERROR line ($version_edge_output)"
+
 # --- guest companion --------------------------------------------------------
 companion_home="$validation_root/guest-home"
 mkdir -p "$companion_home/.config/devbox"
@@ -569,6 +594,59 @@ fi
     fail "an unparseable Colima version did not embed the raw version line ($dep_output)"
 dep_unit 'colima version 0.10.3-1' >/dev/null ||
     fail "check_devbox_dependencies false-rejected the suffixed Colima version 0.10.3-1"
+
+# --- stop ordering -----------------------------------------------------------
+# Managed services must stop before the VM, and an unclean services stop must
+# never block the VM stop. Stubs record the call sequence; the guard proves the
+# services stop is attempted only when the bundle is installed in the guest.
+stop_unit_root="$validation_root/stop-unit"
+mkdir -p "$stop_unit_root/home/.colima/devbox"
+stop_scenario() {
+    env -u COLIMA_HOME -u LIMA_HOME \
+        HOME="$stop_unit_root/home" STOP_UNIT_ROOT="$stop_unit_root" \
+        STOP_UNIT_GUARD="$1" STOP_UNIT_SERVICES="$2" \
+        /bin/bash -c '
+        set -Eeuo pipefail
+        source "$ROOT/lib/common.sh"
+        source "$ROOT/lib/config.sh"
+        source "$ROOT/lib/devbox.sh"
+        configure_devbox_paths
+        : >"$STOP_UNIT_ROOT/calls"
+        devbox_state() { printf "Running\n"; }
+        devbox_admin_guest() {
+            printf "guard\n" >>"$STOP_UNIT_ROOT/calls"
+            [ "$STOP_UNIT_GUARD" = ok ]
+        }
+        devbox_services_compose() {
+            printf "services stop\n" >>"$STOP_UNIT_ROOT/calls"
+            [ "$STOP_UNIT_SERVICES" = ok ]
+        }
+        devbox_colima() {
+            printf "colima %s\n" "$*" >>"$STOP_UNIT_ROOT/calls"
+        }
+        stop_devbox_vm ""
+    '
+}
+stop_services_then_vm="$stop_unit_root/services-then-vm"
+printf 'guard\nservices stop\ncolima stop devbox\n' >"$stop_services_then_vm"
+stop_out="$(stop_scenario ok ok 2>&1)" ||
+    fail "stop_devbox_vm failed with the services bundle installed ($stop_out)"
+cmp -s "$stop_unit_root/calls" "$stop_services_then_vm" ||
+    fail "stop_devbox_vm did not stop services before the VM ($(tr '\n' ' ' \
+        <"$stop_unit_root/calls"))"
+stop_out="$(stop_scenario ok fail 2>&1)" ||
+    fail "an unclean services stop blocked the VM stop ($stop_out)"
+[[ "$stop_out" == *'WARNING:'* ]] ||
+    fail "an unclean services stop did not warn before the VM stop ($stop_out)"
+cmp -s "$stop_unit_root/calls" "$stop_services_then_vm" ||
+    fail "an unclean services stop changed the stop sequence ($(tr '\n' ' ' \
+        <"$stop_unit_root/calls"))"
+printf 'guard\ncolima stop devbox\n' >"$stop_unit_root/guard-then-vm"
+stop_out="$(stop_scenario fail ok 2>&1)" ||
+    fail "stop_devbox_vm failed when the services bundle was absent ($stop_out)"
+cmp -s "$stop_unit_root/calls" "$stop_unit_root/guard-then-vm" ||
+    fail "stop_devbox_vm stopped services without the services bundle ($(tr '\n' ' ' \
+        <"$stop_unit_root/calls"))"
 
 # --- lifecycle lock ---------------------------------------------------------
 # Lifecycle commands rely on the EXIT trap to release the lock, even on failure.
