@@ -112,11 +112,19 @@ uninstall_cli() {
 acquire_lock() {
     local lock_name="$1"
     local lock_path="$DEVBOX_LOCK_DIR/$lock_name"
-    local owner_pid=""
+    local owner_pid="" confirmed_pid=""
 
     mkdir -p "$DEVBOX_LOCK_DIR"
     if ! mkdir "$lock_path" 2>/dev/null; then
-        [ -f "$lock_path/pid" ] && read -r owner_pid <"$lock_path/pid"
+        # A missing, empty, or truncated pid file does not by itself prove the
+        # lock is stale: the owner may simply be between the mkdir above and
+        # the pid write below, and a failed read must never kill this process
+        # before the EXIT trap is armed. Treat an unparseable pid as "unknown"
+        # and decide via kill -0, which is the only recovery that works after
+        # an owner crash.
+        if [ -f "$lock_path/pid" ]; then
+            read -r owner_pid <"$lock_path/pid" 2>/dev/null || owner_pid=""
+        fi
         if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
             die "another devbox command is running (PID $owner_pid)"
         fi
@@ -127,6 +135,23 @@ acquire_lock() {
     fi
 
     printf '%s\n' "$$" >"$lock_path/pid"
+
+    # Settle re-verification after the pid write, on BOTH the fresh-mkdir and
+    # the stale-recovery path: between our mkdir and our pid write a contender
+    # may rm -rf the directory and re-create it with its own pid. This is
+    # bounded last-writer-wins, not perfect atomicity: after we write our pid
+    # we settle briefly and re-read the file; a contender's pid written after
+    # ours wins the read on their side (or ours persists), and the loser's
+    # re-read no longer matches and dies here. Do not remove the directory in
+    # that case — it no longer belongs to us, and unlinking it would strip
+    # the current owner's pid file.
+    sleep 0.2
+    confirmed_pid=""
+    read -r confirmed_pid <"$lock_path/pid" 2>/dev/null || confirmed_pid=""
+    if [ "$confirmed_pid" != "$$" ]; then
+        die "lock acquisition contended at $lock_path: another command holds it"
+    fi
+
     DEVBOX_ACTIVE_LOCK="$lock_path"
     trap release_lock EXIT
     trap 'exit 130' INT
@@ -135,7 +160,23 @@ acquire_lock() {
 
 release_lock() {
     if [ -n "${DEVBOX_ACTIVE_LOCK:-}" ]; then
-        command rm -rf "$DEVBOX_ACTIVE_LOCK"
+        local recorded_pid=""
+        if [ -f "$DEVBOX_ACTIVE_LOCK/pid" ]; then
+            read -r recorded_pid <"$DEVBOX_ACTIVE_LOCK/pid" 2>/dev/null ||
+                recorded_pid=""
+        fi
+        # Only delete the directory while it still records our pid. A losing
+        # contender may have overwritten the pid file with its own; removing
+        # anyway would destroy a live owner's lock and let a third command
+        # acquire while the real owner still runs. (Bounded constraint: this
+        # identity check is spoofable by overwrite, which is accepted — the
+        # point is that a LOSING contender never deletes the shared dir; a
+        # genuinely dead owner is recovered by the next acquire's stale path.)
+        if [ "$recorded_pid" = "$$" ]; then
+            command rm -rf "$DEVBOX_ACTIVE_LOCK"
+        else
+            warn "not removing lock $DEVBOX_ACTIVE_LOCK: recorded pid ${recorded_pid:-<none>} is not ours ($$)"
+        fi
         DEVBOX_ACTIVE_LOCK=""
     fi
     trap - EXIT INT TERM

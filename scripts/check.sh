@@ -528,6 +528,49 @@ lock_output="$(DEVBOX_LOCK_DIR="$lock_dir" /bin/bash -c '
     fail "the lock test did not fail as expected ($lock_status: $lock_output)"
 [ ! -e "$lock_dir/lifecycle" ] || fail "a failed lifecycle command left its lock behind"
 
+# A live owner seen through a missing/empty/truncated pid file must be treated
+# as stale and recovered, not as a silent set -e exit wedging the lock. Run
+# acquisitions against an empty pid file and one naming a guaranteed-dead pid.
+stale_dir="$lock_dir"
+/bin/bash -c 'exit 0' & dead_pid=$!
+wait "$dead_pid" 2>/dev/null || true
+for stale_case in "empty:" "dead-pid:$dead_pid"; do
+    stale_name=${stale_case%%:*}
+    stale_pid=${stale_case#*:}
+    mkdir -p "$stale_dir/lifecycle-stale"
+    : >"$stale_dir/lifecycle-stale/pid"
+    [ "$stale_name" = empty ] || printf '%s\n' "$stale_pid" >"$stale_dir/lifecycle-stale/pid"
+    stale_status=0
+    stale_output="$(DEVBOX_LOCK_DIR="$stale_dir" /bin/bash -c '
+        source "$ROOT/lib/common.sh"
+        acquire_lock lifecycle-stale
+        [ "$(cat "$DEVBOX_LOCK_DIR/lifecycle-stale/pid")" = "$$" ] || exit 4
+    ' 2>&1)" || stale_status=$?
+    if [ "$stale_status" != 0 ] ||
+        [[ "$stale_output" != *'removing stale lock'* ]]; then
+        fail "the $stale_name-pid lock test failed ($stale_status: $stale_output)"
+    fi
+done
+
+# release_lock must be identity-guarded: a contender that overwrote the pid
+# file with a foreign pid (a losing double-hold contender) must not destroy
+# the directory on release. Use the gate shell's own pid as the
+# guaranteed-live foreign pid; the tree-wide validation_root teardown
+# (trap at check.sh start) cleans the surviving directory up afterwards.
+guard_status=0
+guard_output="$(GUARD_PID=$$ DEVBOX_LOCK_DIR="$lock_dir" /bin/bash -c '
+    source "$ROOT/lib/common.sh"
+    acquire_lock lifecycle-guard
+    printf '"'"'%s\n'"'"' "$GUARD_PID" >"$DEVBOX_LOCK_DIR/lifecycle-guard/pid"
+' 2>&1)" || guard_status=$?
+[ "$guard_status" = 0 ] ||
+    fail "the release-guard lock test failed ($guard_status: $guard_output)"
+[[ "$guard_output" == *'WARNING: not removing lock'* ]] ||
+    fail "release_lock did not warn on a foreign recorded pid ($guard_output)"
+[ -f "$lock_dir/lifecycle-guard/pid" ] &&
+    [ "$(cat "$lock_dir/lifecycle-guard/pid")" = "$$" ] ||
+    fail "release_lock disturbed a live owner's lock directory"
+
 # --- host configuration -------------------------------------------------------
 [ "$(DEVBOX_ENV_FILE="$validation_root/override.env" DEVBOX_DIR="$ROOT" /bin/bash -c '
     source "$ROOT/lib/common.sh"
