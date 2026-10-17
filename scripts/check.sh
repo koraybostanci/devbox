@@ -485,6 +485,35 @@ ln -s one "$ssh_unit_root/links/two"
 [ "$(resolve_symlink_target "$ssh_unit_root/links/two")" = "$ssh_unit_root/links/real" ] ||
     fail "resolve_symlink_target did not follow a symlink chain"
 
+# --- devbox_guest argument quoting ---------------------------------------------
+# OpenSSH space-joins the remote argv and the guest shell re-parses it, so
+# devbox_guest pre-quotes each host argument with printf '%q'. The stub below
+# records its argv; re-parsing the remote string the way the guest shell would
+# must reproduce every argument verbatim — spaces and shell metacharacters
+# included — proving host args are no longer re-expanded by the guest shell.
+quote_bin="$ssh_unit_root/quote-bin"
+mkdir -p "$quote_bin"
+cat >"$quote_bin/ssh" <<'STUB'
+#!/bin/bash
+for arg in "$@"; do
+    printf '%s\n' "$arg"
+done
+STUB
+chmod +x "$quote_bin/ssh"
+ssh_unit "$quote_bin" devbox_guest touch 'a b;cd /tmp' \
+    >"$ssh_unit_root/quote-args" || fail "devbox_guest did not invoke ssh"
+remote_cmd="$(tail -n 1 "$ssh_unit_root/quote-args")"
+[ "$remote_cmd" != "" ] || fail "devbox_guest sent an empty remote command"
+remote_cmd="$remote_cmd" /bin/bash -c '
+    set -eu
+    eval "remote_argv=($remote_cmd)"
+    printf '\''%s\n'\'' "${remote_argv[@]}"
+' >"$ssh_unit_root/parsed-args" ||
+    fail "guest-shell re-parse of the quoted argv failed"
+printf '%s\n' 'touch' 'a b;cd /tmp' >"$ssh_unit_root/expected-args"
+cmp -s "$ssh_unit_root/parsed-args" "$ssh_unit_root/expected-args" ||
+    fail "devbox_guest quoting did not survive the guest shell re-parse"
+
 # --- lifecycle lock ---------------------------------------------------------
 # Lifecycle commands rely on the EXIT trap to release the lock, even on failure.
 lock_dir="$validation_root/locks"

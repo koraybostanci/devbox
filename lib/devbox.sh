@@ -122,13 +122,30 @@ devbox_admin_guest() {
     devbox_colima ssh -p "$DEVBOX_PROFILE" -- "$@"
 }
 
+# Contract change (deliberate): host arguments are pre-quoted with printf '%q'
+# and passed as a single remote command string, because OpenSSH space-joins the
+# remote argv and the guest login shell re-parses it. Arguments reach the guest
+# verbatim — spaces, ';', '$', backticks and friends are no longer re-expanded
+# by the guest shell. Use this interface instead of relying on expansion.
 devbox_guest() {
-    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+    if [ "$#" -eq 0 ]; then
+        ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+        return
+    fi
+    local quoted_argv
+    quoted_argv="$(printf '%q ' "$@")"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "${quoted_argv% }"
 }
 
 # Interactive variant for prompts (provider login, portable shell).
 devbox_guest_interactive() {
-    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+    if [ "$#" -eq 0 ]; then
+        ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+        return
+    fi
+    local quoted_argv
+    quoted_argv="$(printf '%q ' "$@")"
+    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "${quoted_argv% }"
 }
 
 # The payload is single-quoted so it is expanded inside the guest, not here.
