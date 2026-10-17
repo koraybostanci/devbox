@@ -78,6 +78,10 @@ install_guest_chromium() {
     systemctl enable --now snapd.socket
     snap wait system seed.loaded
     snap list chromium >/dev/null 2>&1 || snap install chromium --channel=stable
+    # snapd otherwise auto-refreshes Chromium between provisioning cycles,
+    # silently moving the guest's browser ahead of the smoke-tested channel
+    # state; hold the refresh so the pinned channel install stays in place.
+    snap refresh --hold chromium
 }
 
 # Keep the helpers above sourceable by the static gate without running the

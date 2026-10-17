@@ -23,21 +23,20 @@ install_node() {
 }
 
 install_python() {
-    local installer
     stage "Python $PYTHON_VERSION"
     export PYENV_ROOT="$HOME/.pyenv"
     if [ ! -x "$PYENV_ROOT/bin/pyenv" ]; then
-        installer="$(mktemp)"
-        download_verified \
-            "https://raw.githubusercontent.com/pyenv/pyenv-installer/$PYENV_INSTALLER_COMMIT/bin/pyenv-installer" \
-            "$PYENV_INSTALLER_SHA256" "$installer"
-        bash "$installer"
-        rm -f "$installer"
+        # Clone upstream master, then converge to the pinned commit below: git
+        # object hashes authenticate the checkout, so no artifact pin applies.
+        git clone --depth 1 https://github.com/pyenv/pyenv.git "$PYENV_ROOT"
     fi
-    # Refresh the definitions only when the requested interpreter is missing;
-    # a converged guest must not depend on network access to the git remote.
+    if [ "$(git -C "$PYENV_ROOT" rev-parse HEAD)" != "$PYENV_REPO_COMMIT" ]; then
+        git -C "$PYENV_ROOT" fetch --depth 1 origin "$PYENV_REPO_COMMIT"
+        git -C "$PYENV_ROOT" checkout --detach --quiet "$PYENV_REPO_COMMIT"
+    fi
+    # The pinned tree already carries the requested interpreter definition, so
+    # a converged guest (HEAD at the pin) never needs the git remote again.
     if ! pyenv versions --bare | grep -qx "$PYTHON_VERSION"; then
-        git -C "$PYENV_ROOT" pull --ff-only --quiet
         pyenv install "$PYTHON_VERSION"
     fi
     pyenv global "$PYTHON_VERSION"

@@ -66,15 +66,18 @@ install_yq() {
 }
 
 install_shell_sources() {
-    local installer
+    local commit tree_state
     stage "Shell framework"
+    commit="$OH_MY_ZSH_COMMIT"
     if [ ! -r "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
-        installer="$(mktemp)"
-        download_verified \
-            "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/$OH_MY_ZSH_COMMIT/tools/install.sh" \
-            "$OH_MY_ZSH_INSTALL_SHA256" "$installer"
-        ZSH="$HOME/.oh-my-zsh" RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh "$installer" --unattended
-        rm -f "$installer"
+        # Clone upstream master, then converge to the pinned commit below: git
+        # object hashes authenticate the checkout, so no artifact pin applies.
+        git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
+    fi
+    tree_state="$(git -C "$HOME/.oh-my-zsh" rev-parse HEAD)"
+    if [ "$tree_state" != "$commit" ]; then
+        git -C "$HOME/.oh-my-zsh" fetch --depth 1 origin "$commit"
+        git -C "$HOME/.oh-my-zsh" checkout --detach --quiet "$commit"
     fi
 }
 
