@@ -2,9 +2,11 @@
 
 # The grep patterns below are intentionally literal and the `A && B || C`
 # forms end in fail()/diagnosis blocks that always exit, so both info findings
-# are declared once instead of suppressing them per line.
+# are declared once instead of suppressing them per line. Sources resolve at
+# runtime, never statically followable paths (SC1091), and apparmor_parser
+# shadows an external tool that a sourced library invokes indirectly (SC2329).
 # This file-wide disable must stay before the first command to have effect.
-# shellcheck disable=SC2016,SC2015
+# shellcheck disable=SC2016,SC2015,SC1091,SC2329
 
 set -Eeuo pipefail
 
@@ -50,8 +52,13 @@ else
     fi
 fi
 
-# The host runs macOS /bin/bash 3.2; keep bash 4+ constructs out of host code.
-if grep -nE 'mapfile|readarray|coproc|(declare|local|typeset) -[gAn]|\$\{[A-Za-z_]+(,,|\^\^|@[QEPAa])|;;&|;&|\[\[ -v ' devbox lib/*.sh; then
+# The host runs macOS /bin/bash 3.2; keep bash 4+ constructs out of host code,
+# including the gate files themselves, which execute under macOS /bin/bash when
+# reused there. Tokens like `[;][&]` are bracketed so this grep never matches
+# its own literal text.
+if grep -nE \
+    '[m]apfile|[r]eadarray|[c]oproc|(declare|local|typeset) -[gAn]|\$\{[A-Za-z_]+(,,|\^\^|@[QEPAa])|\[\[ -v |[;][;][&]|[;][&]' \
+    devbox lib/*.sh scripts/*.sh; then
     fail "host scripts must stay compatible with bash 3.2"
 fi
 
@@ -118,11 +125,23 @@ printf '{}\n' >"$claude_home/.claude/.credentials.json"
 [[ "$(companion "$companion_home" /usr/bin:/bin db info)" == *'postgres port: 15432'* ]] ||
     fail "companion did not report PostgreSQL settings"
 
-# --- devbox must not need host jq or yq ----------------------------------------
-for scan_target in lib/devbox.sh lib/config.sh devbox; do
-    [ -f "$scan_target" ] || fail "scan target is missing: $scan_target"
+# --- scan target guard ---------------------------------------------------------
+# Fail closed on a missing scan target: grep -R exits 2 for a missing path,
+# which would silently satisfy the non-match tests below.
+require_paths=(
+    devbox lib provision/scripts provision/config/zsh provision/config/guest
+    provision/config/claude provision/config/opencode provision/config/services
+    provision/config/skills
+)
+for scan_target in "${require_paths[@]}"; do
+    [ -e "$scan_target" ] || fail "scan target is missing: $scan_target"
 done
-if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' lib/devbox.sh lib/config.sh; then
+
+# --- devbox must not need host jq or yq ----------------------------------------
+# The launcher (`devbox`) and the common library are scanned as well: the
+# launcher delegates to both of them.
+if grep -nE '(^|[^[:alnum:]_])(jq|yq)([^[:alnum:]_]|$)' \
+    devbox lib/devbox.sh lib/config.sh lib/common.sh; then
     fail "devbox must not require host jq or yq"
 fi
 
@@ -137,33 +156,38 @@ for pin in GO_SHA256 NVM_INSTALL_SHA256 PYENV_INSTALLER_SHA256 UV_INSTALL_SHA256
 done
 
 # --- guest privilege boundaries ----------------------------------------------
-# verify.sh runs as the unprivileged devbox user and cannot traverse the
-# root-only services directory; file-level checks belong in root scripts.
-if grep -q '/var/lib/devbox/services/' provision/scripts/verify.sh; then
-    fail "verify.sh must not inspect files inside the root-only services directory"
-fi
 if grep -R -nE \
     'kernel\.apparmor_restrict_unprivileged_userns[[:space:]]*=[[:space:]]*0|sysctl[[:space:]].*apparmor_restrict_unprivileged_userns' \
     provision/scripts; then
     fail "RootlessKit provisioning must not disable AppArmor's user-namespace restriction"
 fi
 
+# verify.sh runs as the unprivileged devbox user and cannot traverse the
+# root-only services directory; file-level checks belong in root scripts.
+verify_forbidden_strings=('/var/lib/devbox/services/')
+for verify_forbidden_string in "${verify_forbidden_strings[@]}"; do
+    if grep -qF -- "$verify_forbidden_string" provision/scripts/verify.sh; then
+        fail "verify.sh must not inspect files inside the root-only services directory"
+    fi
+done
+# Readiness tripwire: assert the `check` CALL sites, never a bare function
+# name. A bare-name match also hits the definitions, so removing an
+# invocation while its definition remains would be a false pass.
+for readiness_check in \
+    rootless_context_is_selected rootless_docker_is_ready \
+    rootful_docker_is_denied chromium_launches_headlessly; do
+    if ! grep -Eq "^[[:space:]]*check \".*\"[[:space:]]$readiness_check\$" provision/scripts/verify.sh; then
+        fail "guest readiness check call is missing: $readiness_check"
+    fi
+done
+
 # User Docker and Puppeteer defaults must be isolated from the root-managed
-# services daemon and project-specific browser download settings.
+# services daemon and project-specific browser download settings. The dynamic
+# zsh battery below proves those startup behaviors stay effective, so no static
+# greps pin them here. Only the global-download prohibition needs a grep: a
+# global `export PUPPETEER_SKIP_DOWNLOAD=true` would be indistinguishable from
+# an inherited value inside the dynamic test.
 rootless_zshenv=provision/config/zsh/zshenv
-grep -qF 'export PUPPETEER_EXECUTABLE_PATH="${PUPPETEER_EXECUTABLE_PATH:-/snap/bin/chromium}"' \
-    "$rootless_zshenv" ||
-    fail "zsh startup must default Puppeteer to Chromium without replacing an existing path"
-grep -qF 'export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"' "$rootless_zshenv" ||
-    fail "zsh startup must route Docker to the per-user socket"
-grep -qF 'export DISABLE_AUTOUPDATER=1' "$rootless_zshenv" ||
-    fail "zsh startup must disable Claude Code self-updates managed by devbox"
-grep -qF 'export NPM_CONFIG_ALLOW_SCRIPTS="@anthropic-ai/claude-code"' "$rootless_zshenv" ||
-    fail "zsh startup must allow Claude Code's explicit npm update postinstall"
-grep -qF 'export NPM_CONFIG_INCLUDE=optional' "$rootless_zshenv" ||
-    fail "zsh startup must include Claude Code's native optional npm package"
-grep -qF 'unset DOCKER_CONTEXT' "$rootless_zshenv" ||
-    fail "zsh startup must prevent an inherited Docker context from overriding the rootless socket"
 if grep -R -nE '^[[:space:]]*(export[[:space:]]+)?PUPPETEER_SKIP_DOWNLOAD=' provision/config/zsh; then
     fail "PUPPETEER_SKIP_DOWNLOAD must remain project-scoped, not global"
 fi
@@ -183,6 +207,10 @@ grep -qF 'export EDITOR=vim' provision/config/zsh/zshrc ||
     fail "the guest shell must default to Vim for command-line editing"
 grep -qE '^[[:space:]]+apparmor$' provision/scripts/system.sh ||
     fail "system provisioning must install Ubuntu's AppArmor package"
+# Docs policy tripwires: these exact-prose greps pin architecture.md wording
+# deliberately, including the Finsights section requirements below.
+# A docs edit touching these sentences must update the matching greps in the
+# same commit.
 grep -qF 'version **29.5 or newer**' docs/architecture.md ||
     fail "the rootless host-network Engine version requirement must be documented"
 grep -qF 'read-only `/:/host:ro,rslave` mount' docs/architecture.md ||
@@ -195,17 +223,6 @@ grep -qF 'does not elevate access' docs/architecture.md ||
     fail "rootless guest-root bind-mount permission limits must be documented"
 grep -qF 'VM smoke test against the actual rootless daemon is required' docs/architecture.md ||
     fail "actual guest metrics must require a rootless VM smoke test"
-for readiness_check in \
-    rootless_context_is_selected rootless_docker_is_ready \
-    rootful_docker_is_denied chromium_launches_headlessly; do
-    grep -q "$readiness_check" provision/scripts/verify.sh ||
-        fail "guest readiness check is missing: $readiness_check"
-done
-if grep -R -nE \
-    'kernel\.apparmor_restrict_unprivileged_userns[[:space:]]*=[[:space:]]*0|sysctl[[:space:]].*apparmor_restrict_unprivileged_userns' \
-    provision/scripts; then
-    fail "RootlessKit provisioning must not disable AppArmor's user-namespace restriction"
-fi
 
 # Exercise RootlessKit AppArmor profile loading without a VM or system policy:
 # only an enabled user-namespace restriction should trigger the load.
@@ -286,15 +303,22 @@ if command -v zsh >/dev/null 2>&1; then
         _ "$ROOT/$rootless_zshenv")" = /snap/bin/chromium ] ||
         fail "an unset Puppeteer path did not default to /snap/bin/chromium"
     shell_config_output="$(env DOCKER_HOST=unix:///tmp/inherited.sock DOCKER_CONTEXT=inherited \
-        PUPPETEER_EXECUTABLE_PATH=/project/browser PUPPETEER_SKIP_DOWNLOAD=true zsh -f -c '
+        PUPPETEER_EXECUTABLE_PATH=/project/browser PUPPETEER_SKIP_DOWNLOAD=true \
+        DISABLE_AUTOUPDATER=no NPM_CONFIG_ALLOW_SCRIPTS=anything NPM_CONFIG_INCLUDE=stripped \
+        zsh -f -c '
         source "$1"
-        printf "%s\n%s\n%s\n%s\n" "$DOCKER_HOST" "${DOCKER_CONTEXT-<unset>}" \
-            "${PUPPETEER_EXECUTABLE_PATH-<unset>}" "${PUPPETEER_SKIP_DOWNLOAD-<unset>}"
+        printf "%s\n%s\n%s\n%s\n%s\n%s\n%s\n" "$DOCKER_HOST" "${DOCKER_CONTEXT-<unset>}" \
+            "${PUPPETEER_EXECUTABLE_PATH-<unset>}" "${PUPPETEER_SKIP_DOWNLOAD-<unset>}" \
+            "${DISABLE_AUTOUPDATER-<unset>}" "${NPM_CONFIG_ALLOW_SCRIPTS-<unset>}" \
+            "${NPM_CONFIG_INCLUDE-<unset>}"
     ' _ "$ROOT/$rootless_zshenv")" || fail "zsh startup config could not be loaded"
     [ "$shell_config_output" = "unix:///run/user/$(id -u)/docker.sock
 <unset>
 /project/browser
-true" ] || fail "zsh startup changed a project Puppeteer setting or missed the rootless Docker default"
+true
+1
+@anthropic-ai/claude-code
+optional" ] || fail "zsh startup changed a project setting or missed a rootless Docker or Claude Code default"
     cp "$zshenv_unit_root/.zshenv-expected" "$zshenv_unit_home/.zshenv"
     merged_zshenv_output="$(env -u PUPPETEER_EXECUTABLE_PATH zsh -f -c '
         source "$1"
@@ -303,6 +327,12 @@ true" ] || fail "zsh startup changed a project Puppeteer setting or missed the r
     [ "$merged_zshenv_output" = "preserved
 unix:///tmp/user-selected-docker.sock
 /project/browser" ] || fail "managed .zshenv did not preserve effective user and project settings"
+else
+    # No silent skip: this battery is the only proof of the zshenv behaviors.
+    if [ -n "${CI:-}" ]; then
+        fail "zsh is required in CI"
+    fi
+    printf 'WARN: zsh is unavailable; skipping the zsh startup battery\n' >&2
 fi
 
 # --- managed services use the rootful daemon only ---------------------------
@@ -336,15 +366,12 @@ grep -qx 'arg=compose' "$services_capture" && grep -qx 'arg=ps' "$services_captu
 source "$ROOT/scripts/check-guest-state.sh"
 
 # --- prohibited provisioning patterns --------------------------------------
-# Fail closed on a missing scan target: grep -R exits 2 for a missing path,
-# which would silently satisfy the non-match test below.
-for scan_target in \
-    devbox lib provision/scripts provision/config/zsh provision/config/guest; do
-    [ -e "$scan_target" ] || fail "scan target is missing: $scan_target"
-done
+# The scan targets were existence-checked against `require_paths` above, so
+# no missing-path `grep -R` trap can report a false pass here; the four
+# provision/config agent trees are covered too.
 if grep -R -E -- \
     '^[[:space:]]*eval[[:space:]]|curl[^|]*\|[[:space:]]*(ba)?sh|SSH_AUTH_SOCK=/run/host-services|chmod 0777|rm -rf "\$HOME/(projects|data)|/etc/environment|readlink -f' \
-    devbox lib provision/scripts provision/config/zsh provision/config/guest; then
+    "${require_paths[@]}"; then
     fail "prohibited provisioning pattern found"
 fi
 

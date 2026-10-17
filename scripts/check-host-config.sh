@@ -6,6 +6,12 @@
 # both findings are declared once instead of suppressing them per line.
 # shellcheck disable=SC2016,SC2154
 
+# Standalone execution has no fixtures or helpers; insist on the gate.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    printf 'ERROR: scripts/check-host-config.sh must be sourced by scripts/check.sh\n' >&2
+    exit 1
+fi
+
 # Host .env values are validated before they reach Colima or the guest.
 for value in 0 65536 999999; do
     reject_env "export POSTGRES_PORT=$value"
