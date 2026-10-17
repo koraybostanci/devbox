@@ -24,6 +24,9 @@ sync_managed_opencode_tree() {
             done
         done <"$manifest"
     fi
+    # An absent source directory means the managed tree is retired: the manifest
+    # cleanup above already removed its files, so there is nothing to copy.
+    [ -d "$source" ] || return 0
     cp -R "$source/." "$target/"
     (cd "$source" && find . -type f | LC_ALL=C sort | sed 's#^\./##') >"$manifest"
 }
@@ -32,11 +35,14 @@ configure_opencode() {
     local config_directory="$HOME/.config/opencode"
 
     stage "OpenCode configuration"
-    mkdir -p "$config_directory/agents" "$config_directory/skills"
+    mkdir -p "$config_directory/skills" "$config_directory/commands"
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/opencode.jsonc" "$config_directory/opencode.jsonc"
     sync_managed_opencode_tree \
         "$DEVBOX_PROVISION_ROOT/config/opencode/agents" \
         "$config_directory/agents" "$config_directory/.devbox-managed-agents"
+    sync_managed_opencode_tree \
+        "$DEVBOX_PROVISION_ROOT/config/opencode/commands" \
+        "$config_directory/commands" "$config_directory/.devbox-managed-commands"
     sync_managed_opencode_tree \
         "$DEVBOX_PROVISION_ROOT/config/skills" \
         "$config_directory/skills" "$config_directory/.devbox-managed-skills"
