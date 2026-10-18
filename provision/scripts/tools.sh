@@ -43,8 +43,8 @@ devbox_parse_state_file "$git_config" config <"$git_config" || {
 }
 export GIT_NAME GIT_EMAIL
 
-mkdir -p "$HOME/.local/bin"
-export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
+mkdir -p "$HOME/.local/bin" "$HOME/.opencode/bin"
+export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
 
 install_runtimes
 install_apps
