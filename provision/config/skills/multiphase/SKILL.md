@@ -47,13 +47,16 @@ the conversation.
 
 ## Built-in review invocation
 
-Both harnesses' built-in reviewer is named `/review`. Run each review as a
-child session from the worktree root, in the running harness's CLI, and read
-its final report only. A fresh reviewer does not carry this session's
-assumptions:
+Both harnesses' built-in reviewer is named `/review`. An agent cannot expand a
+slash command itself, so each review runs through a headless child session of
+the running harness (`claude -p` / `opencode run` are those harnesses' own
+headless modes), from the worktree root, invoking the built-in command
+verbatim. Take from the child its final report only. A fresh reviewer with
+none of this session's assumptions is deliberate, not overhead:
 
-- Per-phase diff: `claude -p '/review medium'` (Claude Code) or
-  `opencode run '/review'` (OpenCode v2; its one standard pass).
+- Per-phase diff: `claude -p '/review medium'` (Claude Code; effort level is
+  a positional argument) or `opencode run '/review'` (OpenCode v2; its one
+  standard pass).
 - Whole-branch diff: pass the base branch name recorded in Setup as the
   target, since both harnesses' branch form diffs `<base>...HEAD`:
   `claude -p '/review max <base>'` or `opencode run '/review <base>'`.
