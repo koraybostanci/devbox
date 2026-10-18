@@ -90,6 +90,23 @@ devbox_state() {
     awk '{ print $2 }' <<<"$record"
 }
 
+# The devbox VM state, empty when the profile directory does not exist. Call
+# sites that branch on that emptiness (start, stop) route through here instead
+# of re-deriving the existence check.
+devbox_vm_state() {
+    [ -e "$DEVBOX_COLIMA_PROFILE" ] || return 0
+    devbox_state
+}
+
+# Die on a transitional Colima state that is neither cleanly startable nor
+# stoppable; only the settled shapes ('' none, Running, Stopped) pass.
+require_settled_state() {
+    case "$1" in
+        '' | Running | Stopped) ;;
+        *) die "devbox VM is in state '$1'; wait for it to settle and retry" ;;
+    esac
+}
+
 validate_devbox_colima_config() {
     local file="$1"
 
@@ -193,12 +210,10 @@ wait_for_devbox_ssh() {
 start_devbox_vm() {
     local state="" previous_copy=""
 
+    state="$(devbox_vm_state)"
     # When the VM is already running, save the rendered configuration before
     # the fresh one overwrites it: resources apply only across a stop and
     # start, so drift from the running VM must never pass silently.
-    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
-        state="$(devbox_state)"
-    fi
     if [ "$state" = Running ] && [ -f "$DEVBOX_COLIMA_CONFIG" ]; then
         previous_copy="$(mktemp "${TMPDIR:-/tmp}/devbox-colima.XXXXXX")"
         cp "$DEVBOX_COLIMA_CONFIG" "$previous_copy"
@@ -210,6 +225,7 @@ start_devbox_vm() {
             warn "configuration changed; resources apply on the next stop and start"
         command rm -f "$previous_copy"
     fi
+    require_settled_state "$state"
     case "$state" in
         Running) ;;
         '' | Stopped)
@@ -218,7 +234,6 @@ start_devbox_vm() {
             # from rewriting the rendered file.
             devbox_colima start "$DEVBOX_PROFILE" --save-config=false
             ;;
-        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
     wait_for_devbox_ssh
 }
@@ -469,9 +484,8 @@ provision_devbox_guest() (
 stop_devbox_vm() {
     local force="$1" state=""
 
-    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
-        state="$(devbox_state)"
-    fi
+    state="$(devbox_vm_state)"
+    require_settled_state "$state"
     case "$state" in
         '' | Stopped) log "devbox VM is already stopped." ;;
         Running)
@@ -483,7 +497,6 @@ stop_devbox_vm() {
             fi
             devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE"
             ;;
-        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
 }
 
@@ -509,7 +522,7 @@ run_devbox() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox $action"
+            require_args 0 "devbox $action" "$@"
             check_host_platform
             check_devbox_dependencies
             load_env
@@ -518,26 +531,23 @@ run_devbox() {
             provision_devbox_guest "$action"
             ;;
         connect)
-            [ $# -eq 0 ] || die "Usage: devbox connect"
+            require_args 0 "devbox connect" "$@"
             require_running_devbox_vm
             require_devbox_ssh_alias
             devbox_guest_interactive zsh -l
             ;;
         exec)
-            [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
+            require_args + "devbox exec <command> [args...]" "$@"
             require_running_devbox_vm
             require_devbox_ssh_alias
             devbox_guest "$@"
             ;;
         status)
-            [ $# -eq 0 ] || die "Usage: devbox status"
+            require_args 0 "devbox status" "$@"
             show_devbox_status
             ;;
         services)
-            case "$*" in
-                start | stop | status) ;;
-                *) die "Usage: devbox services <start|stop|status>" ;;
-            esac
+            require_args "start|stop|status" "devbox services <start|stop|status>" "$@"
             require_running_devbox_vm
             devbox_services_compose "$1"
             ;;
@@ -550,16 +560,13 @@ run_devbox() {
             devbox_guest devbox db "$@"
             ;;
         stop)
-            case "$*" in
-                '') ;;
-                --force) force=1 ;;
-                *) die "Usage: devbox stop [--force]" ;;
-            esac
+            require_args "|--force" "devbox stop [--force]" "$@"
+            force="${1:+--force}"
             acquire_lock lifecycle
             stop_devbox_vm "$force"
             ;;
         destroy)
-            [ $# -eq 0 ] || die "Usage: devbox destroy"
+            require_args 0 "devbox destroy" "$@"
             acquire_lock lifecycle
             if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
                 printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"

@@ -25,12 +25,10 @@ check_host_platform() {
 }
 
 is_allowed_env_key() {
-    local candidate="$1"
-    local allowed
-
-    for allowed in "${ENV_KEYS[@]}"; do
-        [ "$candidate" = "$allowed" ] && return 0
-    done
+    case "$1" in
+        GIT_NAME | GIT_EMAIL | POSTGRES_USER | POSTGRES_DB | POSTGRES_PORT | \
+        DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK | DEVBOX_USE_HOST_PROXY) return 0 ;;
+    esac
     return 1
 }
 
@@ -114,7 +112,7 @@ devbox_env_file() {
 # interpreted. Strict mode rejects malformed lines; lenient mode (used by
 # `devbox init`, which rewrites the file) reports and skips them.
 read_env_file() {
-    local env_file="$1" mode="$2" line key value line_number=0
+    local env_file="$1" mode="$2" line key value line_number=0 verb
     local quote_char quote_exempt quote_stripped
 
     while IFS= read -r line || [ -n "$line" ]; do
@@ -127,11 +125,11 @@ read_env_file() {
         fi
         key="${BASH_REMATCH[2]}"
         if ! is_allowed_env_key "$key"; then
-            if [ "$mode" = lenient ]; then
-                warn "$env_file:$line_number removes unsupported variable $key"
-            else
-                warn "$env_file:$line_number ignores unsupported variable $key"
-            fi
+            # The two modes share everything but the verb: lenient (the init
+            # rewrite) reports the key as removed; strict ignores it and keeps
+            # validating the rest of the file.
+            case "$mode" in lenient) verb=removes ;; *) verb=ignores ;; esac
+            warn "$env_file:$line_number $verb unsupported variable $key"
             continue
         fi
         value="${line#*=}"

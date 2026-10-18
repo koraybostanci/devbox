@@ -15,6 +15,34 @@ die() {
     exit 1
 }
 
+# Dumb argument-shape guard for CLI dispatch. A numeric shape demands exactly
+# that many arguments, "+" demands at least one, and any other shape is a
+# "|"-separated list of options ("start|stop|status", "|--force") the joined
+# arguments must equal verbatim; a leading "|" admits the empty argument
+# list. Every rejection dies with the exact documented usage line, so callers
+# pass that text verbatim instead of re-deriving it.
+require_args() {
+    local shape="$1" usage="$2" option matched=1
+    shift 2
+    case "$shape" in
+        +)
+            [ "$#" -gt 0 ] || die "Usage: $usage"
+            ;;
+        [0-9]*)
+            [ "$#" -eq "$shape" ] || die "Usage: $usage"
+            ;;
+        *)
+            # Split the alternatives; option words are fixed dispatch shapes,
+            # so no glob expansion protection is needed here.
+            local IFS='|'
+            for option in $shape; do
+                [ "$option" = "$*" ] && matched=0
+            done
+            [ "$matched" = 0 ] || die "Usage: $usage"
+            ;;
+    esac
+}
+
 # Compare two versions as "current is at least minimum". An optional leading
 # 'v' and trailing '-suffix' are stripped, then both inputs must be
 # dotted-numeric with 1 to 3 components — anything else fails closed and the
@@ -68,20 +96,50 @@ resolve_symlink_target() {
     printf '%s\n' "$path"
 }
 
-install_cli() {
-    local source_path="$1"
-    local bin_dir target installed source_target
+# Describe the installed devbox command relative to the launcher source. The
+# caller passes the checkout's launcher path and receives three lines on
+# stdout — "<installed>", "<installed target>", "<ours>" — where <installed>
+# is the PATH entry for `devbox` (empty when it is not on PATH), <installed
+# target> is that entry's resolved symlink target (empty when the entry is
+# missing or not a symlink), and <ours> is the shared ownership rule as 1
+# exactly when the entry is a symlink to the launcher source. A second
+# argument evaluates a candidate path instead of the PATH lookup (the
+# uninstall fallback to the documented install location). One value per line
+# because an empty first field must survive the trip without IFS-style
+# leading-delimiter stripping, which would corrupt separator-based records.
+devbox_cli_target() {
+    local source_path="$1" candidate="${2-}"
+    local installed="" installed_target="" source_target ours=0
 
-    bin_dir="$HOME/.local/bin"
-    installed="$(command -v devbox 2>/dev/null || true)"
     source_target="$(resolve_symlink_target "$source_path")"
-    if [ -n "$installed" ]; then
-        if [ -L "$installed" ] &&
-            [ "$(resolve_symlink_target "$installed")" = "$source_target" ]; then
-            bin_dir="$(dirname "$installed")"
-        else
-            warn "$installed is not a symlink to this checkout; PATH resolves 'devbox' there instead of $bin_dir/devbox"
+    if [ -n "$candidate" ]; then
+        installed="$candidate"
+    else
+        installed="$(command -v devbox 2>/dev/null || true)"
+    fi
+    if [ -n "$installed" ] && [ -L "$installed" ]; then
+        installed_target="$(resolve_symlink_target "$installed")"
+        if [ "$installed_target" = "$source_target" ]; then
+            ours=1
         fi
+    fi
+    printf '%s\n%s\n%s\n' "$installed" "$installed_target" "$ours"
+}
+
+install_cli() {
+    local source_path="$1" installed installed_target ours bin_dir target record
+
+    record="$(devbox_cli_target "$source_path")"
+    {
+        read -r installed
+        read -r installed_target
+        read -r ours
+    } <<<"$record"
+    bin_dir="$HOME/.local/bin"
+    if [ "$ours" = 1 ]; then
+        bin_dir="$(dirname "$installed")"
+    elif [ -n "$installed" ]; then
+        warn "$installed is not a symlink to this checkout; PATH resolves 'devbox' there instead of $bin_dir/devbox"
     fi
     target="$bin_dir/devbox"
     mkdir -p "$bin_dir"
@@ -102,25 +160,35 @@ install_cli() {
     esac
 }
 
+# Uninstall removes the symlink pointing at this checkout. When `devbox` is
+# absent from PATH or not a launcher symlink, the fallback silently re-checks
+# the documented install location $HOME/.local/bin/devbox before reporting
+# "not installed"; a launcher symlink belonging to another checkout is fatal.
 uninstall_cli() {
-    local source_path="$1" installed target
+    local source_path="$1" installed installed_target ours record
 
-    installed="$(command -v devbox 2>/dev/null || true)"
-    if [ -z "$installed" ] || [ ! -L "$installed" ]; then
-        installed="$HOME/.local/bin/devbox"
+    record="$(devbox_cli_target "$source_path")"
+    {
+        read -r installed
+        read -r installed_target
+        read -r ours
+    } <<<"$record"
+    if [ "$ours" != 1 ] && [ -z "$installed_target" ]; then
+        record="$(devbox_cli_target "$source_path" "$HOME/.local/bin/devbox")"
+        {
+            read -r installed
+            read -r installed_target
+            read -r ours
+        } <<<"$record"
     fi
-    [ -L "$installed" ] || {
+    if [ "$ours" = 1 ]; then
+        command rm "$installed"
+        log "Removed: $installed"
+    elif [ -z "$installed_target" ]; then
         log "devbox is not installed at $installed."
-        return
-    }
-
-    target="$(resolve_symlink_target "$installed")"
-    source_path="$(resolve_symlink_target "$source_path")"
-    [ "$target" = "$source_path" ] ||
-        die "$installed belongs to another checkout: $target"
-
-    command rm "$installed"
-    log "Removed: $installed"
+    else
+        die "$installed belongs to another checkout: $installed_target"
+    fi
 }
 
 acquire_lock() {

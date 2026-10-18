@@ -77,18 +77,18 @@ case "$cmd" in
         exit 0
         ;;
     uninstall)
-        [ $# -eq 0 ] || die "Usage: devbox uninstall"
+        require_args 0 "devbox uninstall" "$@"
         uninstall_cli "$DEVBOX_SCRIPT"
         ;;
     version)
-        [ $# -eq 0 ] || die "Usage: devbox version"
+        require_args 0 "devbox version" "$@"
         if ! read -r version <"$DEVBOX_DIR/VERSION" 2>/dev/null || [ -z "$version" ]; then
             die "devbox VERSION file is missing or empty"
         fi
         printf '%s\n' "$version"
         ;;
     init)
-        [ $# -eq 0 ] || die "Usage: devbox init"
+        require_args 0 "devbox init" "$@"
         # Install the command first so even the first run leaves the user able
         # to use `devbox` instead of `./devbox`.
         install_cli "$DEVBOX_SCRIPT"
