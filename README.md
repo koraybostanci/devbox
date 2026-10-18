@@ -1,4 +1,4 @@
-<img src="assets/icon.svg" width="96" alt="devbox icon" align="right">
+<img src="assets/icon.svg" width="96" alt="devbox icon" align="left">
 
 # devbox
 
