@@ -45,11 +45,10 @@ Reviews run in a headless child session from the worktree root — agents
 cannot expand slash commands, and the child reviewer is deliberately fresh
 context. Read from the child only its findings:
 
-- Per phase: `claude -p '/review medium'` (Claude Code, positional effort)
-  or `opencode run '/review'` (OpenCode v2).
-- Whole branch: `claude -p '/review max <base>'` or
-  `opencode run '/review <base>'` — base = branch name from Setup; both
-  branch forms diff `<base>...HEAD`.
+- Per phase: `claude -p '/review medium'` or `opencode run '/review'`.
+- Whole branch: `claude -p '/review max'` — no target; it reviews the
+  current branch — or `opencode run '/review <base>'` (base = branch name
+  from Setup; the branch form diffs from its merge base).
 
 Before a per-phase review, confirm `git status --short` shows nothing but the
 phase's Files in scope besides the excluded files; anything else → ask. Make
