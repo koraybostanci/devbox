@@ -14,10 +14,14 @@ lives in the guest.
 - `lib/common.sh` — logging, locking, CLI install helpers.
 - `lib/config.sh` — host platform check, `.env` parsing.
 - `lib/devbox.sh` — VM lifecycle, provisioning, SSH alias, services.
-- `provision/` — guest provisioning bundle (system/tools/verify scripts and
-  `config/services/compose.yaml`).
+- `provision/` — guest provisioning bundle: `versions.env` (pinned versions),
+  `scripts/` (system/tools/verify plus shared libs),
+  `config/services/compose.yaml`, and the
+  `config/{zsh,claude,opencode,skills,guest}` trees.
 - `colima.yaml` — the Colima profile template.
-- `scripts/check.sh` — static checks (the CI gate).
+- `scripts/check.sh` — static checks plus stubbed unit tests, no live VM
+  (the CI gate); it sources the two subcheckers `scripts/check-host-config.sh`
+  and `scripts/check-guest-state.sh`.
 
 Commands are in [README.md](README.md); host/guest internals are in
 [docs/architecture.md](docs/architecture.md).
@@ -32,8 +36,14 @@ policy guidance, not technical network enforcement.
 ## CI gate
 
 `bash scripts/check.sh` must end `All checks passed.`; run it before proposing
-a change. GitHub Actions is disabled at the repository level, so this is the
+a change. The gate is static checks plus stubbed unit tests (no live VM).
+GitHub Actions is disabled at the repository level, so this is the
 only gate; `.github/workflows/check.yml` runs it on Linux when re-enabled.
+
+## Version policy
+
+Bump `VERSION` on any user-visible launcher or companion behavior change;
+`devbox version` is the support surface.
 
 ## Publication
 

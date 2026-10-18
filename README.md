@@ -42,9 +42,10 @@ from the checkout. `devbox uninstall` removes the symlink.
 Node.js and npm (via nvm), Python and pyenv, uv, Go, Rust, Java 21, Claude
 Code, OpenCode, the Databricks CLI, `yq`, `gh`, `jq`, Vim, and zsh with oh-my-zsh.
 [`provision/versions.env`](provision/versions.env) is the source of truth for
-pinned versions; `gh`, `jq`, rootless Docker prerequisites, and snapd come from
-Ubuntu packages. The guest also has a per-user rootless Docker daemon and native
-ARM64 Chromium from Ubuntu's stable snap.
+pinned versions. `gh`, `jq`, and snapd come from Ubuntu packages; the rootless
+Docker prerequisites (`docker-ce-rootless-extras`) come from Colima's Docker
+APT source, not from Ubuntu's. The guest also has a per-user rootless Docker
+daemon and native ARM64 Chromium from Ubuntu's stable snap.
 
 Use `vim <file>` to edit files in the guest terminal; `$EDITOR` and `$VISUAL`
 are set to `vim` by default.
@@ -52,9 +53,12 @@ are set to `vim` by default.
 ### Configuration
 
 `devbox init` asks for the settings and writes `.env` (mode 0600, gitignored);
-rerun `devbox init` to change them. Prompts default to the current value, the
-host Git identity, or the built-in value in brackets. A written file looks
-like:
+rerun `devbox init` to change them. To keep the configuration somewhere other
+than the checkout's `.env` — for example a dotfiles symlink — run any devbox
+command with `DEVBOX_ENV_FILE=/path/to/env` in the environment (that is a
+process variable, not a key inside `.env`). Prompts default to the current
+value, the host Git identity, or the built-in value in brackets. A written
+file looks like:
 
 ```sh
 export GIT_NAME="Your Name"
@@ -69,15 +73,19 @@ export DEVBOX_USE_HOST_PROXY="false"
 ```
 
 The identity and PostgreSQL keys are seeded into the guest on first provision
-and maintained in the guest at `~/.config/devbox/config` afterwards.
-`POSTGRES_USER` and `POSTGRES_DB` accept 1–63 ASCII letters, digits, dots,
-dashes, or underscores; `POSTGRES_PORT` must be in the range 1–65535. The
-`DEVBOX_CPU`, `DEVBOX_MEMORY`, and `DEVBOX_DISK` keys size the VM; changing them
-requires recreating it. Host proxy variables are cleared from Colima by default.
-Set `DEVBOX_USE_HOST_PROXY="true"` only when the guest needs the proxy exported
-by the current host process. Proxy changes apply at the next VM start; run
-`devbox stop` then `devbox start` to apply them. See
+and maintained in the guest at `~/.config/devbox/config` afterwards. The key
+set and the value rules (supported names, quote handling, PostgreSQL user/db
+and port limits) are pinned in
 [docs/troubleshooting.md](docs/troubleshooting.md).
+The `DEVBOX_CPU`, `DEVBOX_MEMORY`, and `DEVBOX_DISK` keys size the VM; changing
+them requires recreating it. Host proxy variables are cleared from Colima by
+default. Set `DEVBOX_USE_HOST_PROXY="true"` only when the guest needs the proxy
+exported by the current host process; with it set, the proxy URLs — including
+any embedded credentials — persist on the VM disk. Proxy changes apply at the
+next VM start; run `devbox stop` then `devbox start` to apply them. See
+[docs/troubleshooting.md](docs/troubleshooting.md) and
+[docs/architecture.md](docs/architecture.md#host--guest-boundary) for the
+mechanism.
 
 Service secrets are generated in the guest and are not placed in the host
 `.env` or repository. They persist on the VM disk, which is stored on the host
@@ -90,6 +98,8 @@ devbox start                 # start and converge the VM
 devbox connect               # shell in the guest
 devbox exec <command>        # run one command in the guest
 devbox status                # VM state and resources
+devbox version               # the devbox version
+devbox help                  # command list and usage
 devbox stop [--force]
 ```
 
@@ -98,16 +108,16 @@ stop/start and is removed only by `devbox destroy`.
 
 ### Remote access
 
-Add `Include ~/.ssh/devbox.conf` at the top of `~/.ssh/config` once. The
-`devbox start` command updates that managed file with the VM's current SSH
-endpoint. Point editors, `git`, and other tools at host `devbox` to work with
-guest files over SSH. `devbox destroy` removes the managed file; the Include
-line can stay.
+Add `Include ~/.ssh/devbox.conf` at the top of `~/.ssh/config` once. `devbox
+start` and `devbox provision` update that managed file with the VM's current
+SSH endpoint and re-authorize the host key for the guest account. Point
+editors, `git`, and other tools at host `devbox` to work with guest files over
+SSH. `devbox destroy` removes the managed file; the Include line can stay.
 
 ## Services
 
-PostgreSQL and Valkey are provisioned inside the guest as root-managed
-containers but stay stopped until you start them:
+PostgreSQL and Valkey are staged root-managed in the guest but stay stopped
+until you start them:
 
 ```sh
 devbox services start
@@ -115,24 +125,17 @@ devbox services status
 devbox services stop
 ```
 
-The `devbox services` helper always runs Compose as root against the rootful
-`/var/run/docker.sock`; it does not follow the user's Docker context. These
-containers are bound to `127.0.0.1` only. The unprivileged `devbox` user cannot
-control this rootful daemon or access its socket; it reaches the services over
-loopback using credentials in `~/.config/devbox/secrets`. Data lives below
-`/var/lib/devbox/services/data` and survives stop/start; `devbox services start`
-after a VM restart brings the containers back.
+The service contract — the rootful Docker socket, loopback-only bindings,
+credential locations, and data paths — is in
+[docs/architecture.md](docs/architecture.md#services).
 
 ### Rootless Docker and Chromium
 
 Direct `docker` commands in the guest run against a separate Docker daemon
-owned by `devbox`, using `unix:///run/user/<uid>/docker.sock` and the `rootless`
-Docker context. Its images and containers are user-owned; this does not replace
-or upgrade Colima's rootful Engine, which remains reserved for `devbox services`.
-
-Ubuntu's ARM64 Chromium snap at `/snap/bin/chromium` is the default
-`PUPPETEER_EXECUTABLE_PATH` unless the variable is already set or a project
-overrides it; see
+owned by `devbox` at `unix:///run/user/<uid>/docker.sock` (`rootless` Docker
+context); this does not replace or upgrade Colima's rootful Engine, which
+remains reserved for `devbox services`. The full rootless Docker and Puppeteer
+policy is in
 [docs/architecture.md](docs/architecture.md#rootless-docker-and-chromium).
 
 ## Authentication (optional)
@@ -165,12 +168,15 @@ devbox uninstall             # remove the devbox symlink
 
 ## Security
 
-There are no host filesystem mounts and the host SSH agent is not forwarded,
-but the VM disk (workspace, credentials, service secrets) lives on the host
-under `~/.colima`, and the guest keeps ordinary network access, including to
-the host gateway. The daily `devbox` account has no sudo, no supplementary
-groups, and no access to the rootful Docker socket; guest agents share that
-account. Agent host-boundary instructions are policy, not network enforcement.
-Provisioning is checksum-verified inside the guest and direct SSH is only
-authorized after readiness checks pass. See
-[docs/architecture.md](docs/architecture.md) for the full boundary.
+There are no host filesystem mounts and the host SSH agent is not forwarded;
+agent host-boundary instructions are policy, not network enforcement. See
+[docs/architecture.md](docs/architecture.md#host--guest-boundary) for the full
+boundary, including that the VM disk (workspace, credentials, service secrets)
+lives on the host under Colima storage and that the guest keeps ordinary
+network access, including to the host gateway.
+
+Direct SSH is keyed, not staged: every `devbox start` and `devbox provision`
+wholesale-replaces the guest's `/home/devbox/.ssh/authorized_keys` with the
+host key, removing user-added guest keys by design, and that replacement stays
+fail-closed — a failed provisioning run removes the managed alias rather than
+leaving partial access. Provisioning is checksum-verified inside the guest.
