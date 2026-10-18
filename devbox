@@ -4,7 +4,12 @@
 set -Eeuo pipefail
 
 DEVBOX_SCRIPT="$0"
-while [ -L "$DEVBOX_SCRIPT" ]; do
+# Count-based depth cap mirroring lib/common.sh's resolve_symlink_target: a
+# self-referential symlink must fail fast instead of hanging every invocation.
+# This runs before any lib can be sourced, so the error uses the bare form.
+DEVBOX_SYMLINK_DEPTH=0
+while [ -L "$DEVBOX_SCRIPT" ] && [ "$DEVBOX_SYMLINK_DEPTH" -lt 40 ]; do
+    DEVBOX_SYMLINK_DEPTH=$((DEVBOX_SYMLINK_DEPTH + 1))
     SCRIPT_LINK_DIR="$(cd -P "$(dirname "$DEVBOX_SCRIPT")" && pwd)"
     DEVBOX_SCRIPT="$(readlink "$DEVBOX_SCRIPT")"
     case "$DEVBOX_SCRIPT" in
@@ -12,6 +17,10 @@ while [ -L "$DEVBOX_SCRIPT" ]; do
         *) DEVBOX_SCRIPT="$SCRIPT_LINK_DIR/$DEVBOX_SCRIPT" ;;
     esac
 done
+if [ -L "$DEVBOX_SCRIPT" ]; then
+    printf 'ERROR: devbox launcher symlink chain exceeds 40 levels; a self-referential symlink is installed\n' >&2
+    exit 1
+fi
 DEVBOX_SCRIPT="$(cd -P "$(dirname "$DEVBOX_SCRIPT")" && pwd)/$(basename "$DEVBOX_SCRIPT")"
 DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
 source "$DEVBOX_DIR/lib/common.sh"
@@ -68,16 +77,18 @@ case "$cmd" in
         exit 0
         ;;
     uninstall)
-        [ $# -eq 0 ] || die "Usage: devbox uninstall"
+        require_args 0 "devbox uninstall" "$@"
         uninstall_cli "$DEVBOX_SCRIPT"
         ;;
     version)
-        [ $# -eq 0 ] || die "Usage: devbox version"
-        read -r version <"$DEVBOX_DIR/VERSION" || [ -n "$version" ]
+        require_args 0 "devbox version" "$@"
+        if ! read -r version <"$DEVBOX_DIR/VERSION" 2>/dev/null || [ -z "$version" ]; then
+            die "devbox VERSION file is missing or empty"
+        fi
         printf '%s\n' "$version"
         ;;
     init)
-        [ $# -eq 0 ] || die "Usage: devbox init"
+        require_args 0 "devbox init" "$@"
         # Install the command first so even the first run leaves the user able
         # to use `devbox` instead of `./devbox`.
         install_cli "$DEVBOX_SCRIPT"

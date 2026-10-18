@@ -22,19 +22,31 @@ configure_devbox_paths() {
     DEVBOX_COLIMA_PROFILE="$DEVBOX_COLIMA_HOME/$DEVBOX_PROFILE"
     DEVBOX_COLIMA_CONFIG="$DEVBOX_COLIMA_PROFILE/colima.yaml"
     DEVBOX_DOCKER_CONFIG="$HOME/.config/devbox/docker"
+    # Default consumed by lib/common.sh's acquire_lock; the gate overrides it
+    # through the environment for its lock unit test.
+    # shellcheck disable=SC2034
     DEVBOX_LOCK_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devbox/locks"
 }
 
 check_devbox_dependencies() {
-    local command_name colima_version
+    local command_name colima_first_line colima_version
     local -a missing=()
 
-    for command_name in colima ssh; do
+    for command_name in colima ssh ssh-keygen shasum; do
         command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
     done
     [ "${#missing[@]}" -eq 0 ] ||
         die "Missing host dependencies for devbox: ${missing[*]}. Install Colima from https://colima.run."
-    colima_version="$(devbox_colima version | awk 'NR == 1 {print $3}')"
+    # Also load the managed SSH configuration and hash provisioning bundles, so
+    # a partial toolchain fails here instead of mid-provision.
+    colima_first_line="$(devbox_colima version | awk 'NR == 1 { print }')"
+    colima_version="$(awk '{ print $3 }' <<<"$colima_first_line")"
+    # Dotted-numeric, optionally followed by a '-' suffix (e.g. 0.10.3-1 or
+    # 0.10.3-dirty, which version_at_least strips). HEAD/commit-sha builds, an
+    # empty field, or other garbage still fails here: the unparseable first
+    # line anchors the diagnosis for the user.
+    [[ "$colima_version" =~ ^[0-9]+(\.[0-9]+){0,2}(-[0-9A-Za-z.-]*)?$ ]] ||
+        die "Could not parse the Colima version from the first line of 'colima version': $colima_first_line"
     version_at_least "$colima_version" "$MINIMUM_COLIMA_VERSION" ||
         die "Colima $MINIMUM_COLIMA_VERSION or newer is required (found $colima_version)"
 }
@@ -78,6 +90,23 @@ devbox_state() {
     awk '{ print $2 }' <<<"$record"
 }
 
+# The devbox VM state, empty when the profile directory does not exist. Call
+# sites that branch on that emptiness (start, stop) route through here instead
+# of re-deriving the existence check.
+devbox_vm_state() {
+    [ -e "$DEVBOX_COLIMA_PROFILE" ] || return 0
+    devbox_state
+}
+
+# Die on a transitional Colima state that is neither cleanly startable nor
+# stoppable; only the settled shapes ('' none, Running, Stopped) pass.
+require_settled_state() {
+    case "$1" in
+        '' | Running | Stopped) ;;
+        *) die "devbox VM is in state '$1'; wait for it to settle and retry" ;;
+    esac
+}
+
 validate_devbox_colima_config() {
     local file="$1"
 
@@ -90,6 +119,10 @@ validate_devbox_colima_config() {
         grep -qE '^forwardAgent:[[:space:]]*false$' "$file" &&
         grep -qE '^portForwarder:[[:space:]]*none$' "$file" &&
         grep -qE '^sshConfig:[[:space:]]*false$' "$file" &&
+        # The SSH port must stay Lima's dynamic sentinel (0); a static port
+        # would contradict the managed sshConfig alias and rewrite the host
+        # side of the boundary.
+        grep -qE '^sshPort:[[:space:]]*0$' "$file" &&
         grep -qE '^mounts:[[:space:]]*null$' "$file" &&
         [ "$(grep -cE '^mounts:' "$file" || true)" -eq 1 ] &&
         grep -qE '^env:[[:space:]]*\{\}$' "$file"
@@ -119,15 +152,34 @@ devbox_admin_guest() {
     devbox_colima ssh -p "$DEVBOX_PROFILE" -- "$@"
 }
 
+# Contract change (deliberate): host arguments are pre-quoted with printf '%q'
+# and passed as a single remote command string, because OpenSSH space-joins the
+# remote argv and the guest login shell re-parses it. Arguments reach the guest
+# verbatim — spaces, ';', '$', backticks and friends are no longer re-expanded
+# by the guest shell. Use this interface instead of relying on expansion.
 devbox_guest() {
-    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+    if [ "$#" -eq 0 ]; then
+        ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+        return
+    fi
+    local quoted_argv
+    quoted_argv="$(printf '%q ' "$@")"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 devbox -- "${quoted_argv% }"
 }
 
 # Interactive variant for prompts (provider login, portable shell).
 devbox_guest_interactive() {
-    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+    if [ "$#" -eq 0 ]; then
+        ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "$@"
+        return
+    fi
+    local quoted_argv
+    quoted_argv="$(printf '%q ' "$@")"
+    ssh -t -o BatchMode=yes -o ConnectTimeout=10 devbox -- "${quoted_argv% }"
 }
 
+# The payload is single-quoted so it is expanded inside the guest, not here.
+# shellcheck disable=SC2016
 devbox_as_guest() {
     devbox_admin_guest sudo -u "$DEVBOX_GUEST_USER" -- env HOME="$DEVBOX_GUEST_HOME" \
         bash -c 'cd -- "$HOME" && exec "$@"' _ "$@"
@@ -135,6 +187,11 @@ devbox_as_guest() {
 
 require_running_devbox_vm() {
     [ "$(devbox_state)" = Running ] || die "devbox VM is not running; run 'devbox start' first"
+}
+
+require_devbox_ssh_alias() {
+    [ -e "$HOME/.ssh/devbox.conf" ] ||
+        die "devbox SSH alias is missing; run 'devbox start'"
 }
 
 wait_for_devbox_ssh() {
@@ -151,11 +208,24 @@ wait_for_devbox_ssh() {
 }
 
 start_devbox_vm() {
-    local state
+    local state="" previous_copy=""
 
+    state="$(devbox_vm_state)"
+    # When the VM is already running, save the rendered configuration before
+    # the fresh one overwrites it: resources apply only across a stop and
+    # start, so drift from the running VM must never pass silently.
+    if [ "$state" = Running ] && [ -f "$DEVBOX_COLIMA_CONFIG" ]; then
+        previous_copy="$(mktemp "${TMPDIR:-/tmp}/devbox-colima.XXXXXX")"
+        cp "$DEVBOX_COLIMA_CONFIG" "$previous_copy"
+    fi
     render_devbox_colima_config
     DEVBOX_COLIMA_PROXY_OPT_IN="$DEVBOX_USE_HOST_PROXY"
-    state="$(devbox_state)"
+    if [ -n "$previous_copy" ]; then
+        cmp -s "$previous_copy" "$DEVBOX_COLIMA_CONFIG" ||
+            warn "configuration changed; resources apply on the next stop and start"
+        command rm -f "$previous_copy"
+    fi
+    require_settled_state "$state"
     case "$state" in
         Running) ;;
         '' | Stopped)
@@ -164,7 +234,6 @@ start_devbox_vm() {
             # from rewriting the rendered file.
             devbox_colima start "$DEVBOX_PROFILE" --save-config=false
             ;;
-        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
     esac
     wait_for_devbox_ssh
 }
@@ -173,19 +242,20 @@ devbox_bundle_digest() {
     local provision_root="$1"
 
     (
-        cd "$provision_root"
-        find . -type f ! -path './.devbox-bundle.sha256' -print | LC_ALL=C sort | while IFS= read -r path; do
+        cd "$provision_root" || exit
+        find . -type f -print | LC_ALL=C sort | while IFS= read -r path; do
             printf '%s\t%s\n' "${path#./}" "$(shasum -a 256 "$path" | awk '{print $1}')"
         done | shasum -a 256 | awk '{print $1}'
     )
 }
 
 # The guest-side equivalent of devbox_bundle_digest, prepended to the remote
-# payloads below.
+# payloads below. Single-quoted: every expansion happens inside the guest.
+# shellcheck disable=SC2016
 DEVBOX_GUEST_BUNDLE_DIGEST='
 bundle_digest() (
     cd "$1"
-    find . -type f ! -path ./.devbox-bundle.sha256 -print | LC_ALL=C sort | while IFS= read -r path; do
+    find . -type f -print | LC_ALL=C sort | while IFS= read -r path; do
         printf "%s\t%s\n" "${path#./}" "$(sha256sum "$path" | cut -d " " -f1)"
     done | sha256sum | cut -d " " -f1
 )
@@ -204,7 +274,9 @@ create_devbox_bundle_archive() {
 # Stream the provisioning tree to the guest and install it as the single
 # root-owned, read-only input at /var/lib/devbox/provision. The digest is
 # re-computed inside the guest before anything is executed, so a tree that
-# changed after hashing fails closed.
+# changed after hashing fails closed. The payload stays single-quoted so it is
+# expanded inside the guest, not here.
+# shellcheck disable=SC2016
 stream_devbox_bundle() {
     local digest="$1" archive="$2"
 
@@ -231,7 +303,6 @@ stream_devbox_bundle() {
             printf "ERROR: transferred devbox bundle digest does not match\n" >&2
             exit 1
         }
-        printf "%s\n" "$digest" >"$temporary/provision/.devbox-bundle.sha256"
         find "$temporary/provision" -type d -exec chmod 755 {} +
         find "$temporary/provision" -type f -exec chmod 644 {} +
         chown -R root:root "$temporary/provision"
@@ -240,16 +311,17 @@ stream_devbox_bundle() {
     ' _ "$digest" <"$archive"
 }
 
-# Re-verify the installed provisioning tree against its digest, so a matching
-# marker never skips over a corrupted or tampered tree.
+# Re-verify the installed provisioning tree against its digest, so a corrupted
+# or tampered tree never passes skip-time verification. The payload stays
+# single-quoted so it is expanded inside the guest, not here.
+# shellcheck disable=SC2016
 devbox_guest_bundle_is_valid() {
     local digest="$1"
 
     devbox_admin_guest sudo bash -c "$DEVBOX_GUEST_BUNDLE_DIGEST"'
         set -Eeuo pipefail
         target=/var/lib/devbox/provision
-        [ "$(cat "$target/.devbox-bundle.sha256" 2>/dev/null)" = "$1" ] &&
-            ! find "$target" -type l -print -quit | grep -q . &&
+        ! find "$target" -type l -print -quit | grep -q . &&
             [ "$(bundle_digest "$target")" = "$1" ]
     ' _ "$digest"
 }
@@ -286,7 +358,9 @@ run_devbox_guest_provisioning() {
     log "Provisioning devbox guest tools from bundle $digest..."
     devbox_admin_guest sudo bash "$DEVBOX_GUEST_PROVISION_ROOT/scripts/system.sh" || return
     stage_devbox_guest_state || return
-    # verify.sh records the digest marker once every check passes.
+    # verify.sh records the digest marker once every check passes. The payload
+    # below is single-quoted so it is expanded inside the guest, not here.
+    # shellcheck disable=SC2016
     devbox_as_guest env DEVBOX_BUNDLE_DIGEST="$digest" bash -c '
         set -Eeuo pipefail
         bash "$1/tools.sh"
@@ -310,6 +384,9 @@ devbox_identity_file() {
             exit
         }
     ' "$colima_config")"
+    # Lima quotes the identity path; the leading ~ is a literal prefix that is
+    # stripped string-wise and replaced with $HOME, never expanded as a tilde.
+    # shellcheck disable=SC2088
     case "$identity_file" in
         "~/"*) identity_file="$HOME/${identity_file#\~/}" ;;
     esac
@@ -354,6 +431,7 @@ write_devbox_ssh_config() {
     local colima_config="$1" staged
 
     mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
     staged="$(mktemp "$HOME/.ssh/.devbox.conf.XXXXXX")"
     if ! render_devbox_ssh_managed_block "$colima_config" >"$staged" ||
         ! grep -qx 'Host devbox' "$staged" ||
@@ -381,7 +459,8 @@ provision_devbox_guest() (
     local mode="$1" work digest
 
     work="$(mktemp -d "${TMPDIR:-/tmp}/devbox.XXXXXX")"
-    trap "command rm -rf '$work'" EXIT
+    # `$work` is final at this point, so expanding it into the trap is safe.
+    trap 'command rm -rf "$work"' EXIT
     digest="$(devbox_bundle_digest "$DEVBOX_DIR/provision")"
     if [ "$mode" = start ] && [ "$(devbox_guest_provision_digest)" = "$digest" ] &&
         devbox_guest_bundle_is_valid "$digest"; then
@@ -405,13 +484,19 @@ provision_devbox_guest() (
 stop_devbox_vm() {
     local force="$1" state=""
 
-    if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
-        state="$(devbox_state)"
-    fi
+    state="$(devbox_vm_state)"
+    require_settled_state "$state"
     case "$state" in
         '' | Stopped) log "devbox VM is already stopped." ;;
-        Running) devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE" ;;
-        *) die "devbox VM is in state '$state'; wait for it to settle and retry" ;;
+        Running)
+            # Attempt a clean services shutdown first; an unclean one must
+            # never block stopping the VM.
+            if devbox_admin_guest bash -c 'test -f /var/lib/devbox/services/compose.yaml' >/dev/null 2>&1; then
+                devbox_services_compose stop ||
+                    warn "devbox services did not stop cleanly; continuing with the VM stop"
+            fi
+            devbox_colima stop ${force:+--force} "$DEVBOX_PROFILE"
+            ;;
     esac
 }
 
@@ -437,7 +522,7 @@ run_devbox() {
 
     case "$action" in
         start | provision)
-            [ $# -eq 0 ] || die "Usage: devbox $action"
+            require_args 0 "devbox $action" "$@"
             check_host_platform
             check_devbox_dependencies
             load_env
@@ -446,24 +531,23 @@ run_devbox() {
             provision_devbox_guest "$action"
             ;;
         connect)
-            [ $# -eq 0 ] || die "Usage: devbox connect"
+            require_args 0 "devbox connect" "$@"
             require_running_devbox_vm
+            require_devbox_ssh_alias
             devbox_guest_interactive zsh -l
             ;;
         exec)
-            [ $# -gt 0 ] || die "Usage: devbox exec <command> [args...]"
+            require_args + "devbox exec <command> [args...]" "$@"
             require_running_devbox_vm
+            require_devbox_ssh_alias
             devbox_guest "$@"
             ;;
         status)
-            [ $# -eq 0 ] || die "Usage: devbox status"
+            require_args 0 "devbox status" "$@"
             show_devbox_status
             ;;
         services)
-            case "$*" in
-                start | stop | status) ;;
-                *) die "Usage: devbox services <start|stop|status>" ;;
-            esac
+            require_args "start|stop|status" "devbox services <start|stop|status>" "$@"
             require_running_devbox_vm
             devbox_services_compose "$1"
             ;;
@@ -476,20 +560,17 @@ run_devbox() {
             devbox_guest devbox db "$@"
             ;;
         stop)
-            case "$*" in
-                '') ;;
-                --force) force=1 ;;
-                *) die "Usage: devbox stop [--force]" ;;
-            esac
+            require_args "|--force" "devbox stop [--force]" "$@"
+            force="${1:+--force}"
             acquire_lock lifecycle
             stop_devbox_vm "$force"
             ;;
         destroy)
-            [ $# -eq 0 ] || die "Usage: devbox destroy"
+            require_args 0 "devbox destroy" "$@"
             acquire_lock lifecycle
             if [ -e "$DEVBOX_COLIMA_PROFILE" ]; then
                 printf "Type '%s' to delete the devbox VM and all its guest data (the workspace, installed toolchains and caches, service data, and credentials): " "$DEVBOX_PROFILE"
-                read -r confirm
+                read -r confirm || die "Aborted"
                 [ "$confirm" = "$DEVBOX_PROFILE" ] || die "Aborted"
                 devbox_colima delete --data --force "$DEVBOX_PROFILE"
                 log "Destroyed devbox VM runtime data. No host project or data directories were used."

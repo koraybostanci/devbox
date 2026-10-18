@@ -1,9 +1,9 @@
 # Manual Smoke Test
 
-`scripts/check.sh` covers the static surface only; it cannot exercise Colima,
-SSH, or Docker. Run this on a Mac (Apple Silicon) before merging changes that
-touch lifecycle, provisioning, SSH, or services. Use an account without devbox
-state, or destroy the VM first.
+`scripts/check.sh` runs static checks plus stubbed unit tests (no live VM); it
+cannot exercise Colima, SSH, or Docker. Run this on a Mac (Apple Silicon)
+before merging changes that touch lifecycle, provisioning, SSH, or services.
+Use an account without devbox state, or destroy the VM first.
 
 ## Static gate
 
@@ -29,6 +29,11 @@ devbox auth status
 devbox db info
 ```
 
+`devbox exec` passes its arguments to the guest verbatim: no guest-side glob
+or shell expansion happens on them, so select paths with guest-side tools such
+as `find` (`devbox exec find /tmp -maxdepth 1 -name 'python-build.*' -delete`)
+and keep redirects/probes inside `bash -c` payloads (as the probes below do).
+
 Confirm:
 
 - `ssh devbox true` works and `ssh -G devbox | grep -i forwardagent` reports
@@ -43,8 +48,9 @@ Confirm:
   `devbox exec cat /var/lib/devbox/services/env` must fail.
 
 The guest keeps ordinary network access and can reach host-gateway services
-unless the host/network is separately restricted. Agent host-boundary guidance
-is policy, not network enforcement; ordinary external network use is allowed.
+unless the host or network is separately restricted; agent host-boundary
+guidance is policy, not network enforcement (the canonical paragraph is in
+[`AGENTS.md`](../AGENTS.md#host-boundary-for-agents)).
 
 ## Services on demand
 

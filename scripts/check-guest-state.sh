@@ -1,5 +1,31 @@
 #!/bin/bash
 # Sourced by check.sh after ROOT, validation_root, fail, and file_mode are set.
+# Sourced-fixture model: `validation_root` and the helper functions exist only
+# in check.sh, and the `|| fail` chains below always exit through fail(), so
+# both info findings are declared once instead of suppressing them per line.
+# shellcheck disable=SC2016,SC2154
+
+# Standalone execution has no fixtures or helpers; insist on the gate.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    printf 'ERROR: scripts/check-guest-state.sh must be sourced by scripts/check.sh\n' >&2
+    exit 1
+fi
+
+# Run provision-side fixture commands through one code path (ssh_unit-style
+# helper): source the script path relative to provision/scripts, then call the
+# remaining arguments as a command with the checkout root exported.
+run_prov_lib() {
+    # `ROOT="$ROOT"` re-asserts the exported checkout root; the expansions
+    # still happen in this shell before /bin/bash is forked, so the tool's
+    # note does not apply.
+    # shellcheck disable=SC2097,SC2098
+    ROOT="$ROOT" /bin/bash -c '
+        set -Eeuo pipefail
+        source "$ROOT/provision/scripts/$1"
+        shift
+        "$@"
+    ' _ "$1" "${@:2}"
+}
 
 # Root state handling reads guest-writable config and secrets strictly as data.
 if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*\$(config|secrets)' provision/scripts/state.sh; then
@@ -13,7 +39,8 @@ export POSTGRES_USER="dev"
 export POSTGRES_DB=dev
 export POSTGRES_PORT=65535
 export VALKEY_PORT=16379
-export GIT_NAME=\$(touch "$state_marker")
+export GIT_NAME="Devbox Fixture"
+export GIT_EMAIL=fixture@devbox.invalid
 export UNRELATED=\$(touch "$state_marker")
 EOF
 cat >"$state_fixture/secrets" <<EOF
@@ -38,10 +65,14 @@ if devbox_path_is_safe f "$fixture/config" wrong-owner "$group" 600; then
     exit 1
 fi
 unset POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+unset GIT_NAME GIT_EMAIL
 devbox_parse_state_file config config <"$fixture/config"
 devbox_state_config_is_complete
 [ "$POSTGRES_USER" = dev ]
 [ "$POSTGRES_PORT" = 65535 ]
+# The Git identity in the same file is captured from it as literal data.
+[ "$GIT_NAME" = "Devbox Fixture" ]
+[ "$GIT_EMAIL" = fixture@devbox.invalid ]
 devbox_parse_state_file secrets secrets <"$fixture/secrets"
 [ "$POSTGRES_PASSWORD" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
 [ "$VALKEY_PASSWORD" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]
@@ -70,6 +101,27 @@ if devbox_parse_state_file invalid-user config <"$fixture/invalid-user" 2>/dev/n
     printf 'state parser accepted shell syntax as a service value\n' >&2
     exit 1
 fi
+printf 'export GIT_NAME=$(touch %s)\n' "$marker" >"$fixture/invalid-git"
+if devbox_parse_state_file invalid-git config <"$fixture/invalid-git" 2>/dev/null; then
+    printf 'state parser accepted shell syntax as a Git identity\n' >&2
+    exit 1
+fi
+# A host-seeded identity arrives %q-rendered: the backslash-space form
+# unescapes to a real space and a backslashed escape sequence stays literal,
+# while escapes the parser does not model fail loudly.
+unset GIT_NAME
+printf 'export GIT_NAME=Jane\\ Doe\n' >"$fixture/git-name-space"
+devbox_parse_state_file git-name-space config <"$fixture/git-name-space"
+[ "$GIT_NAME" = 'Jane Doe' ]
+unset GIT_NAME
+printf 'export GIT_NAME=a\\\\b\n' >"$fixture/git-name-backslash"
+devbox_parse_state_file git-name-backslash config <"$fixture/git-name-backslash"
+[ "$GIT_NAME" = 'a\b' ]
+printf 'export GIT_NAME=\\z\n' >"$fixture/git-name-escape"
+if devbox_parse_state_file git-name-escape config <"$fixture/git-name-escape" 2>/dev/null; then
+    printf 'state parser rewrote an unsupported Git identity escape\n' >&2
+    exit 1
+fi
 [ ! -e "$marker" ]
 EOF
 /bin/bash "$validation_root/state-unit.sh" "$ROOT" "$state_fixture" "$state_marker" ||
@@ -81,13 +133,9 @@ cat >"$state_fixture/host-seed" <<EOF
 export POSTGRES_USER=dev
 export POSTGRES_DB=dev
 export POSTGRES_PORT=15432
-export GIT_NAME=\$(touch "$state_marker")
+export GIT_NAME="Devbox Seed"
 EOF
-/bin/bash -c '
-    set -Eeuo pipefail
-    source "$1"
-    devbox_seed_guest_state "$2"
-' _ "$ROOT/provision/scripts/lib/state.sh" "$seed_directory" \
+run_prov_lib lib/state.sh devbox_seed_guest_state "$seed_directory" \
     <"$state_fixture/host-seed" || fail "guest-owned config and secret seeding failed"
 [ "$(file_mode "$seed_directory")" = 700 ] || fail "guest state directory has the wrong mode"
 [ "$(file_mode "$(dirname "$seed_directory")")" = 700 ] ||
@@ -100,11 +148,7 @@ cp "$seed_directory/config" "$seeded_config"
 cp "$seed_directory/secrets" "$seeded_secrets"
 printf 'export POSTGRES_USER=changed\nexport POSTGRES_DB=changed\nexport POSTGRES_PORT=5432\n' \
     >"$state_fixture/second-seed"
-/bin/bash -c '
-    set -Eeuo pipefail
-    source "$1"
-    devbox_seed_guest_state "$2"
-' _ "$ROOT/provision/scripts/lib/state.sh" "$seed_directory" \
+run_prov_lib lib/state.sh devbox_seed_guest_state "$seed_directory" \
     <"$state_fixture/second-seed" || fail "repeat guest state seeding failed"
 cmp -s "$seeded_config" "$seed_directory/config" ||
     fail "guest-owned config was overwritten after its initial seed"
@@ -118,11 +162,7 @@ mkdir -p "$incomplete_seed_directory"
 printf 'export POSTGRES_USER=guest-custom\n' >"$incomplete_seed_directory/config"
 chmod 600 "$incomplete_seed_directory/config"
 cp "$incomplete_seed_directory/config" "$validation_root/incomplete-config-before"
-if /bin/bash -c '
-    set -Eeuo pipefail
-    source "$1"
-    devbox_seed_guest_state "$2"
-' _ "$ROOT/provision/scripts/lib/state.sh" "$incomplete_seed_directory" \
+if run_prov_lib lib/state.sh devbox_seed_guest_state "$incomplete_seed_directory" \
     <"$state_fixture/host-seed" >"$state_fixture/incomplete-config.out" 2>&1; then
     fail "guest state seeding replaced an incomplete guest config"
 fi
@@ -209,45 +249,37 @@ EOF
 chmod +x "$mount_stub/findmnt"
 mount_fixture="$validation_root/mount-fixture"
 mkdir -p "$mount_fixture/data/devbox-home" "$mount_fixture/home"
-PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
-    DEVBOX_GUEST_HOME="$mount_fixture/home" /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/state.sh"
-    devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
-        "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
-' || fail "Lima data-disk home readiness check rejected the intended mount"
-PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
+PATH="$mount_stub:/usr/bin:/bin" DEVBOX_DATA_ROOT="$mount_fixture/data" \
+    DEVBOX_GUEST_HOME="$mount_fixture/home" run_prov_lib lib/state.sh \
+    devbox_home_is_on_lima_data_disk "$mount_fixture/home" \
+    "$mount_fixture/data/devbox-home" "$mount_fixture/data" ||
+    fail "Lima data-disk home readiness check rejected the intended mount"
+PATH="$mount_stub:/usr/bin:/bin" DEVBOX_DATA_ROOT="$mount_fixture/data" \
     DEVBOX_GUEST_HOME="$mount_fixture/home" DEVBOX_STACKED_HOME=true \
-    DEVBOX_TARGET_IS_MOUNT=true /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/state.sh"
-    devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
-        "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
-' || fail "Lima data-disk home readiness rejected the visible mount in a stacked mount table"
-if PATH="$mount_stub:/usr/bin:/bin" ROOT="$ROOT" DEVBOX_DATA_ROOT="$mount_fixture/data" \
-    DEVBOX_GUEST_HOME="$mount_fixture/home" DEVBOX_HOME_FSROOT=/ /bin/bash -c '
-    source "$ROOT/provision/scripts/lib/state.sh"
-    devbox_home_is_on_lima_data_disk "$DEVBOX_GUEST_HOME" \
-        "$DEVBOX_DATA_ROOT/devbox-home" "$DEVBOX_DATA_ROOT"
-'; then
+    DEVBOX_TARGET_IS_MOUNT=true run_prov_lib lib/state.sh \
+    devbox_home_is_on_lima_data_disk "$mount_fixture/home" \
+    "$mount_fixture/data/devbox-home" "$mount_fixture/data" ||
+    fail "Lima data-disk home readiness rejected the visible mount in a stacked mount table"
+if PATH="$mount_stub:/usr/bin:/bin" DEVBOX_DATA_ROOT="$mount_fixture/data" \
+    DEVBOX_GUEST_HOME="$mount_fixture/home" DEVBOX_HOME_FSROOT=/ \
+    run_prov_lib lib/state.sh devbox_home_is_on_lima_data_disk \
+    "$mount_fixture/home" "$mount_fixture/data/devbox-home" "$mount_fixture/data"; then
     fail "Lima data-disk home readiness accepted the wrong bind source"
 fi
 lima_root_stub="$validation_root/lima-root-bin"
 mkdir -p "$lima_root_stub"
 printf '#!/bin/bash\nprintf "/\\n/boot\\n/mnt/lima-colima-devbox\\n"\n' >"$lima_root_stub/findmnt"
 chmod +x "$lima_root_stub/findmnt"
-[ "$(PATH="$lima_root_stub:/usr/bin:/bin" /bin/bash -c '
-    source "$1"
-    devbox_lima_data_root
-' _ "$ROOT/provision/scripts/lib/state.sh")" = /mnt/lima-colima-devbox ] ||
+[ "$(PATH="$lima_root_stub:/usr/bin:/bin" run_prov_lib lib/state.sh devbox_lima_data_root)" = /mnt/lima-colima-devbox ] ||
     fail "the Lima data root was not selected from the ext4 mounts"
 no_data_stub="$validation_root/no-data-bin"
 mkdir -p "$no_data_stub"
 printf '#!/bin/bash\nexit 0\n' >"$no_data_stub/findmnt"
 chmod +x "$no_data_stub/findmnt"
-if PATH="$no_data_stub:/usr/bin:/bin" DEVBOX_PROVISION_ROOT="$ROOT/provision" ROOT="$ROOT" \
-    /bin/bash -c 'source "$ROOT/provision/scripts/system.sh"; relocate_guest_home' \
-    >"$validation_root/no-data.out" 2>&1; then
+# The helper exports the checkout root; `run_prov_lib system.sh` sources the
+# system phase script itself rather than a provision library.
+if PATH="$no_data_stub:/usr/bin:/bin" DEVBOX_PROVISION_ROOT="$ROOT/provision" \
+    run_prov_lib system.sh relocate_guest_home >"$validation_root/no-data.out" 2>&1; then
     fail "guest-home setup silently accepted a missing Lima data disk"
 fi
 grep -q 'refusing to leave /home/devbox on the root disk' "$validation_root/no-data.out" ||
@@ -266,14 +298,13 @@ printf 'stale managed skill\n' >"$opencode_sync_root/target/skills/removed.md"
 printf 'user skill\n' >"$opencode_sync_root/target/skills/user-added.md"
 printf 'removed.md\n' >"$opencode_sync_root/agents.manifest"
 printf 'removed.md\n' >"$opencode_sync_root/skills.manifest"
-ROOT="$ROOT" /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/configure.sh"
-    sync_managed_opencode_tree "$1" "$2" "$3"
-    sync_managed_opencode_tree "$4" "$5" "$6"
-' _ "$opencode_sync_root/source/agents" "$opencode_sync_root/target/agents" \
-    "$opencode_sync_root/agents.manifest" "$opencode_sync_root/source/skills" \
-    "$opencode_sync_root/target/skills" "$opencode_sync_root/skills.manifest" ||
+run_prov_lib lib/configure.sh sync_managed_opencode_tree \
+    "$opencode_sync_root/source/agents" "$opencode_sync_root/target/agents" \
+    "$opencode_sync_root/agents.manifest" ||
+    fail "OpenCode managed-file sync failed"
+run_prov_lib lib/configure.sh sync_managed_opencode_tree \
+    "$opencode_sync_root/source/skills" "$opencode_sync_root/target/skills" \
+    "$opencode_sync_root/skills.manifest" ||
     fail "OpenCode managed-file sync failed"
 [ ! -e "$opencode_sync_root/target/agents/removed.md" ] || fail "stale managed agent was kept"
 [ ! -e "$opencode_sync_root/target/skills/removed.md" ] || fail "stale managed skill was kept"
@@ -282,14 +313,13 @@ ROOT="$ROOT" /bin/bash -c '
 [ -f "$opencode_sync_root/target/agents/current.md" ] || fail "current managed agent was not copied"
 [ -f "$opencode_sync_root/target/skills/current.md" ] || fail "current managed skill was not copied"
 rm "$opencode_sync_root/source/agents/current.md" "$opencode_sync_root/source/skills/current.md"
-ROOT="$ROOT" /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/configure.sh"
-    sync_managed_opencode_tree "$1" "$2" "$3"
-    sync_managed_opencode_tree "$4" "$5" "$6"
-' _ "$opencode_sync_root/source/agents" "$opencode_sync_root/target/agents" \
-    "$opencode_sync_root/agents.manifest" "$opencode_sync_root/source/skills" \
-    "$opencode_sync_root/target/skills" "$opencode_sync_root/skills.manifest" ||
+run_prov_lib lib/configure.sh sync_managed_opencode_tree \
+    "$opencode_sync_root/source/agents" "$opencode_sync_root/target/agents" \
+    "$opencode_sync_root/agents.manifest" ||
+    fail "OpenCode managed-file cleanup after source removal failed"
+run_prov_lib lib/configure.sh sync_managed_opencode_tree \
+    "$opencode_sync_root/source/skills" "$opencode_sync_root/target/skills" \
+    "$opencode_sync_root/skills.manifest" ||
     fail "OpenCode managed-file cleanup after source removal failed"
 [ ! -e "$opencode_sync_root/target/agents/current.md" ] || fail "removed managed agent was kept"
 [ ! -e "$opencode_sync_root/target/skills/current.md" ] || fail "removed managed skill was kept"
@@ -303,27 +333,34 @@ printf 'lima:524288:1073741824\ndevbox:100000:65536\n' >"$subid_root/valid"
 printf 'devbox:100000:65535\n' >"$subid_root/short"
 printf 'devbox:99999:65536\n' >"$subid_root/low"
 printf 'other:100000:65536\n' >"$subid_root/missing"
-ROOT="$ROOT" /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/lib/docker.sh"
-    devbox_has_subid_ranges devbox "$1/valid" "$1/valid"
-    for file in short low missing; do
-        if devbox_has_subid_ranges devbox "$1/valid" "$1/$file"; then exit 1; fi
-    done
-' _ "$subid_root" || fail "subordinate UID/GID range checks failed"
+run_prov_lib lib/docker.sh devbox_has_subid_ranges devbox \
+    "$subid_root/valid" "$subid_root/valid" ||
+    fail "subordinate UID/GID range checks failed"
+for subid_file in short low missing; do
+    if run_prov_lib lib/docker.sh devbox_has_subid_ranges devbox \
+        "$subid_root/valid" "$subid_root/$subid_file"; then
+        fail "subordinate UID/GID check accepted an invalid range: $subid_file"
+    fi
+done
 
 # The host key is written as the guest user: private directory and file, one
 # key line, and anything but a single non-empty line is rejected.
 key_home="$validation_root/key-home"
 mkdir -p "$key_home"
-ROOT="$ROOT" /bin/bash -c '
-    set -Eeuo pipefail
-    source "$ROOT/provision/scripts/authorize-key.sh"
-    printf "ssh-ed25519 AAAA devbox\n" | devbox_install_authorized_key "$1"
-    printf "ssh-ed25519 BBBB devbox\n" | devbox_install_authorized_key "$1"
-    if printf "one\ntwo\n" | devbox_install_authorized_key "$1" 2>/dev/null; then exit 1; fi
-    if printf "" | devbox_install_authorized_key "$1" 2>/dev/null; then exit 1; fi
-' _ "$key_home" || fail "authorized key installation accepted or rejected the wrong key"
+printf 'ssh-ed25519 AAAA devbox\n' | run_prov_lib authorize-key.sh \
+    devbox_install_authorized_key "$key_home" ||
+    fail "authorized key installation accepted or rejected the wrong key"
+printf 'ssh-ed25519 BBBB devbox\n' | run_prov_lib authorize-key.sh \
+    devbox_install_authorized_key "$key_home" ||
+    fail "authorized key installation accepted or rejected the wrong key"
+if printf 'one\ntwo\n' | run_prov_lib authorize-key.sh \
+    devbox_install_authorized_key "$key_home" 2>/dev/null; then
+    fail "authorized key installation accepted multiple lines"
+fi
+if printf '' | run_prov_lib authorize-key.sh \
+    devbox_install_authorized_key "$key_home" 2>/dev/null; then
+    fail "authorized key installation accepted an empty key"
+fi
 [ "$(file_mode "$key_home/.ssh")" = 700 ] || fail "guest SSH directory has the wrong mode"
 [ "$(file_mode "$key_home/.ssh/authorized_keys")" = 600 ] || fail "authorized_keys has the wrong mode"
 [ "$(cat "$key_home/.ssh/authorized_keys")" = 'ssh-ed25519 BBBB devbox' ] ||

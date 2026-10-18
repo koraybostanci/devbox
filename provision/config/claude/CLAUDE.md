@@ -13,7 +13,7 @@ Never add `Co-Authored-By` trailers.
 Confirm before: force push, rebase, reset --hard, branch deletion.
 
 ## Host Boundary
-Do not attempt to use host mounts, the host gateway or host services, SSH,
-forwarding, or any other channel to read, write, or execute anything on the
-host. Ordinary external network use is allowed. This is policy guidance, not
-technical network enforcement.
+Agents must not attempt to use host mounts, the host gateway or host services,
+SSH, agent/port forwarding, or any other channel to read, write, or execute
+anything on the host. Ordinary external network use is allowed. This is agent
+policy guidance, not technical network enforcement.

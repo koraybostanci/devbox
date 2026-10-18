@@ -29,10 +29,9 @@ except the repository and your Colima installation on the guest.
   rootful Docker daemon when the VM starts; run `devbox stop` then
   `devbox start` to apply a change. Proxy URLs, including embedded credentials,
   persist on the VM disk. Proxy configuration is not a network boundary.
-- Agent guidance prohibits using host mounts, host-gateway addresses or
-  services, SSH, forwarding, or other channels to read, write, or execute
-  anything on the host. Ordinary external network use is allowed. This is
-  policy guidance for agents, not technical network enforcement.
+- Agents work under the host-boundary policy stated in
+  [`AGENTS.md`](../AGENTS.md) (kept byte-identical in the guest agent copies);
+  it is policy guidance, not technical network enforcement.
 
 ## Identity
 
@@ -53,6 +52,20 @@ Provisioning creates an unprivileged `devbox` account:
   `/home/devbox/.ssh/authorized_keys`. Colima's own administrative access is
   untouched.
 
+### Guest agent defaults
+
+Provisioning manages the agent/config surface for the guest agents: the Claude
+Code guidance at `~/.claude/CLAUDE.md`, the OpenCode configuration at
+`~/.config/opencode/opencode.jsonc`, a global OpenCode `AGENTS.md`, and the
+multiphase skill plus its `/multiphase` command under
+`~/.config/opencode/skills` and `~/.config/opencode/commands`. The OpenCode
+`commands` and `skills` trees sync through manifests, so user-owned files
+inside them survive later provisioning runs; the top-level agent files
+(`CLAUDE.md`, `opencode.jsonc`, global `AGENTS.md`) are replaced when
+provisioning runs. The managed `.zshenv` block (Rootless Docker and Chromium)
+starts before the user's own `.zshenv` content, so a later user or project
+assignment overrides any of its defaults.
+
 ## Provisioning
 
 The host computes a SHA-256 digest over the sorted `provision/` tree and streams
@@ -64,8 +77,9 @@ two guest phases:
 - root: `system.sh` (packages, the guest account and data-disk home, the
   companion, the Databricks CLI, rootless Docker prerequisites, and ARM64
   Chromium), then `state.sh` (the guest user seeds its own configuration and
-  generates secrets; root reads them back through that user, validates them as
-  data, and stages the service definition).
+  generates secrets, and the seeding function emits a single validated pass;
+  root stages the service definition and `services/env` from that one pass, as
+  data).
 - unprivileged: `tools.sh` installs the toolchains, starts the per-user rootless
   Docker service, and configures the CLI and shell; `verify.sh` then checks the
   account, both Docker endpoints, and the browser before recording the digest
@@ -75,8 +89,17 @@ Whenever root acts on a path the guest user controls, it does so as that user,
 so nothing the guest plants there can redirect a privileged read or write.
 
 A matching marker skips the bundle work after re-verifying the installed tree
-against its digest. `devbox provision` forces a full run. Direct SSH is only
-authorized after `verify.sh` passes; a failed run removes the managed alias.
+against its digest. `devbox provision` forces a full run. Each provisioning
+run's unprivileged phase re-applies the Git identity from the guest
+`~/.config/devbox/config` with `git config --global` (`configure_git`),
+overwriting any guest edits to that identity.
+
+Direct SSH is only authorized after `verify.sh` passes, and the authorization
+is a managed-key replacement: every `start` and `provision` finishes by
+wholesale-replacing `/home/devbox/.ssh/authorized_keys` with the single host
+key (user-added guest keys are removed by design). The removal stays
+fail-closed — a failed provisioning run removes the managed alias instead of
+leaving partial access.
 
 Guest-local configuration lives under `/home/devbox/.config/devbox/`
 (directory 0700, files 0600):
@@ -91,8 +114,9 @@ Guest-local configuration lives under `/home/devbox/.config/devbox/`
 
 PostgreSQL (`postgres:18.6`) and Valkey (`valkey/valkey:9.2`) are defined by
 `provision/config/services/compose.yaml`. Provisioning stages the definition and
-credentials at `/var/lib/devbox/services/` (root-owned, mode 0600) with
-persistent data below `services/data/`, but does not start the containers.
+credentials at `/var/lib/devbox/services/` (root-owned; directory mode 0700,
+file modes 0600) with persistent data below `services/data/`, but does not
+start the containers.
 `devbox services start|stop|status` drives `docker compose` as root in the
 guest and explicitly selects the rootful `/var/run/docker.sock`, regardless of
 inherited Docker context variables. Both services publish to `127.0.0.1` only;
@@ -146,9 +170,11 @@ credentials.
 ## Lifecycle
 
 Mutating lifecycle commands serialize on a PID-bearing `mkdir` lock under
-`~/.local/state/devbox/locks`: `start`, `provision`, `stop`, and `destroy`.
-The lock is released when the command exits, whether it succeeded or failed.
-`init` and the read-only commands do not take the lock. Stale locks are removed
-only when their recorded process no longer exists. `devbox stop` stops the VM;
+`~/.local/state/devbox/locks` (honoring `XDG_STATE_HOME`): `start`,
+`provision`, `stop`, and `destroy`. The lock is released when the command
+exits, whether it succeeded or failed. `init` and the read-only commands do
+not take the lock. Stale locks are removed only when their recorded process
+no longer exists. `devbox stop` stops the managed services first and then the
+VM; an unclean services stop only warns and never blocks the VM stop.
 `devbox destroy` requires the profile name to be typed and then deletes the VM
 together with its runtime data and the managed SSH alias.

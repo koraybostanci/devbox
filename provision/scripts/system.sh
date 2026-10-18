@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Sources resolve at runtime from $DEVBOX_PROVISION_ROOT, a root-owned bundled
+# tree that is not statically followable. This file-wide disable must stay
+# before the first command to have effect.
+# shellcheck disable=SC1091
+
 set -Eeuo pipefail
 trap 'printf "ERROR: system provisioning failed at line %s\n" "$LINENO" >&2' ERR
 
@@ -14,9 +19,12 @@ source "$DEVBOX_PROVISION_ROOT/scripts/lib/apps.sh"
 # (mounted under /mnt/lima-*), not the fixed-size root disk. A home that already
 # holds data on the root disk predates this layout; recreate the VM instead.
 relocate_guest_home() {
-    local home=/home/devbox data_root target fstab_entry temporary
+    local home=/home/devbox data_root target fstab_entry
 
     data_root="$(devbox_lima_data_root)" || data_root=""
+    # `|| { ... }` is the intended failure branch: it only runs when the data
+    # root is missing or is not a mountpoint.
+    # shellcheck disable=SC2015
     [ -n "$data_root" ] && mountpoint -q "$data_root" || {
         printf 'ERROR: Lima ext4 data disk not found; refusing to leave /home/devbox on the root disk\n' >&2
         return 1
@@ -40,15 +48,19 @@ relocate_guest_home() {
         return 1
     }
     fstab_entry="$target $home none bind,nofail,x-systemd.requires-mounts-for=$data_root 0 0"
-    temporary="$(mktemp /etc/.fstab.XXXXXX)"
-    awk -v home="$home" 'NF < 2 || $1 ~ /^#/ || $2 != home { print }' /etc/fstab >"$temporary"
-    printf '%s\n' "$fstab_entry" >>"$temporary"
-    if cmp -s "$temporary" /etc/fstab; then
-        rm -f "$temporary"
-    else
-        chmod 644 "$temporary"
-        mv "$temporary" /etc/fstab
-    fi
+    # The rewrite is published from /etc's own directory with mode 644 applied
+    # before the mv, and an unchanged content keeps the current /etc/fstab.
+    devbox_publish_atomic /etc/fstab 644 --skip-if-same -- \
+        devbox_fstab_content /etc/fstab "$home" "$fstab_entry"
+}
+
+# Emit the fstab as-is apart from the managed home entry, replacing any prior
+# entry for that home, then re-adding the single managed entry.
+devbox_fstab_content() {
+    local fstab_file="$1" home="$2" fstab_entry="$3"
+
+    awk -v home="$home" 'NF < 2 || $1 ~ /^#/ || $2 != home { print }' "$fstab_file"
+    printf '%s\n' "$fstab_entry"
 }
 
 configure_devbox_guest_identity() {
@@ -67,9 +79,30 @@ configure_devbox_guest_identity() {
 }
 
 install_guest_chromium() {
+    local attempt status=1
+
     systemctl enable --now snapd.socket
-    snap wait system seed.loaded
-    snap list chromium >/dev/null 2>&1 || snap install chromium --channel=stable
+    # snap wait blocks indefinitely without --timeout, so a stalled install
+    # seed would hang provisioning forever; bound it and fail with the snap's
+    # diagnosis instead.
+    snap wait --timeout=45m system seed.loaded
+    # snapd can transiently reject installs while the seed is still settling:
+    # retry, capture the last status, and fail closed on a final failure.
+    for attempt in 1 2 3; do
+        if snap list chromium >/dev/null 2>&1; then
+            status=0
+            break
+        fi
+        snap install chromium --channel=stable && status=0 || status=$?
+    done
+    [ "$status" = 0 ] || {
+        printf 'ERROR: chromium snap installation failed after %s attempts\n' "$attempt" >&2
+        return 1
+    }
+    # snapd otherwise auto-refreshes Chromium between provisioning cycles,
+    # silently moving the guest's browser ahead of the smoke-tested channel
+    # state; hold the refresh so the pinned channel install stays in place.
+    snap refresh --hold chromium
 }
 
 # Keep the helpers above sourceable by the static gate without running the
@@ -139,10 +172,3 @@ devbox_prepare_rootless_docker
 install_guest_chromium
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox
-
-# Root-only tools run from this root phase; the unprivileged tools phase cannot
-# write /usr/local/bin.
-set -a
-source "$DEVBOX_PROVISION_ROOT/versions.env"
-set +a
-install_databricks

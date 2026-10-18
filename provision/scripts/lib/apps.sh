@@ -4,6 +4,10 @@ install_claude() {
     local package_root
 
     stage "Claude Code $CLAUDE_CODE_VERSION"
+    if command -v claude >/dev/null 2>&1 &&
+        ensure_installed bash -c "claude --version | grep -oF '$CLAUDE_CODE_VERSION'" "$CLAUDE_CODE_VERSION"; then
+        return
+    fi
     npm install --global --silent --include=optional \
         --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
@@ -21,7 +25,7 @@ install_opencode() {
 
     stage "OpenCode $OPENCODE_VERSION"
     if command -v opencode >/dev/null 2>&1 &&
-        [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]; then
+        ensure_installed bash -c 'opencode --version | sed "s/^opencode v//"' "$OPENCODE_VERSION"; then
         return
     fi
 
@@ -36,27 +40,30 @@ install_opencode() {
     [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]
 }
 
-# Runs as root from system.sh; the unprivileged tools.sh run cannot write
-# /usr/local/bin.
+# Installs direct from the pinned release zip, unprivileged, into the user's
+# PATH; no upstream installer script is involved.
 install_databricks() {
-    local installer
+    local directory
     stage "Databricks CLI $DATABRICKS_VERSION"
     if command -v databricks >/dev/null 2>&1 && databricks version | grep -qF "v$DATABRICKS_VERSION"; then
         return
     fi
-    installer="$(mktemp)"
-    download_verified \
-        "https://raw.githubusercontent.com/databricks/setup-cli/v$DATABRICKS_VERSION/install.sh" \
-        "$DATABRICKS_INSTALL_SHA256" "$installer"
-    rm -f /usr/local/bin/databricks
-    sh "$installer"
-    rm -f "$installer"
+    directory="$(mktemp -d)"
+    run_pinned_installer \
+        "https://github.com/databricks/cli/releases/download/v$DATABRICKS_VERSION/databricks_cli_${DATABRICKS_VERSION}_linux_arm64.zip" \
+        "$DATABRICKS_CLI_SHA256" unzip -q -d "$directory"
+    install -m 755 "$directory/databricks" "$HOME/.local/bin/databricks"
+    rm -rf "$directory"
     databricks version | grep -qF "v$DATABRICKS_VERSION"
 }
 
 install_yq() {
     local archive
     stage "yq $YQ_VERSION"
+    if command -v yq >/dev/null 2>&1 &&
+        ensure_installed bash -c "yq --version | awk '{print \$NF}'" "$YQ_VERSION"; then
+        return
+    fi
     archive="$(mktemp)"
     download_verified \
         "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_arm64" \
@@ -67,15 +74,18 @@ install_yq() {
 }
 
 install_shell_sources() {
-    local installer
+    local commit tree_state
     stage "Shell framework"
+    commit="$OH_MY_ZSH_COMMIT"
     if [ ! -r "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
-        installer="$(mktemp)"
-        download_verified \
-            "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/$OH_MY_ZSH_COMMIT/tools/install.sh" \
-            "$OH_MY_ZSH_INSTALL_SHA256" "$installer"
-        ZSH="$HOME/.oh-my-zsh" RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh "$installer" --unattended
-        rm -f "$installer"
+        # Clone upstream master, then converge to the pinned commit below: git
+        # object hashes authenticate the checkout, so no artifact pin applies.
+        git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
+    fi
+    tree_state="$(git -C "$HOME/.oh-my-zsh" rev-parse HEAD)"
+    if [ "$tree_state" != "$commit" ]; then
+        git -C "$HOME/.oh-my-zsh" fetch --depth 1 origin "$commit"
+        git -C "$HOME/.oh-my-zsh" checkout --detach --quiet "$commit"
     fi
 }
 
@@ -83,5 +93,6 @@ install_apps() {
     install_claude
     install_opencode
     install_yq
+    install_databricks
     install_shell_sources
 }
