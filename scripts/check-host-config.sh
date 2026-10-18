@@ -36,14 +36,34 @@ if ENV_CASE_MODE=644 env_case '' >/dev/null 2>&1; then
     fail "load_env accepted a world-readable configuration file"
 fi
 
+# Git identities seeded for the guest must be real values: the validator
+# rejects empty values and the documented placeholders for both keys, and
+# accepts a valid pair.
+for git_placeholder in '' 'Your Name' 'you@personal.com'; do
+    reject_env "export GIT_NAME=\"$git_placeholder\""
+    reject_env "export GIT_EMAIL=\"$git_placeholder\""
+done
+expect_env 'export GIT_NAME="Real Name"' GIT_NAME 'Real Name'
+expect_env 'export GIT_EMAIL=you@example.com' GIT_EMAIL you@example.com
+
+# The proxy-key list is single-sourced from the runtime loop in lib/devbox.sh:
+# the stub iterates the sourced array, and this shell expands the array for the
+# count assertions below, so a new key becomes covered by construction. The
+# source is assignment-only at load time (all behavior lives in functions), and
+# the launcher already runs it under the same environment. shellcheck 0.11
+# cannot follow a computed path without -x, so the follow warning is disabled
+# beside the single runtime source.
+# shellcheck disable=SC1091
+source "$ROOT/lib/devbox.sh"
+
 # Proxy forwarding is opt-in and applies only to the devbox Colima start
 # command; otherwise every proxy variable is passed explicitly empty.
 proxy_root="$validation_root/proxy-unit"
 mkdir -p "$proxy_root/bin" "$proxy_root/home"
 cat >"$proxy_root/bin/colima" <<'EOF'
 #!/bin/bash
-for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY WS_PROXY NO_PROXY \
-    http_proxy https_proxy all_proxy ftp_proxy ws_proxy no_proxy; do
+source "$ROOT/lib/devbox.sh"
+for key in "${DEVBOX_PROXY_KEYS[@]}"; do
     if value="$(printenv "$key")"; then
         printf '%s=%s\n' "$key" "${value:+present}"
     else
@@ -69,10 +89,10 @@ proxy_capture() {
     ' _ "$@" || fail "proxy capture Colima invocation failed"
 }
 proxy_capture false list
-[ "$(grep -c '=$' "$proxy_root/capture")" = 12 ] ||
+[ "$(grep -c '=$' "$proxy_root/capture")" = "${#DEVBOX_PROXY_KEYS[@]}" ] ||
     fail "default proxy policy did not explicitly clear every proxy variable"
 proxy_capture true list
-[ "$(grep -c '=$' "$proxy_root/capture")" = 12 ] ||
+[ "$(grep -c '=$' "$proxy_root/capture")" = "${#DEVBOX_PROXY_KEYS[@]}" ] ||
     fail "proxy opt-in leaked to a non-start Colima command"
 proxy_capture true start devbox
 for proxy_key in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy no_proxy; do
@@ -90,7 +110,7 @@ colima_valid() {
     ' _ "$1"
 }
 colima_valid "$ROOT/colima.yaml" || fail "devbox Colima template failed validation"
-for required_setting in runtime arch vmType autoActivate forwardAgent portForwarder sshConfig mounts env; do
+for required_setting in runtime arch vmType autoActivate forwardAgent portForwarder sshPort sshConfig mounts env; do
     grep -v "^$required_setting:" "$ROOT/colima.yaml" >"$validation_root/colima-test.yaml"
     if colima_valid "$validation_root/colima-test.yaml"; then
         fail "Colima validation accepted a config without $required_setting"
@@ -100,5 +120,16 @@ for key in autoActivate forwardAgent portForwarder sshConfig; do
     sed "s/^$key:.*/$key: true/" "$ROOT/colima.yaml" >"$validation_root/colima-test.yaml"
     if colima_valid "$validation_root/colima-test.yaml"; then
         fail "Colima validation accepted unsafe $key"
+    fi
+done
+# Dangerous setting shapes: a static SSH port breaks the dynamic-port contract,
+# and non-null env or mounts maps would re-open the host boundary.
+for colima_override in \
+    's#^sshPort:.*#sshPort: 2222#' \
+    's#^mounts:.*#mounts: {"/home/devbox": null}#' \
+    's#^env:.*#env: {FOO: bar}#'; do
+    sed "$colima_override" "$ROOT/colima.yaml" >"$validation_root/colima-test.yaml"
+    if colima_valid "$validation_root/colima-test.yaml"; then
+        fail "Colima validation accepted an unsafe template setting: $colima_override"
     fi
 done

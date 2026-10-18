@@ -83,6 +83,42 @@ launcher_version="$("$ROOT/devbox" version)" || fail "devbox version failed"
 [ "$launcher_version" = "$(cat "$ROOT/VERSION")" ] ||
     fail "devbox version printed '$launcher_version' instead of the VERSION contents"
 
+# Every command dispatched by the launcher's case statement must be documented
+# in the usage text, and every documented command must be dispatched. Both
+# sides are extracted from the launcher itself; no hand-maintained list.
+case_cmds="$(awk '
+    $0 == "case \"$cmd\" in" { grab = 1; next }
+    grab && /^esac$/ { exit }
+    grab && /^[[:space:]]*[^)#]+[)][[:space:]]*$/ {
+        case_pattern = $0
+        sub(/[[:space:]]*\).*$/, "", case_pattern)
+        word_count = split(case_pattern, words, "|")
+        for (i = 1; i <= word_count; i++) {
+            word = words[i]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", word)
+            if (word ~ /^[a-z][a-z_-]*$/) print word
+        }
+    }
+' "$ROOT/devbox" | sort -u)"
+launcher_name="$(basename "$ROOT/devbox")"
+usage_cmds="$("$ROOT/devbox" help | awk -v prog="$launcher_name" '
+    /^[[:space:]]+[a-z][a-z_-]*/ {
+        usage_line = $0
+        sub(/^[[:space:]]+/, "", usage_line)
+        split(usage_line, words, /[[:space:]]+/)
+        if (words[1] ~ /^[a-z][a-z_-]*$/ && words[1] != prog) print words[1]
+    }' | sort -u)"
+[ -n "$case_cmds" ] || fail "help parity extracted no command labels from the launcher case statement"
+[ -n "$usage_cmds" ] || fail "help parity extracted no commands from the usage text"
+missing_from_usage="$(comm -23 <(printf '%s\n' "$case_cmds") <(printf '%s\n' "$usage_cmds"))"
+if [ -n "$missing_from_usage" ]; then
+    fail "case commands missing from the usage text: $(printf '%s' "$missing_from_usage" | tr '\n' ' ')"
+fi
+missing_from_case="$(comm -13 <(printf '%s\n' "$case_cmds") <(printf '%s\n' "$usage_cmds"))"
+if [ -n "$missing_from_case" ]; then
+    fail "usage commands not dispatched by the case statement: $(printf '%s' "$missing_from_case" | tr '\n' ' ')"
+fi
+
 # --- devbox version edge cases ------------------------------------------------
 # A missing or empty VERSION must exit nonzero with an ERROR line, not print
 # an empty version silently. The launcher tree is copied without VERSION (and with an
@@ -187,6 +223,47 @@ for pin in OH_MY_ZSH_COMMIT PYENV_REPO_COMMIT; do
         fail "provision/versions.env: $pin must be a full 40-hex commit"
 done
 
+# --- pin ↔ consumer parity -----------------------------------------------------
+# Phase 15 gate assertion: every *_VERSION, *_SHA256 and *_COMMIT defined in
+# provision/versions.env must be consumed somewhere under provision/scripts,
+# and every such variable referenced there must exist in versions.env —
+# enforced in both directions, so a dropped consumer or a renamed pin without
+# its counterpart also flips the gate. The consumer scan mirrors the script
+# text literally (`$PIN` / `${PIN}`), which is how every pin in the tree is
+# referenced; indirect `${prefix}_SHA256` construction would need extending
+# the scan instead.
+check_pin_parity() {
+    local parity_provision_root="$1" parity_versions_file="$2"
+    local pinned referenced parity_dir pin_missing pin_orphans
+
+    pinned="$(awk -F= '
+        /^[A-Za-z_][A-Za-z0-9_]*_(VERSION|SHA256|COMMIT)=/ { sub(/=.*/, ""); print }
+    ' "$parity_versions_file")" ||
+        fail "could not read the version pins from $parity_versions_file"
+    [ -n "$pinned" ] || fail "no version pins found in $parity_versions_file"
+    referenced="$(
+        {
+            grep -RhEo '\$\{?[A-Za-z_][A-Za-z0-9_]*(_VERSION|_SHA256|_COMMIT)' \
+                "$parity_provision_root/scripts" 2>/dev/null || true
+        } | sed 's/^[$]//; s/^[{]//' | LC_ALL=C sort -u
+    )"
+    [ -n "$referenced" ] ||
+        fail "no pin consumers found under $parity_provision_root/scripts"
+    parity_dir="$(mktemp -d "$validation_root/pin-parity.XXXXXX")"
+    printf '%s\n' "$pinned" | LC_ALL=C sort -u >"$parity_dir/pinned"
+    printf '%s\n' "$referenced" >"$parity_dir/referenced"
+    pin_missing="$(LC_ALL=C command comm -23 "$parity_dir/referenced" "$parity_dir/pinned")"
+    if [ -n "$pin_missing" ]; then
+        fail "pins referenced under $parity_provision_root/scripts are missing from $parity_versions_file: $(printf '%s' "$pin_missing" | tr '\n' ' ')"
+    fi
+    pin_orphans="$(LC_ALL=C command comm -13 "$parity_dir/referenced" "$parity_dir/pinned")"
+    if [ -n "$pin_orphans" ]; then
+        fail "provision/versions.env pins with no consumer under $parity_provision_root/scripts: $(printf '%s' "$pin_orphans" | tr '\n' ' ')"
+    fi
+    command rm -rf "$parity_dir"
+}
+check_pin_parity "$ROOT/provision" "$ROOT/provision/versions.env"
+
 # --- guest privilege boundaries ----------------------------------------------
 if grep -R -nE \
     'kernel\.apparmor_restrict_unprivileged_userns[[:space:]]*=[[:space:]]*0|sysctl[[:space:]].*apparmor_restrict_unprivileged_userns' \
@@ -212,6 +289,265 @@ for readiness_check in \
         fail "guest readiness check call is missing: $readiness_check"
     fi
 done
+
+# --- verify.sh marker property (stubbed guest) --------------------------------
+# The bundle digest marker is written only after every check passed, so a
+# surviving $HOME/.local/state/devbox/provision.sha256 always certifies the
+# exact verified tree. The unit proves both behaviors against two copies of
+# verify.sh remapped into a user-owned fixture guest:
+# (a) one injected failing check exits nonzero and publishes no marker, while
+# (b) an all-pass run publishes exactly DEVBOX_BUNDLE_DIGEST with mode 600.
+# The batteries are derived from the real verify.sh, so its structure (the
+# `failures == 0` guard before the digest publish) is what is being tested.
+# Fixture adaptation, applied by the awk script below: guest-absolute paths
+# (/var/lib/devbox, /var/run/docker.sock, /home/devbox, /snap/bin/chromium,
+# /usr/bin/rootlesskit) become probe-local fixture paths; the root-ownership
+# and devbox-identity anchors keep their shape but resolve against the
+# fixture's owner (an unprivileged run cannot create a root-owned tree);
+# guest-only helpers with no user-side equivalent (subid ranges, the Lima
+# data disk) become stubbed functions. Guest executables — zsh, docker,
+# loginctl, dpkg, sudo, systemctl, and the tool battery — resolve to the
+# stub directory, so the unit is independent of any provisioned machine
+# and passes on a bare Linux runner. It requires python3 for the one fixture
+# inode no shell primitive can make: a Unix-domain socket for the rootful
+# Docker denial check. On non-Linux hosts the battery is skipped the same
+# way the optional tool batteries above are.
+if [ "$(uname -s)" != "Linux" ]; then
+    if [ -n "${CI:-}" ]; then
+        fail "Linux is required in CI for the verify marker unit"
+    fi
+    printf 'WARN: the verify marker battery requires Linux; skipping\n' >&2
+elif ! command -v python3 >/dev/null 2>&1; then
+    if [ -n "${CI:-}" ]; then
+        fail "python3 is required in CI for the verify marker unit socket fixture"
+    fi
+    printf 'WARN: python3 is unavailable; skipping the verify marker battery\n' >&2
+else
+    verify_root="$validation_root/verify-probe"
+    verify_stub_bin="$verify_root/stub-bin"
+    verify_tree="$verify_root/provision"
+    verify_lib="$verify_tree/scripts/lib"
+    verify_state_root="$verify_root/state"
+    verify_ok_home="$verify_root/ok-home"
+    verify_fail_home="$verify_root/fail-home"
+    verify_probe_digest="$(printf 'd%.0s' {1..64})"
+    verify_stub_rootlesskit="$verify_stub_bin/rootlesskit"
+    verify_stub_chromium="$verify_stub_bin/chromium"
+    verify_probe_sock="$verify_root/rootful-docker.sock"
+    mkdir -p "$verify_stub_bin" "$verify_lib" "$verify_tree/scripts" \
+        "$verify_state_root/services" "$verify_ok_home" "$verify_fail_home"
+    cp "$ROOT/provision/scripts/lib/"*.sh "$verify_lib/"
+    cp "$ROOT/provision/versions.env" "$verify_tree/versions.env"
+    : >"$verify_tree/scripts/tools.sh"
+    chmod 700 "$verify_state_root/services"
+
+    # The probe's rootful Docker endpoint: a real socket inode devbox can see
+    # exists but may not reach (the stub docker answers only the rootless
+    # checker), so the admission shape matches the guest semantics.
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).bind(sys.argv[1])' \
+        "$verify_probe_sock" || fail "the fixture python3 could not create a socket"
+    : >"$verify_stub_rootlesskit"
+    chmod +x "$verify_stub_rootlesskit"
+
+    cat >"$verify_stub_chromium" <<'EOF'
+#!/bin/bash
+printf '<html></html>\n'
+EOF
+    chmod +x "$verify_stub_chromium"
+    cat >"$verify_stub_bin/zsh" <<'EOF'
+#!/bin/bash
+# zsh -lic <payload>: the readiness battery is replayed under bash; the
+# login-shell probe answers the stub rootless endpoint with a clean start
+# ("|0"); anything else (the nested `zsh -lic true`) stays silent.
+case "$2" in
+    *'failures=0'*) exec /usr/bin/bash -c "$2" ;;
+    *'noise'*) printf 'unix:///run/user/%s/docker.sock||0\n' "$(id -u)" ;;
+    *) exit 0 ;;
+esac
+EOF
+    chmod +x "$verify_stub_bin/zsh"
+    cat >"$verify_stub_bin/docker" <<'EOF'
+#!/bin/bash
+# The rootless context answers with its endpoint; every other endpoint
+# (the rootful probe) is denied.
+case "$*" in
+    *"context show") printf 'rootless\n' ;;
+    *"context inspect"*) printf 'unix:///run/user/%s/docker.sock\n' "$(id -u)" ;;
+    *"info --format"*) printf '["rootless"]\n' ;;
+    *) exit 1 ;;
+esac
+EOF
+    chmod +x "$verify_stub_bin/docker"
+    # The existence-only battery tools; the versioned ones below read the
+    # exported pins so every version check passes on the actual values.
+    for verify_stub in gh pyenv jq vim git sudo systemctl loginctl dpkg; do
+        : >"$verify_stub_bin/$verify_stub"
+    done
+    printf '#!/bin/bash\ncase "$*" in *Linger*) printf "yes\\n" ;; esac\nexit 1\n' \
+        >"$verify_stub_bin/loginctl"
+    printf '#!/bin/bash\nprintf "arm64\\n"\n' >"$verify_stub_bin/dpkg"
+    printf '#!/bin/bash\nprintf "devbox\\n"\n' >"$verify_stub_bin/git"
+    printf '#!/bin/bash\nexit 1\n' >"$verify_stub_bin/sudo"
+    for verify_stub in gh pyenv jq vim git sudo systemctl loginctl dpkg; do
+        chmod +x "$verify_stub_bin/$verify_stub"
+    done
+    cat >"$verify_stub_bin/node" <<'EOF'
+#!/bin/bash
+printf 'v%s\n' "$NODE_VERSION"
+EOF
+    cat >"$verify_stub_bin/npm" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$NPM_VERSION"
+EOF
+    cat >"$verify_stub_bin/python" <<'EOF'
+#!/bin/bash
+printf 'Python %s\n' "$PYTHON_VERSION"
+EOF
+    cat >"$verify_stub_bin/uv" <<'EOF'
+#!/bin/bash
+printf 'uv %s\n' "$UV_VERSION"
+EOF
+    cat >"$verify_stub_bin/java" <<'EOF'
+#!/bin/bash
+printf 'openjdk version "%s.x"\n' "${JAVA_VERSION%%.*}"
+EOF
+    cat >"$verify_stub_bin/go" <<'EOF'
+#!/bin/bash
+printf 'go version go%s\n' "$GO_VERSION"
+EOF
+    cat >"$verify_stub_bin/rustc" <<'EOF'
+#!/bin/bash
+printf 'rustc %s\n' "$RUST_VERSION"
+EOF
+    cat >"$verify_stub_bin/claude" <<'EOF'
+#!/bin/bash
+printf 'claude %s\n' "$CLAUDE_CODE_VERSION"
+EOF
+    cat >"$verify_stub_bin/opencode" <<'EOF'
+#!/bin/bash
+if [ "$1" = --version ]; then
+    printf 'opencode v%s\n' "$OPENCODE_VERSION"
+fi
+exit 0
+EOF
+    cat >"$verify_stub_bin/databricks" <<'EOF'
+#!/bin/bash
+if [ "$1" = version ]; then
+    printf 'Databricks CLI v%s\n' "$DATABRICKS_VERSION"
+fi
+exit 0
+EOF
+    cat >"$verify_stub_bin/yq" <<'EOF'
+#!/bin/bash
+printf 'yq (https://github.com/mikefarah/yq/) version v%s\n' "$YQ_VERSION"
+EOF
+    for verify_stub in node npm python uv java go rustc claude opencode \
+        databricks yq; do
+        chmod +x "$verify_stub_bin/$verify_stub"
+    done
+
+    # Derive the two probe copies from the real verify.sh with the fixture
+    # remapping described above; the fail copy carries one injected failure.
+    # The remap-only awk follows a static stub-header block; the header is
+    # inserted ahead of the battery so every remapped name has its fixture
+    # definition by the time verify.sh's battery calls it.
+    {
+        cat <<'VERIFY_MARKER_HEADER'
+v_user="$(id -un)"
+v_has_subid_ranges() { return 0; }
+v_lima_data_root() { printf '%s\n' "$DEVBOX_PROVISION_ROOT/data"; }
+v_home_on_lima_data_disk() { return 0; }
+v_id_nG_is_own_group() { [ "$(id -gn)" = "$(id -un)" ]; }
+v_id_is_invoking_user() { [ "$(id -un)" = "$v_user" ]; }
+VERIFY_MARKER_HEADER
+        awk -v v_state="$verify_state_root" -v v_sock="$verify_probe_sock" \
+            -v v_rootlesskit="$verify_stub_rootlesskit" \
+            -v v_chromium="$verify_stub_chromium" '
+    {
+        # Guest helper remaps (calls only; the header owns the stubs).
+        gsub(/devbox_has_subid_ranges devbox/, "v_has_subid_ranges")
+        gsub(/devbox_home_is_on_lima_data_disk/, "v_home_on_lima_data_disk")
+        gsub(/devbox_lima_data_root/, "v_lima_data_root")
+        gsub(/test "\$\(id -nG\)" = devbox/, "v_id_nG_is_own_group")
+        gsub(/test "\$\(id -un\)" = devbox/, "v_id_is_invoking_user")
+        # Guest-absolute path remaps (comments and check arguments alike).
+        gsub(/\/snap\/bin\/chromium/, v_chromium)
+        gsub(/\/usr\/bin\/rootlesskit/, v_rootlesskit)
+        gsub(/\/var\/run\/docker\.sock/, "\"" v_sock "\"")
+        gsub(/\/var\/lib\/devbox\/services/, "\"" v_state "/services\"")
+        gsub(/\/var\/lib\/devbox/, "\"" v_state "\"")
+        gsub(/\/home\/devbox/, "\"$HOME\"")
+        # The probe socket is owned by the probe user, so the readability
+        # anchors do not apply; existence plus the denied docker probe stay.
+        gsub(/\[ ! -r "[^"]+" \] && \[ ! -w "[^"]+" \] &&/, "")
+        # Ownership and identity anchors resolve to the fixture owner.
+        gsub(/= root \]/, "= \"$v_user\" ]")
+        gsub(/! -user root/, "! -user \"$v_user\"")
+        gsub(/= devbox \]/, "= \"$v_user\" ]")
+        gsub(/devbox devbox 600/, "\"$v_user\" \"$v_user\" 600")
+        gsub(/devbox devbox 700/, "\"$v_user\" \"$v_user\" 700")
+        print
+    }
+    ' "$ROOT/provision/scripts/verify.sh"
+    } >"$verify_tree/scripts/verify-probe.sh" ||
+        fail "the verify.sh probe could not be derived"
+    bash -n "$verify_tree/scripts/verify-probe.sh" ||
+        fail "the derived verify.sh probe is not valid Bash"
+    verify_marker_home_prepare() {
+        rm -rf "$1/.local"
+        mkdir -p "$1/.config/devbox" "$1/workspace" "$1/.claude" \
+            "$1/.config/opencode/skills/multiphase" "$1/.config/opencode/commands"
+        : >"$1/.config/devbox/config"
+        : >"$1/.config/devbox/secrets"
+        chmod 700 "$1/.config/devbox"
+        chmod 600 "$1/.config/devbox/config" "$1/.config/devbox/secrets"
+        : >"$1/.claude/CLAUDE.md"
+        : >"$1/.config/opencode/opencode.jsonc"
+        : >"$1/.config/opencode/AGENTS.md"
+        : >"$1/.config/opencode/skills/multiphase/SKILL.md"
+        : >"$1/.config/opencode/commands/multiphase.md"
+    }
+    verify_marker_run() {
+        verify_marker_home="$1"
+        verify_marker_home_prepare "$verify_marker_home"
+        HOME="$verify_marker_home" PATH="$verify_stub_bin:/usr/bin:/bin" \
+            DEVBOX_PROVISION_ROOT="$verify_tree" \
+            DEVBOX_BUNDLE_DIGEST="$verify_probe_digest" \
+            bash "$verify_tree/scripts/verify-probe.sh" \
+            >"$verify_marker_home/probe.log" 2>"$verify_marker_home/probe.err"
+    }
+
+    # (b) the all-pass battery publishes exactly the injected digest…
+    verify_marker_run "$verify_ok_home" ||
+        fail "the derived verify.sh probe failed on the all-pass run: $(tail -n 5 "$verify_ok_home/probe.err" | tr '\n' ' ')"
+    verify_ok_marker="$verify_ok_home/.local/state/devbox/provision.sha256"
+    [ -f "$verify_ok_marker" ] || fail "a passing verify battery published no marker"
+    [ "$(cat "$verify_ok_marker")" = "$verify_probe_digest" ] ||
+        fail "the marker did not contain DEVBOX_BUNDLE_DIGEST: $(cat "$verify_ok_marker")"
+    [ "$(file_mode "$verify_ok_marker")" = 600 ] ||
+        fail "the marker was not written with mode 600"
+
+    # (b→a) one injected failing check: the battery must exit nonzero and leave
+    # the probe home without any marker, so no digest can ever certify a tree
+    # that did not pass.
+    awk '/^failures=0$/ && !verified_injected {
+        print
+        print "check \"injected failing check\" false"
+        verified_injected = 1
+        next
+    }
+    { print }' "$verify_tree/scripts/verify-probe.sh" \
+        >"$verify_tree/scripts/verify-probe-fail.sh" ||
+        fail "the failing verify.sh probe could not be derived"
+    mv "$verify_tree/scripts/verify-probe-fail.sh" "$verify_tree/scripts/verify-probe.sh"
+    if verify_marker_run "$verify_fail_home" 2>/dev/null; then
+        fail "the derived verify.sh probe accepted an injected failing check"
+    fi
+    [ ! -e "$verify_fail_home/.local" ] ||
+        fail "a failing verify battery wrote a digest marker anyway"
+    grep -q 'FAIL: injected failing check' "$verify_fail_home/probe.err" ||
+        fail "the injected failing check did not surface in the battery output"
+fi
 
 # User Docker and Puppeteer defaults must be isolated from the root-managed
 # services daemon and project-specific browser download settings. The dynamic
@@ -255,6 +591,22 @@ grep -qF 'does not elevate access' docs/architecture.md ||
     fail "rootless guest-root bind-mount permission limits must be documented"
 grep -qF 'VM smoke test against the actual rootless daemon is required' docs/architecture.md ||
     fail "actual guest metrics must require a rootless VM smoke test"
+
+# One canonical host-boundary sentence is pinned instead of three drift-prone
+# free-hand duplicates; an edit to any copy must update the sentence everywhere
+# and this pin, or the gate fails. The paragraph spans multiple lines, so the
+# comparison flattens the file's white space before the fixed-string match.
+boundary_sentence='Agents must not attempt to use host mounts, the host gateway or host services, SSH, agent/port forwarding, or any other channel to read, write, or execute anything on the host. Ordinary external network use is allowed. This is agent policy guidance, not technical network enforcement.'
+for boundary_file in AGENTS.md provision/config/opencode/AGENTS.md provision/config/claude/CLAUDE.md; do
+    boundary_hits="$(
+        {
+            tr '\n\t' '  ' <"$ROOT/$boundary_file" | sed 's/  */ /g' |
+                grep -oF -- "$boundary_sentence" || true
+        } | wc -l
+    )"
+    [ "$boundary_hits" = 1 ] ||
+        fail "the canonical host-boundary sentence must appear exactly once in $boundary_file (found $boundary_hits)"
+done
 
 # Exercise RootlessKit AppArmor profile loading without a VM or system policy:
 # only an enabled user-namespace restriction should trigger the load.
@@ -866,6 +1218,20 @@ if [ "${#compose_command[@]}" -gt 0 ]; then
         fail "devbox service definition is invalid"
     grep -q '"127.0.0.1:' provision/config/services/compose.yaml ||
         fail "devbox services must publish to loopback only"
+    # Every ports: entry — not just the observed presence — must bind the
+    # published port to the host loopback; a 0.0.0.0 or LAN-bound port would
+    # expose the guest services beyond the VM host.
+    compose_non_loopback="$(awk '
+        /^[[:space:]]*ports:([[:space:]]*\[[[:space:]]*)?$/ { ports_open = 1; next }
+        ports_open && /^[[:space:]]*-/ {
+            ports_entry = $2
+            if (ports_entry !~ /^"127\.0\.0\.1:/) print ports_entry
+            next
+        }
+        ports_open && /^[[:space:]]*[[:alnum:]"'"'"'{]/ { ports_open = 0 }
+    ' provision/config/services/compose.yaml)"
+    [ -z "$compose_non_loopback" ] ||
+        fail "devbox services publish a non-loopback port: $compose_non_loopback"
 elif [ -n "${CI:-}" ]; then
     fail "docker compose is required in CI"
 else

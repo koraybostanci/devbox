@@ -102,6 +102,10 @@ validate_devbox_colima_config() {
         grep -qE '^forwardAgent:[[:space:]]*false$' "$file" &&
         grep -qE '^portForwarder:[[:space:]]*none$' "$file" &&
         grep -qE '^sshConfig:[[:space:]]*false$' "$file" &&
+        # The SSH port must stay Lima's dynamic sentinel (0); a static port
+        # would contradict the managed sshConfig alias and rewrite the host
+        # side of the boundary.
+        grep -qE '^sshPort:[[:space:]]*0$' "$file" &&
         grep -qE '^mounts:[[:space:]]*null$' "$file" &&
         [ "$(grep -cE '^mounts:' "$file" || true)" -eq 1 ] &&
         grep -qE '^env:[[:space:]]*\{\}$' "$file"
