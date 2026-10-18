@@ -21,11 +21,19 @@ install_claude() {
 }
 
 install_opencode() {
-    local archive directory
+    local archive directory binary_directory
 
     stage "OpenCode $OPENCODE_VERSION"
+    # The binary lives at ~/.opencode/bin/opencode, the layout the official
+    # installer uses, so opencode's built-in `opencode upgrade` self-updater
+    # auto-detects the install (it only recognizes that path -- method
+    # "curl") and can update in place between pinned re-provisions. The
+    # installer never lands in ~/.local/bin; a stale copy there is removed
+    # so PATH never resolves a shadowed version.
+    binary_directory="$HOME/.opencode/bin"
     if command -v opencode >/dev/null 2>&1 &&
         ensure_installed bash -c 'opencode --version | sed "s/^opencode v//"' "$OPENCODE_VERSION"; then
+        rm -f "$HOME/.local/bin/opencode"
         return
     fi
 
@@ -35,8 +43,8 @@ install_opencode() {
         "https://opencode.ai/files/bin/$OPENCODE_VERSION/opencode-linux-arm64.tar.gz" \
         "$OPENCODE_SHA256" "$archive"
     tar -xzf "$archive" -C "$directory"
-    install -m 755 "$directory/opencode" "$HOME/.local/bin/opencode"
-    rm -rf "$archive" "$directory"
+    install -m 755 "$directory/opencode" "$binary_directory/opencode"
+    rm -rf "$archive" "$directory" "$HOME/.local/bin/opencode"
     [ "$(opencode --version | sed 's/^opencode v//')" = "$OPENCODE_VERSION" ]
 }
 
