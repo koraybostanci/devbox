@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Constant consumed by lib/devbox.sh after the launcher sources both files.
+# shellcheck disable=SC2034
 MINIMUM_COLIMA_VERSION="0.10.3"
 ENV_KEYS=(
     GIT_NAME
@@ -23,12 +25,10 @@ check_host_platform() {
 }
 
 is_allowed_env_key() {
-    local candidate="$1"
-    local allowed
-
-    for allowed in "${ENV_KEYS[@]}"; do
-        [ "$candidate" = "$allowed" ] && return 0
-    done
+    case "$1" in
+        GIT_NAME | GIT_EMAIL | POSTGRES_USER | POSTGRES_DB | POSTGRES_PORT | \
+        DEVBOX_CPU | DEVBOX_MEMORY | DEVBOX_DISK | DEVBOX_USE_HOST_PROXY) return 0 ;;
+    esac
     return 1
 }
 
@@ -112,7 +112,8 @@ devbox_env_file() {
 # interpreted. Strict mode rejects malformed lines; lenient mode (used by
 # `devbox init`, which rewrites the file) reports and skips them.
 read_env_file() {
-    local env_file="$1" mode="$2" line key value line_number=0
+    local env_file="$1" mode="$2" line key value line_number=0 verb
+    local quote_char quote_exempt quote_stripped
 
     while IFS= read -r line || [ -n "$line" ]; do
         line_number=$((line_number + 1))
@@ -124,16 +125,44 @@ read_env_file() {
         fi
         key="${BASH_REMATCH[2]}"
         if ! is_allowed_env_key "$key"; then
-            if [ "$mode" = lenient ]; then
-                warn "$env_file:$line_number removes unsupported variable $key"
-            else
-                warn "$env_file:$line_number ignores unsupported variable $key"
-            fi
+            # The two modes share everything but the verb: lenient (the init
+            # rewrite) reports the key as removed; strict ignores it and keeps
+            # validating the rest of the file.
+            case "$mode" in lenient) verb=removes ;; *) verb=ignores ;; esac
+            warn "$env_file:$line_number $verb unsupported variable $key"
             continue
         fi
         value="${line#*=}"
         value="${value#"${value%%[![:space:]]*}"}"
         value="${value%"${value##*[![:space:]]}"}"
+        # A value held in one quote pair that wraps the whole value may
+        # contain ` #` verbatim; any other ` #` is an unquoted comment
+        # (trailing or mid-value) or a mangled quote. One guard block
+        # decides: strict mode dies naming the line, lenient mode warns and
+        # keeps the text before the first ` #` for the quote stripper below.
+        quote_exempt=0
+        case "$value" in
+            \"*\" | \'*\')
+                # Exempt only if the starting quote char occurs exactly
+                # twice, so `John" # "Doe` is not mistaken for a quoted value.
+                case "$value" in \"*) quote_char='"' ;; *) quote_char="'" ;; esac
+                quote_stripped="${value//$quote_char/}"
+                [ $(( ${#value} - ${#quote_stripped} )) -eq 2 ] &&
+                    quote_exempt=1 ;;
+        esac
+        if [ "$quote_exempt" -eq 0 ]; then
+            case "$value" in
+                *' #'*)
+                    if [ "$mode" = lenient ]; then
+                        warn "$env_file:$line_number contains an unquoted space-hash (trailing comment?)"
+                        value="${value%%' #'*}"
+                        value="${value%"${value##*[![:space:]]}"}"
+                    else
+                        die "$env_file:$line_number contains an unquoted space-hash (trailing comment?)"
+                    fi
+                    ;;
+            esac
+        fi
         case "$value" in
             \"*\") value="${value#\"}"; value="${value%\"}" ;;
             \'*\') value="${value#\'}"; value="${value%\'}" ;;
@@ -199,11 +228,17 @@ prompt_env_value() {
     prompt="$label"
     [ "$key" != DEVBOX_USE_HOST_PROXY ] || prompt="$label (true/false)"
     default="$(env_default "$key")"
+    # A computed default that fails validation (a placeholder Git identity, for
+    # example) must not be shown for empty Enter to re-adopt forever: show the
+    # required marker instead so the user is prompted for a real value.
+    if [ -n "$default" ] && [ -n "$(env_value_error "$key" "$default")" ]; then
+        default=""
+    fi
     while :; do
         if [ -n "$default" ]; then
             printf '%s [%s]: ' "$prompt" "$default" >&2
         else
-            printf '%s: ' "$prompt" >&2
+            printf '%s (required): ' "$prompt" >&2
         fi
         if IFS= read -r value; then
             [ -n "$value" ] || value="$default"
@@ -238,9 +273,14 @@ write_env_file() {
     config_root="$(dirname "$env_file")"
     if [ ! -d "$config_root" ]; then
         mkdir -p "$config_root"
-        chmod 700 "$config_root"
     fi
+    # Enforce the private mode even when the root already existed: it may have
+    # been created by other tooling with a looser default umask.
+    chmod 700 "$config_root"
     temporary="$(mktemp "$config_root/.env.XXXXXX")"
+    # The fresh mktemp target is only written here and never read back within
+    # this block, so this is not a read-write pipeline.
+    # shellcheck disable=SC2094
     {
         printf "# devbox configuration - edit this file and run 'devbox init' again.\n"
         printf "# Service secrets are generated inside the guest and never live here.\n"

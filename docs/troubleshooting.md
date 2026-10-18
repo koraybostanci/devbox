@@ -15,7 +15,9 @@ Install Colima from <https://colima.run>. No other host tooling is required.
 ## `.env` rejected
 
 Run `devbox init` to rewrite the configuration interactively; it keeps the
-current values as defaults. `.env` must be mode 0600 and contain only supported
+current values as defaults. To keep the configuration somewhere other than the
+checkout's `.env`, run devbox with `DEVBOX_ENV_FILE=/path/to/env` in its
+environment. `.env` must be mode 0600 and contain only supported
 `KEY=value` assignments (single or double quotes are stripped):
 
 ```sh
@@ -29,9 +31,8 @@ ignored with a warning. `POSTGRES_PASSWORD` is generated inside the guest and
 is never read from the host. `POSTGRES_USER` and `POSTGRES_DB` accept 1–63 ASCII
 letters, digits, dots, dashes, or underscores.
 
-If the guest needs the current host process's exported proxy settings, set
-`DEVBOX_USE_HOST_PROXY="true"` in `.env`, then run `devbox stop` and
-`devbox start` to apply the change; see
+Guest proxy propagation is opt-in via `DEVBOX_USE_HOST_PROXY="true"` and is
+applied at the next VM stop/start; see
 [architecture.md](architecture.md#host--guest-boundary) for what that exposes.
 
 ## VM state or SSH
@@ -112,23 +113,16 @@ than leave the home on the root disk. If provisioning still runs out of space:
 - Set `DEVBOX_DISK` in `.env` to a value larger than the current one, then
   `devbox destroy` and `devbox start` (resizing the data disk requires
   recreating it).
-- Clear a failed build before retrying:
-  `devbox exec rm -rf '/tmp/python-build.*'`.
+- Clear a failed build before retrying. `devbox exec` arguments reach the
+  guest verbatim — no guest-side glob or shell expansion — so select the
+  paths with a guest-side `find` instead of a glob:
+  `devbox exec find /tmp -maxdepth 1 -name 'python-build.*' -delete`.
 
 ## Services
 
-PostgreSQL and Valkey are staged during provisioning but stay stopped until
-started:
-
-```sh
-devbox services start
-devbox services status
-devbox services stop
-```
-
-They are root-managed and bound to `127.0.0.1` only. Credentials live in
-`~/.config/devbox/secrets` inside the guest. Valkey listens on
-`127.0.0.1:16379`, a guest-only port that is not published to the host.
+Valkey listens on `127.0.0.1:16379`, a guest-only port that is not published
+to the host. The full service contract is in
+[architecture.md](architecture.md#services).
 
 To change the PostgreSQL port, edit `~/.config/devbox/config` inside the guest
 (`devbox connect`, or `devbox exec` with a command) and run `devbox provision`.

@@ -25,6 +25,19 @@ devbox_rootless_endpoint() {
     printf 'unix:///run/user/%s/docker.sock\n' "$(id -u)"
 }
 
+# Bind a user-systemd invocation to the manager of the invoking user: both the
+# runtime directory and the session bus derive from the UID, not from an
+# inherited environment. Callers that need the same context while running
+# something other than `systemctl --user` (e.g. dockerd-rootless-setuptools)
+# must still export these variables themselves before that command.
+devbox_user_systemctl() {
+    # Split so a failed `id -u` cannot mask the export's return value.
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    systemctl --user "$@"
+}
+
 # useradd allocates subordinate IDs from SUB_UID_MIN (100000). Require at least
 # 65,536 for the account in each file, never starting below 100000 where they
 # could map real users.
@@ -90,11 +103,25 @@ devbox_prepare_rootless_docker() {
 # Unprivileged tools phase, run as devbox. The rootful daemon stays enabled for
 # root-managed services; --force permits a second, per-user systemd service.
 devbox_configure_rootless_docker() {
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    # Split so a failed `id -u` cannot mask the export's return value. The
+    # exports stay here because dockerd-rootless-setuptool.sh below runs
+    # outside devbox_user_systemctl and needs the same context.
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
     export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    # A working daemon (rootless context present, user service active) is not
+    # reinstalled: `install --force` would redefine it on every re-provision.
+    # This is a simplification, not an added layer: less work per run, no
+    # markers, no new state. Re-assert the enablement, keep the context.
+    if devbox_docker '' context inspect rootless >/dev/null 2>&1 &&
+        devbox_user_systemctl is-active --quiet docker.service; then
+        devbox_user_systemctl enable --now docker.service
+        devbox_docker '' context use rootless >/dev/null
+        return
+    fi
     env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH \
         /usr/bin/dockerd-rootless-setuptool.sh install --force
-    systemctl --user daemon-reload
-    systemctl --user enable --now docker.service
+    devbox_user_systemctl daemon-reload
+    devbox_user_systemctl enable --now docker.service
     devbox_docker '' context use rootless >/dev/null
 }

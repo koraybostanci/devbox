@@ -1,12 +1,19 @@
 #!/bin/bash
 # Data-only helpers for guest state and the Lima-backed home directory.
 
+# The publish helper lives in common.sh; sources resolve from this file's own
+# directory so standalone unit runs see the same shared implementation.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 # devbox_path_is_safe <f|d> PATH OWNER GROUP MODE: a regular file or directory,
 # never a symlink, with exactly this ownership and mode.
+# The test operator is built from the `<f|d>` contract; shellcheck cannot
+# parse the concatenation inside `[`, so `test` receives it as one word.
 devbox_path_is_safe() {
     local type="$1" path="$2" metadata
 
-    [ ! -L "$path" ] && [ -"$type" "$path" ] || return 1
+    [ ! -L "$path" ] && test "-$type" "$path" || return 1
     if [ "$(uname -s)" = Darwin ]; then
         metadata="$(stat -f '%Su %Sg %Lp' "$path")" || return 1
     else
@@ -22,8 +29,10 @@ devbox_state_valid_port() {
 }
 
 # Read the service values root needs from stdin as literal data; LABEL names
-# the source in errors. Other valid assignments (for example the guest Git
-# identity) are ignored, and no input is ever evaluated as shell code.
+# the source in errors. In the config kind, the guest Git identity is captured
+# with the service values so the unprivileged tools phase can consume the same
+# file as data. Other valid assignments are ignored, and no input is ever
+# evaluated as shell code.
 devbox_parse_state_file() {
     local label="$1" kind="$2" line key value line_number=0 seen_keys=" "
 
@@ -36,7 +45,8 @@ devbox_parse_state_file() {
         fi
         key="${BASH_REMATCH[2]}"
         case "$kind:$key" in
-            config:POSTGRES_USER | config:POSTGRES_DB | config:POSTGRES_PORT | config:VALKEY_PORT) ;;
+            config:POSTGRES_USER | config:POSTGRES_DB | config:POSTGRES_PORT | \
+                config:VALKEY_PORT | config:GIT_NAME | config:GIT_EMAIL) ;;
             secrets:POSTGRES_PASSWORD | secrets:VALKEY_PASSWORD) ;;
             *) continue ;;
         esac
@@ -55,6 +65,48 @@ devbox_parse_state_file() {
         esac
 
         case "$key" in
+            GIT_NAME | GIT_EMAIL)
+                # Host seeding renders the identity with
+                # `printf 'export %s=%q\n'`, so a space arrives as a
+                # backslash-space pair and a literal backslash as a double
+                # backslash. Reverse exactly those two mechanical forms as
+                # data on printable input: park each double backslash with a
+                # control-character sentinel first so it survives adjacency
+                # with a backslash-space form, then turn backslash-space into
+                # a space. Any other backslash escape (`\z`, octal, `\;`, ...)
+                # is rejected loudly rather
+                # than rewritten, and the sentinel cannot collide with input
+                # because non-printable input is turned away before it exists.
+                if ! [[ "$value" =~ ^[[:print:]]+$ ]]; then
+                    printf 'ERROR: invalid %s in %s:%s\n' \
+                        "$key" "$label" "$line_number" >&2
+                    return 1
+                fi
+                if [[ "$value" == *\\* ]]; then
+                    local doubled=$'\x01' slash_space="\\ "
+                    value="${value//\\\\/$doubled}"
+                    value="${value//"$slash_space"/ }"
+                    case "$value" in
+                        *\\*)
+                            printf 'ERROR: invalid %s in %s:%s\n' \
+                                "$key" "$label" "$line_number" >&2
+                            return 1
+                            ;;
+                    esac
+                    value="${value//"$doubled"/\\}"
+                fi
+
+                # A Git identity is printable single-line data: no control
+                # characters, no leading or terminal whitespace, and no `$` or
+                # backtick, so a seeded value can never even look like shell
+                # command substitution.
+                if ! [[ "$value" =~ ^[[:print:]]+$ ]] ||
+                    [[ "$value" == ' '* || "$value" == *' ' ||
+                        "$value" == *'$'* || "$value" == *'`'* ]]; then
+                    printf 'ERROR: invalid %s in %s:%s\n' "$key" "$label" "$line_number" >&2
+                    return 1
+                fi
+                ;;
             POSTGRES_USER | POSTGRES_DB)
                 [[ "$value" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || {
                     printf 'ERROR: invalid %s in %s:%s\n' "$key" "$label" "$line_number" >&2
@@ -88,12 +140,26 @@ devbox_random_secret() {
     head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'
 }
 
-# Seed the guest user's config and secrets. Runs as that user, so nothing here
-# crosses a privilege boundary. stdin is the host seed: it is kept verbatim on
-# the first provision only, after the allowlisted parser accepts it.
+# Seed the guest user's config and secrets, then emit the canonical, already
+# validated service assignments as plain `KEY=value` data on stdout. Runs as
+# that user, so nothing here crosses a privilege boundary. stdin is the host
+# seed: it is kept on the first provision — apart from the synthesized Valkey
+# port line — after the allowlisted parser accepts it. Root consumes the
+# stdout pass as data; secrets never leave the guest outside their own file.
+devbox_publish_config_with_valkey_port() {
+    cat -- "$1"
+    printf 'VALKEY_PORT=%s\n' "$2"
+}
+
 devbox_seed_guest_state() {
-    local directory="$1" config="$1/config" secrets="$1/secrets" owner group temporary
+    local directory="$1" config="$1/config" secrets="$1/secrets" owner group
+    # The allowlisted keys captured by devbox_parse_state_file are locked to
+    # this function's scope; they are set through `printf -v`, never read
+    # here directly.
+    # shellcheck disable=SC2034
     local POSTGRES_USER POSTGRES_DB POSTGRES_PORT VALKEY_PORT POSTGRES_PASSWORD VALKEY_PASSWORD
+    # shellcheck disable=SC2034
+    local GIT_NAME GIT_EMAIL
 
     owner="$(id -un)"
     group="$(id -gn)"
@@ -104,6 +170,9 @@ devbox_seed_guest_state() {
 
     if [ -e "$config" ] || [ -L "$config" ]; then
         devbox_path_is_safe f "$config" "$owner" "$group" 600 || return 1
+        # devbox_parse_state_file only consumes stdin; the second "$config" is
+        # the error-label wording printed by the parser, never a write.
+        # shellcheck disable=SC2094
         devbox_parse_state_file "$config" config <"$config" || return 1
         devbox_state_config_is_complete || {
             printf 'ERROR: existing guest config is incomplete; refusing to overwrite: %s\n' \
@@ -112,27 +181,80 @@ devbox_seed_guest_state() {
         }
         cat >/dev/null
     else
-        temporary="$(mktemp "$directory/.config.XXXXXX")"
-        cat >"$temporary"
-        if ! devbox_parse_state_file "host seed" config <"$temporary" ||
+        # The seed publishes verbatim before it is parsed, and each staged
+        # file is validated as data after the publish: a failed validation
+        # (or a malformed synthesized port) removes the just-published file,
+        # so the end state matches the staging-first flow — no partial
+        # config or secrets are ever left behind.
+        devbox_publish_atomic "$config" 600
+        # devbox_parse_state_file only consumes stdin; the second "$config" is
+        # the error-label wording printed by the parser, never a write.
+        # shellcheck disable=SC2094
+        if ! devbox_parse_state_file "host seed" config <"$config" ||
             ! devbox_state_config_is_complete; then
-            rm -f -- "$temporary"
+            rm -f -- "$config"
             return 1
         fi
-        mv -f -- "$temporary" "$config"
+        # The Valkey port must be guest-readable for the companion's db info,
+        # which must not depend on the root-only services/env. When the host
+        # seed does not carry one, the devbox default is appended to the fresh
+        # config; the value is validated with the shared port check, and the
+        # augmented content is published atomically through the same helper.
+        if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?VALKEY_PORT=' "$config"; then
+            VALKEY_PORT=16379
+            devbox_state_valid_port "$VALKEY_PORT" || {
+                rm -f -- "$config"
+                return 1
+            }
+            devbox_publish_atomic "$config" 600 -- \
+                devbox_publish_config_with_valkey_port "$config" "$VALKEY_PORT"
+        fi
     fi
+    # An existing, guest-authoritative config may predate the Valkey port: the
+    # default below only feeds the stdout emission, never that file.
+    if [ -z "${VALKEY_PORT:-}" ]; then
+        VALKEY_PORT=16379
+    fi
+    devbox_state_valid_port "$VALKEY_PORT" || {
+        printf 'ERROR: VALKEY_PORT in the guest state is not a port from 1 to 65535\n' >&2
+        return 1
+    }
 
     if [ -e "$secrets" ] || [ -L "$secrets" ]; then
         devbox_path_is_safe f "$secrets" "$owner" "$group" 600 || return 1
+        # Same as the config parse: stdin-only consumption, "$secrets" is the
+        # parser's error label.
+        # shellcheck disable=SC2094
         devbox_parse_state_file "$secrets" secrets <"$secrets" || return 1
     fi
     if [ -z "${POSTGRES_PASSWORD:-}" ] || [ -z "${VALKEY_PASSWORD:-}" ]; then
-        temporary="$(mktemp "$directory/.secrets.XXXXXX")"
-        printf 'export POSTGRES_PASSWORD=%s\nexport VALKEY_PASSWORD=%s\n' \
-            "${POSTGRES_PASSWORD:-$(devbox_random_secret)}" \
-            "${VALKEY_PASSWORD:-$(devbox_random_secret)}" >"$temporary"
-        mv -f -- "$temporary" "$secrets"
+        # Generated values are captured through the same variables the
+        # secrets-file parse would have set, so the emission below sees them.
+        if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+            POSTGRES_PASSWORD="$(devbox_random_secret)"
+        fi
+        if [ -z "${VALKEY_PASSWORD:-}" ]; then
+            VALKEY_PASSWORD="$(devbox_random_secret)"
+        fi
+        # Plain `KEY=value`, not `export`: the zshrc keeps these as shell
+        # variables only, and secrets must not leak into every child process
+        # of a guest login shell.
+        devbox_publish_atomic "$secrets" 600 -- \
+            printf 'POSTGRES_PASSWORD=%s\nVALKEY_PASSWORD=%s\n' \
+                "$POSTGRES_PASSWORD" "$VALKEY_PASSWORD"
     fi
+
+    # The canonical single pass root stages services/env from. Every value was
+    # validated above (allowlisted parser or generated hex/port constant), and
+    # the lines are plain `KEY=value` data with the same shape the root-side
+    # mapping enforces for file lines.
+    printf '%s\n' \
+        "POSTGRES_USER=$POSTGRES_USER" \
+        "POSTGRES_DB=$POSTGRES_DB" \
+        "POSTGRES_PORT=$POSTGRES_PORT" \
+        "VALKEY_PORT=$VALKEY_PORT" \
+        "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+        "VALKEY_PASSWORD=$VALKEY_PASSWORD"
 }
 
 devbox_lima_data_root() {
