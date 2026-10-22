@@ -285,6 +285,51 @@ fi
 grep -q 'refusing to leave /home/devbox on the root disk' "$validation_root/no-data.out" ||
     fail "missing Lima data disk did not fail with a clear error"
 
+# Reject unsupported snap wait flags, require an external deadline, and stop
+# before touching Chromium when the seed wait fails or times out.
+chromium_unit_root="$validation_root/chromium-unit"
+mkdir -p "$chromium_unit_root"
+cat >"$chromium_unit_root/probe.sh" <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+source "$DEVBOX_PROVISION_ROOT/scripts/system.sh"
+systemctl() {
+    [ "$*" = 'enable --now snapd.socket' ]
+}
+timeout() {
+    printf 'timeout %s\n' "$*" >>"$CHROMIUM_CALLS"
+    [ "$#" = 5 ] && [ "$1" = 45m ] || return 2
+    shift
+    "$@"
+}
+snap() {
+    printf 'snap %s\n' "$*" >>"$CHROMIUM_CALLS"
+    case "$*" in
+        'wait system seed.loaded') return "$CHROMIUM_WAIT_STATUS" ;;
+        'list chromium'|'refresh --hold chromium') return 0 ;;
+        *) printf 'unsupported snap arguments: %s\n' "$*" >&2; return 64 ;;
+    esac
+}
+install_guest_chromium
+EOF
+for chromium_wait_status in 0 1 124; do
+    : >"$chromium_unit_root/calls"
+    chromium_status=0
+    DEVBOX_PROVISION_ROOT="$ROOT/provision" \
+        CHROMIUM_CALLS="$chromium_unit_root/calls" CHROMIUM_WAIT_STATUS="$chromium_wait_status" \
+        /bin/bash "$chromium_unit_root/probe.sh" >"$chromium_unit_root/output" 2>&1 || chromium_status=$?
+    [ "$chromium_status" = "$chromium_wait_status" ] ||
+        fail "Chromium provisioning returned $chromium_status for seed wait status $chromium_wait_status: $(cat "$chromium_unit_root/output")"
+    printf '%s\n' 'timeout 45m snap wait system seed.loaded' 'snap wait system seed.loaded' \
+        >"$chromium_unit_root/expected"
+    if [ "$chromium_wait_status" = 0 ]; then
+        printf '%s\n' 'snap list chromium' 'snap refresh --hold chromium' \
+            >>"$chromium_unit_root/expected"
+    fi
+    cmp -s "$chromium_unit_root/expected" "$chromium_unit_root/calls" ||
+        fail "Chromium provisioning used an unbounded seed wait or continued after wait failure ($chromium_wait_status)"
+done
+
 # Managed agent/skill manifests remove stale provisioned files without taking
 # ownership of unrelated files in the guest user's OpenCode directories.
 opencode_sync_root="$validation_root/opencode-sync"
