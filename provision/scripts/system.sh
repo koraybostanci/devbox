@@ -82,10 +82,9 @@ install_guest_chromium() {
     local attempt status=1
 
     systemctl enable --now snapd.socket
-    # snap wait blocks indefinitely without --timeout, so a stalled install
-    # seed would hang provisioning forever; bound it and fail with the snap's
-    # diagnosis instead.
-    snap wait --timeout=45m system seed.loaded
+    # snap wait has no timeout option; use coreutils to bound the seed wait
+    # so a stalled seed cannot hang provisioning forever.
+    timeout 45m snap wait system seed.loaded
     # snapd can transiently reject installs while the seed is still settling:
     # retry, capture the last status, and fail closed on a final failure.
     for attempt in 1 2 3; do
