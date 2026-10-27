@@ -56,15 +56,18 @@ Provisioning creates an unprivileged `devbox` account:
 
 Provisioning manages the agent/config surface for the guest agents: the Claude
 Code guidance at `~/.claude/CLAUDE.md`, the OpenCode configuration at
-`~/.config/opencode/opencode.jsonc`, a global OpenCode `AGENTS.md`, and the
-multiphase skill plus its `/multiphase` command under
-`~/.config/opencode/skills` and `~/.config/opencode/commands`. The OpenCode
-`commands` and `skills` trees sync through manifests, so user-owned files
-inside them survive later provisioning runs; the top-level agent files
-(`CLAUDE.md`, `opencode.jsonc`, global `AGENTS.md`) are replaced when
-provisioning runs. The managed `.zshenv` block (Rootless Docker and Chromium)
-starts before the user's own `.zshenv` content, so a later user or project
-assignment overrides any of its defaults.
+`~/.config/opencode/opencode.jsonc`, a global OpenCode `AGENTS.md`, the
+reviewer subagent under `~/.config/opencode/agents`, and the multiphase skill
+plus its `/multiphase` command under `~/.config/opencode/skills` and
+`~/.config/opencode/commands`, with the vendored ub-mode skill alongside it in
+the skills tree (see `provision/config/skills/ub-mode/UPSTREAM.md` for the
+recorded upstream commit and `scripts/update-ub-mode.sh` for the refresh
+procedure). The OpenCode `agents`, `commands` and `skills` trees sync through
+manifests, so user-owned files inside them survive later provisioning runs;
+the top-level agent files (`CLAUDE.md`, `opencode.jsonc`, global `AGENTS.md`)
+are replaced when provisioning runs. The managed `.zshenv` block (Rootless
+Docker and Chromium) starts before the user's own `.zshenv` content, so a
+later user or project assignment overrides any of its defaults.
 
 ## Provisioning
 
