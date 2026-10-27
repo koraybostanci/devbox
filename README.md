@@ -78,7 +78,7 @@ oh-my-zsh:
 
 | Group | Contents |
 | --- | --- |
-| Languages | Node.js and npm (nvm), Python (pyenv) with uv, Go, Rust, Java 21 |
+| Languages | Node.js and npm (nvm), Python (pyenv) with uv, Go, Rust, Java 25 |
 | Agent CLIs | Claude Code, OpenCode, Databricks CLI |
 | Tools | `gh`, `jq`, `yq`, Vim, a per-user rootless Docker daemon, native ARM64 Chromium |
 

@@ -135,7 +135,7 @@ packages=(
     libssl-dev
     libxml2-dev
     libxmlsec1-dev
-    openjdk-21-jdk-headless
+    openjdk-25-jdk-headless
     rustup
     slirp4netns
     snapd
