@@ -42,7 +42,7 @@ custom/plugin review skill: `/review` always runs the bundled one.
 
 ```text
 /review medium uncommitted changes only: git diff HEAD -- <quoted-phase-paths>; exclude earlier commits
-/review max <recorded-base-sha>...HEAD
+/review high <recorded-base-sha>...HEAD
 ```
 
 The first command targets the phase; the second targets the whole branch.
