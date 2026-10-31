@@ -111,7 +111,7 @@ where you stopped. An added phase runs before Finish and resets
 2. **Design panel** (unless `Panel: none` or over budget) per `panel-reference.md`;
    save agreed constraints.
 3. **Implement:** one fresh non-forked worker per attempt, never resumed. OpenCode:
-   `subagent`, `agent: general`; Claude: Agent, `subagent_type: general-purpose`.
+   `subagent`, `agent: general`; Claude: Agent, `subagent_type: general-purpose`, `model: sonnet`.
    Supply only this phase, shared context, panel constraints, worktree, commands,
    and boundaries:
    follow repository instructions; touch scoped files only; no delegation, commits,
