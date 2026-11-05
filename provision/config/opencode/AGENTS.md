@@ -13,3 +13,10 @@ policy guidance, not technical network enforcement.
 
 Confirm before force-pushing, rebasing, hard-resetting, deleting branches,
 committing, pushing, or creating a pull request.
+
+## Browser
+The browser is a snap-confined Chromium (`/snap/bin/chromium`, also reachable as
+`/opt/google/chrome/chrome` for the Playwright and Chrome DevTools MCPs). It
+cannot read `/tmp` and can only write under `$HOME`, so keep screenshots and
+profiles there. Plain `chromium --headless --screenshot` does not render SPAs;
+use an MCP or Playwright. The Claude in Chrome extension is unavailable here.

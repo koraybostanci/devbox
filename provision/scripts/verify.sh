@@ -47,6 +47,10 @@ chromium_launches_headlessly() {
     [[ "$(/snap/bin/chromium --headless --disable-gpu --dump-dom about:blank 2>/dev/null)" == *'<html'* ]]
 }
 
+chrome_channel_shim_launches_headlessly() {
+    [[ "$(/opt/google/chrome/chrome --headless --disable-gpu --dump-dom about:blank 2>/dev/null)" == *'<html'* ]]
+}
+
 guest_home_uses_lima_data_disk() {
     local data_root
 
@@ -130,6 +134,7 @@ check "devbox cannot access the rootful Docker socket" rootful_docker_is_denied
 check "devbox shell defaults to the rootless Docker socket" login_shell_uses_rootless_docker
 check "guest package architecture is ARM64" test "$(dpkg --print-architecture)" = arm64
 check "Ubuntu Chromium launches headlessly" chromium_launches_headlessly
+check "Chrome stable-channel path launches Chromium" chrome_channel_shim_launches_headlessly
 # Services are staged during provisioning but stay stopped until the user runs
 # `devbox services start`. This check runs as the devbox user, so it can only
 # assert the directory's ownership and mode.
