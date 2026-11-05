@@ -97,11 +97,16 @@ env_value_error() {
     esac
 }
 
-# Resolve the host configuration file: an explicit DEVBOX_ENV_FILE wins,
-# otherwise the checkout-local .env.
+# Resolve the host configuration file: an explicit DEVBOX_ENV_FILE wins, a
+# release install (RELEASE marker) uses the XDG config path so upgrades never
+# touch it, otherwise the checkout-local .env.
 devbox_env_file() {
     if [ -n "${DEVBOX_ENV_FILE:-}" ]; then
         printf '%s\n' "$DEVBOX_ENV_FILE"
+        return
+    fi
+    if [ -f "${DEVBOX_DIR:-$PWD}/RELEASE" ]; then
+        printf '%s/devbox/env\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
         return
     fi
     printf '%s/.env\n' "${DEVBOX_DIR:-$PWD}"

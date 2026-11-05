@@ -26,6 +26,7 @@ DEVBOX_DIR="$(dirname "$DEVBOX_SCRIPT")"
 source "$DEVBOX_DIR/lib/common.sh"
 source "$DEVBOX_DIR/lib/config.sh"
 source "$DEVBOX_DIR/lib/devbox.sh"
+source "$DEVBOX_DIR/lib/release.sh"
 
 usage() {
     cat <<'EOF'
@@ -54,7 +55,9 @@ Authentication and helpers (optional, guest-local):
 Maintenance:
     provision                      Force non-destructive provisioning
     destroy                        Remove the VM and its container runtime data
-    uninstall                      Remove the devbox command symlink
+    update [--version X.Y.Z]       Update a release install (default: latest)
+    uninstall                      Remove the devbox command (and a release install)
+    self-install                   Internal: activate an unpacked release (used by install.sh)
 
 Other:
     version                        Show the devbox version
@@ -78,7 +81,19 @@ case "$cmd" in
         ;;
     uninstall)
         require_args 0 "devbox uninstall" "$@"
-        uninstall_cli "$DEVBOX_SCRIPT"
+        if release_mode; then
+            release_uninstall
+        else
+            uninstall_cli "$DEVBOX_SCRIPT"
+        fi
+        ;;
+    update)
+        release_update "$@"
+        ;;
+    self-install)
+        require_args 0 "devbox self-install" "$@"
+        release_mode || die "self-install is only available in a release"
+        release_self_install
         ;;
     version)
         require_args 0 "devbox version" "$@"
@@ -91,7 +106,11 @@ case "$cmd" in
         require_args 0 "devbox init" "$@"
         # Install the command first so even the first run leaves the user able
         # to use `devbox` instead of `./devbox`.
-        install_cli "$DEVBOX_SCRIPT"
+        if release_mode; then
+            log "devbox is installed as a release; skipping the command link."
+        else
+            install_cli "$DEVBOX_SCRIPT"
+        fi
         initialize_local_config
         ;;
     start | provision | connect | exec | status | services | auth | db | stop | destroy)

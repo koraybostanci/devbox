@@ -36,7 +36,7 @@ fi
 shell_files=()
 while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
-done < <(find . \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/config/guest/devbox \) -print | sort)
+done < <(find . -path ./dist -prune -o \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/config/guest/devbox \) -print | sort)
 bash -n "${shell_files[@]}"
 
 # --- shellcheck ---------------------------------------------------------------
@@ -1208,6 +1208,8 @@ HOME="$cli_unit_root/home" PATH="$cli_unit_root/home/bin:/usr/bin:/bin" /bin/bas
 ' >/dev/null || fail "devbox CLI did not reuse its existing symlink"
 [ ! -e "$cli_unit_root/home/bin/devbox" ] || fail "uninstall kept the existing devbox symlink"
 [ ! -e "$cli_unit_root/home/.local/bin/devbox" ] || fail "CLI migration created a second symlink"
+
+source "$ROOT/scripts/check-release.sh"
 
 # --- managed services -------------------------------------------------------
 compose_command=()

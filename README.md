@@ -21,6 +21,7 @@ Design and internals are documented in
 ## Contents
 
 - [Requirements](#requirements)
+- [Install](#install)
 - [Quick start](#quick-start)
 - [What's in the VM](#whats-in-the-vm)
 - [Daily commands](#daily-commands)
@@ -42,10 +43,29 @@ Design and internals are documented in
 
 Nothing else: no Homebrew, `jq`, `yq`, Docker, or Docker Compose on the host.
 
+## Install
+
+```sh
+curl -fsSL https://github.com/koraybostanci/devbox/releases/latest/download/install.sh | bash
+```
+
+The installer downloads the latest release, verifies its SHA-256 checksum, and
+installs it under `~/.local/share/devbox/versions/<version>` with a `current`
+symlink; `~/.local/bin/devbox` points at `current/devbox`. Nothing depends on a
+clone, and no `sudo` is used. Your configuration lives in
+`~/.config/devbox/env`, outside the install, so upgrades never touch it. If a
+clone-based install exists, its `.env` is copied there once.
+
+`devbox update` installs the latest release if it is newer than yours (or
+`--version X.Y.Z`, which also rolls back); the two newest versions are kept. `devbox uninstall` removes the
+install but keeps the configuration and the VM. Then run `devbox init`.
+
+To work from a clone instead (development), use `./devbox init` below.
+
 ## Quick start
 
 ```sh
-./devbox init          # answer the prompts; installs the devbox command
+devbox init            # answer the prompts (from a clone: ./devbox init)
 # If init prints a PATH instruction, follow it or keep using ./devbox.
 devbox start           # create and provision the VM
 devbox connect         # open a zsh shell in the guest
@@ -53,9 +73,9 @@ devbox status          # see the VM's state and resources
 devbox stop
 ```
 
-`devbox init` asks for your settings and installs a `devbox` symlink into
-`~/.local/bin`. If that directory is not on your `PATH`, add
-`export PATH="$HOME/.local/bin:$PATH"` to your shell configuration and open a
+From a clone, `devbox init` asks for your settings and installs a `devbox`
+symlink into `~/.local/bin` (a release install already has one). If that
+directory is not on your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell configuration and open a
 new shell. Until then, use `./devbox` from the checkout. `devbox uninstall`
 removes the symlink.
 
@@ -99,6 +119,7 @@ are set to `vim` by default.
 | `devbox exec <command>` | run a single command in the guest |
 | `devbox status` | VM state and resources |
 | `devbox version` | the devbox version |
+| `devbox update [--version X.Y.Z]` | update a release install |
 | `devbox help` | the full command list |
 | `devbox stop [--force]` | stop the VM; force only when requested |
 
@@ -107,8 +128,9 @@ stop/start and is removed only by `devbox destroy`.
 
 ## Configuration
 
-`devbox init` asks for the settings and writes `.env` in the checkout (mode
-0600, gitignored). Prompts default to the current value, the host Git
+`devbox init` asks for the settings and writes `.env` in the checkout, or
+`~/.config/devbox/env` for a release install (mode 0600, gitignored in the
+checkout). Prompts default to the current value, the host Git
 identity, or the built-in value in brackets. Rerun `devbox init` to change
 them.
 
@@ -140,7 +162,7 @@ Notes:
   afterwards. The key set and the value rules (supported names, quote
   handling, PostgreSQL user/db and port limits) are pinned in
   [docs/troubleshooting.md](docs/troubleshooting.md).
-- To keep the configuration somewhere other than the checkout's `.env` — for
+- To keep the configuration somewhere other than the default (the checkout's `.env`, or `~/.config/devbox/env` for a release) — for
   example a dotfiles symlink — run any devbox command with
   `DEVBOX_ENV_FILE=/path/to/env` in the environment (that is a process
   variable, not a key inside `.env`).
@@ -206,7 +228,8 @@ removed only by `devbox destroy`.
 | --- | --- |
 | `devbox provision` | force non-destructive provisioning |
 | `devbox destroy` | remove the VM and its container runtime data |
-| `devbox uninstall` | remove the devbox symlink |
+| `devbox update [--version X.Y.Z]` | update (or roll back) a release install |
+| `devbox uninstall` | remove the devbox symlink; for a release install, also the installed versions (config and VM are kept) |
 
 ## Security
 

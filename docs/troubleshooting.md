@@ -16,7 +16,7 @@ Install Colima from <https://colima.run>. No other host tooling is required.
 
 Run `devbox init` to rewrite the configuration interactively; it keeps the
 current values as defaults. To keep the configuration somewhere other than the
-checkout's `.env`, run devbox with `DEVBOX_ENV_FILE=/path/to/env` in its
+default (the checkout's `.env`, or `~/.config/devbox/env` for a release install), run devbox with `DEVBOX_ENV_FILE=/path/to/env` in its
 environment. `.env` must be mode 0600 and contain only supported
 `KEY=value` assignments (single or double quotes are stripped):
 
@@ -137,6 +137,10 @@ the checkout is safe. Run `devbox init` again from the new location (press Enter
 to keep the current values) to refresh the `devbox` symlink on your `PATH`.
 
 ## Upgrading devbox
+
+A release install updates with `devbox update` (or `devbox update --version
+X.Y.Z` to roll back); your configuration in `~/.config/devbox/env` is kept. A
+clone updates with `git pull`.
 
 An existing VM converges in place on the next `devbox start`. `devbox destroy`
 followed by `devbox start` remains the clean path when you want a fresh guest,
