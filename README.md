@@ -56,8 +56,8 @@ clone, and no `sudo` is used. Your configuration lives in
 `~/.config/devbox/env`, outside the install, so upgrades never touch it. If a
 clone-based install exists, its `.env` is copied there once.
 
-`devbox update` installs the latest release (or `--version X.Y.Z`, which also
-rolls back); the two newest versions are kept. `devbox uninstall` removes the
+`devbox update` installs the latest release if it is newer than yours (or
+`--version X.Y.Z`, which also rolls back); the two newest versions are kept. `devbox uninstall` removes the
 install but keeps the configuration and the VM. Then run `devbox init`.
 
 To work from a clone instead (development), use `./devbox init` below.

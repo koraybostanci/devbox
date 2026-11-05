@@ -69,6 +69,13 @@ grep -q 'GIT_NAME="Old"' "$rel_config" || fail "clone .env was not migrated"
 [ "$(rel_env /bin/bash -c 'DEVBOX_DIR="$1"; source "$1/lib/config.sh"; devbox_env_file' _ "$rel_data/current")" = "$rel_config" ] ||
     fail "release env file is not the XDG path"
 
+# A latest release older than the installed version is never installed implicitly.
+printf '0.0.7\n' >"$rel_root/mirror/LATEST"
+rel_old="$(rel_env devbox update 2>&1)"
+[[ "$rel_old" == *'not downgrading'* ]] || fail "update downgraded to an older latest release"
+[ "$(readlink "$rel_data/current")" = versions/0.0.8 ] || fail "refused downgrade still changed current"
+printf '0.0.9\n' >"$rel_root/mirror/LATEST"
+
 # Update flips current, keeps the old version and the configuration.
 printf 'export GIT_NAME="Edited"\n' >"$rel_config"
 rel_env devbox update >/dev/null 2>&1 || fail "devbox update failed"

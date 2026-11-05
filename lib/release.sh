@@ -172,7 +172,7 @@ release_prune() {
 }
 
 release_update() {
-    local version="" current tmp
+    local version="" explicit=0 current tmp
 
     release_mode || die "devbox was installed from a clone; use git pull to update"
     while [ "$#" -gt 0 ]; do
@@ -180,6 +180,7 @@ release_update() {
             --version)
                 [ "$#" -ge 2 ] || die "--version needs a value"
                 version="${2#v}"
+                explicit=1
                 shift 2
                 ;;
             *) die "Usage: devbox update [--version X.Y.Z]" ;;
@@ -190,6 +191,11 @@ release_update() {
     read -r current <"$DEVBOX_DIR/VERSION" || true
     if [ "$version" = "$current" ]; then
         log "devbox $current is already installed."
+        return
+    fi
+    # Only an explicit --version may move backwards (rollback).
+    if [ "$explicit" = 0 ] && version_at_least "$current" "$version"; then
+        log "devbox $current is newer than the latest release ($version); not downgrading. Use --version to choose."
         return
     fi
 
