@@ -2,7 +2,7 @@
 # Sourced by check.sh after ROOT, validation_root, and fail are set.
 # Exercises release.sh, install.sh, update, and uninstall against file:// URLs
 # in an isolated HOME; no network and no VM.
-# shellcheck disable=SC2154
+# shellcheck disable=SC2016,SC2154
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     printf 'ERROR: scripts/check-release.sh must be sourced by scripts/check.sh\n' >&2

@@ -157,7 +157,7 @@ release_activate() {
 }
 
 release_prune() {
-    local root="$1" current="$2" kept=0 entry
+    local root="$1" current="$2" kept=0 entry path
 
     while IFS= read -r entry; do
         if [ "$entry" = "$current" ] || [ "$kept" -lt "$DEVBOX_RELEASE_KEEP" ]; then
@@ -165,8 +165,10 @@ release_prune() {
         else
             command rm -rf "$root/versions/$entry"
         fi
-    done < <(ls -1 "$root/versions" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' |
-        sort -t. -k1,1nr -k2,2nr -k3,3nr)
+    done < <(for path in "$root"/versions/*; do
+        entry="${path##*/}"
+        release_valid_version "$entry" && printf '%s\n' "$entry"
+    done | sort -t. -k1,1nr -k2,2nr -k3,3nr)
 }
 
 release_update() {

@@ -36,7 +36,7 @@ fi
 shell_files=()
 while IFS= read -r shell_file; do
     shell_files+=("$shell_file")
-done < <(find . \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/config/guest/devbox \) -print | sort)
+done < <(find . -path ./dist -prune -o \( -type f -name '*.sh' -o -path ./devbox -o -path ./provision/config/guest/devbox \) -print | sort)
 bash -n "${shell_files[@]}"
 
 # --- shellcheck ---------------------------------------------------------------

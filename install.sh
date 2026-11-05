@@ -86,4 +86,4 @@ mkdir "$tmp/x"
 tar -xzf "$archive" -C "$tmp/x"
 [ -f "$tmp/x/devbox-$version/devbox" ] || die "release archive has no devbox-$version/devbox"
 "$tmp/x/devbox-$version/devbox" self-install
-printf 'Next: run `devbox init`.\n'
+printf 'Next: run "devbox init".\n'
