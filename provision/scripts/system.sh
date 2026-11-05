@@ -104,6 +104,17 @@ install_guest_chromium() {
     snap refresh --hold chromium
 }
 
+# Browser MCP servers (Playwright, Chrome DevTools) default to the Chrome
+# "stable" channel, which resolves to /opt/google/chrome/chrome. Chrome has no
+# ARM64 Linux build, so point that path at the snap Chromium. A wrapper script
+# rather than a symlink: snap dispatches on argv[0], and "chrome" is not a snap.
+install_chrome_channel_shim() {
+    install -d -m 0755 /opt/google/chrome
+    printf '%s\n' '#!/bin/sh' 'exec /snap/bin/chromium "$@"' >/opt/google/chrome/chrome.tmp
+    chmod 0755 /opt/google/chrome/chrome.tmp
+    mv -f /opt/google/chrome/chrome.tmp /opt/google/chrome/chrome
+}
+
 # Keep the helpers above sourceable by the static gate without running the
 # package installation and provisioning stages below.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
@@ -169,5 +180,6 @@ apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install \
 configure_devbox_guest_identity
 devbox_prepare_rootless_docker
 install_guest_chromium
+install_chrome_channel_shim
 
 install -m 0755 "$DEVBOX_PROVISION_ROOT/config/guest/devbox" /usr/local/bin/devbox

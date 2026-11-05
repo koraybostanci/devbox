@@ -284,7 +284,8 @@ done
 # invocation while its definition remains would be a false pass.
 for readiness_check in \
     rootless_context_is_selected rootless_docker_is_ready \
-    rootful_docker_is_denied chromium_launches_headlessly; do
+    rootful_docker_is_denied chromium_launches_headlessly \
+    chrome_channel_shim_launches_headlessly; do
     if ! grep -Eq "^[[:space:]]*check \".*\"[[:space:]]$readiness_check\$" provision/scripts/verify.sh; then
         fail "guest readiness check call is missing: $readiness_check"
     fi
@@ -301,6 +302,7 @@ done
 # `failures == 0` guard before the digest publish) is what is being tested.
 # Fixture adaptation, applied by the awk script below: guest-absolute paths
 # (/var/lib/devbox, /var/run/docker.sock, /home/devbox, /snap/bin/chromium,
+# /opt/google/chrome/chrome,
 # /usr/bin/rootlesskit) become probe-local fixture paths; the root-ownership
 # and devbox-identity anchors keep their shape but resolve against the
 # fixture's owner (an unprivileged run cannot create a root-owned tree);
@@ -472,6 +474,7 @@ VERIFY_MARKER_HEADER
         gsub(/test "\$\(id -un\)" = devbox/, "v_id_is_invoking_user")
         # Guest-absolute path remaps (comments and check arguments alike).
         gsub(/\/snap\/bin\/chromium/, v_chromium)
+        gsub(/\/opt\/google\/chrome\/chrome/, v_chromium)
         gsub(/\/usr\/bin\/rootlesskit/, v_rootlesskit)
         gsub(/\/var\/run\/docker\.sock/, "\"" v_sock "\"")
         gsub(/\/var\/lib\/devbox\/services/, "\"" v_state "/services\"")
@@ -561,6 +564,8 @@ if grep -R -nE '^[[:space:]]*(export[[:space:]]+)?PUPPETEER_SKIP_DOWNLOAD=' prov
 fi
 grep -qF 'snap install chromium --channel=stable' provision/scripts/system.sh ||
     fail "system provisioning must install actual Ubuntu Chromium from the stable snap"
+grep -qF 'install_chrome_channel_shim' provision/scripts/system.sh ||
+    fail "system provisioning must install the Chrome stable-channel shim for browser MCP servers"
 grep -qF 'devbox_configure_rootless_docker' provision/scripts/tools.sh ||
     fail "the unprivileged tools phase must configure rootless Docker"
 grep -qF 'cd "$package_root" && node install.cjs' provision/scripts/lib/apps.sh ||

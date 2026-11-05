@@ -152,6 +152,14 @@ use that form for the project's install command if it needs to download the
 bundled browser). `PUPPETEER_SKIP_DOWNLOAD` is never set globally and remains a
 project-scoped install choice for projects using a system browser.
 
+The Playwright and Chrome DevTools MCP servers default to the Chrome `stable`
+channel, which resolves to `/opt/google/chrome/chrome`. Chrome has no Linux
+ARM64 build, so system provisioning installs a small wrapper script at that
+path that execs `/snap/bin/chromium`; no MCP configuration is needed. It is a
+script rather than a symlink because snap dispatches on `argv[0]`. The Claude
+in Chrome extension needs a GUI Chrome profile and is not available in the
+headless guest.
+
 ### Finsights host metrics
 
 For Finsights, use a read-only `/:/host:ro,rslave` mount for the guest root and
