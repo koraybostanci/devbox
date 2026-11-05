@@ -13,6 +13,9 @@ lives in the guest.
 - `devbox` — the launcher.
 - `lib/common.sh` — logging, locking, CLI install helpers.
 - `lib/config.sh` — host platform check, `.env` parsing.
+- `lib/release.sh` — release install, `update`, and uninstall.
+- `install.sh` — user-facing installer shipped with each release.
+- `scripts/release.sh` — builds `dist/` and drafts the GitHub release.
 - `lib/devbox.sh` — VM lifecycle, provisioning, SSH alias, services.
 - `provision/` — guest provisioning bundle: `versions.env` (pinned versions),
   `scripts/` (system/tools/verify plus shared libs),

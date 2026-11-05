@@ -5,7 +5,8 @@ except the repository and your Colima installation on the guest.
 
 ## Host / guest boundary
 
-- The host owns the repository, the host configuration (`.env`, mode 0600),
+- The host owns the repository, the host configuration (`.env`, mode 0600; `~/.config/devbox/env` for a
+  release install),
   the Colima profile, and a managed OpenSSH host alias for `devbox`. It needs
   only Colima and the OpenSSH client.
 - The guest owns toolchains, project files (`/home/devbox/workspace`), service
@@ -189,3 +190,21 @@ no longer exists. `devbox stop` stops the managed services first and then the
 VM; an unclean services stop only warns and never blocks the VM stop.
 `devbox destroy` requires the profile name to be typed and then deletes the VM
 together with its runtime data and the managed SSH alias.
+
+## Releases
+
+`scripts/release.sh` packs `devbox`, `lib/`, `provision/`, `colima.yaml`,
+`VERSION`, and a `RELEASE` marker into a reproducible
+`devbox-<version>.tar.gz` plus a `.sha256`, and creates a draft GitHub release
+for tag `v<VERSION>`. `install.sh` verifies the checksum, rejects unsafe
+archives, unpacks to a temporary directory, and runs the release's own
+`devbox self-install` (`lib/release.sh`), which copies it to
+`~/.local/share/devbox/versions/<version>`, repoints `current`, links
+`~/.local/bin/devbox`, and prunes all but the two newest versions.
+
+The `RELEASE` marker is what makes a launcher a release install: its
+configuration moves to `~/.config/devbox/env` (`DEVBOX_ENV_FILE` still wins),
+`update` and release-aware `uninstall` become available, and `init` skips the
+command link. Without the marker (a clone) behavior is unchanged.
+`DEVBOX_HOME` overrides the install root; `DEVBOX_RELEASE_BASE_URL` points the
+installer and `update` at a mirror (flat directory plus a `LATEST` file).

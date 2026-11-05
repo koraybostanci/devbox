@@ -1209,6 +1209,8 @@ HOME="$cli_unit_root/home" PATH="$cli_unit_root/home/bin:/usr/bin:/bin" /bin/bas
 [ ! -e "$cli_unit_root/home/bin/devbox" ] || fail "uninstall kept the existing devbox symlink"
 [ ! -e "$cli_unit_root/home/.local/bin/devbox" ] || fail "CLI migration created a second symlink"
 
+source "$ROOT/scripts/check-release.sh"
+
 # --- managed services -------------------------------------------------------
 compose_command=()
 if docker compose version >/dev/null 2>&1; then
