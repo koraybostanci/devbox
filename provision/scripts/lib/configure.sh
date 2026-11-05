@@ -57,8 +57,26 @@ configure_opencode() {
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/opencode/AGENTS.md" "$config_directory/AGENTS.md" 644
 }
 
+# Emit the merged Claude Code settings: the settings file Claude Code itself
+# manages is the base, with the provisioned policy (attribution today) deep
+# merged over it. An absent target publishes the policy file unchanged.
+devbox_build_claude_settings() {
+    local source_file="$1" target="$2"
+
+    [ -f "$target" ] || { cat -- "$source_file"; return 0; }
+    jq -s '.[0] * .[1]' -- "$target" "$source_file"
+}
+
 configure_claude() {
+    local source_file="$DEVBOX_PROVISION_ROOT/config/claude/settings.json" target="$HOME/.claude/settings.json"
+
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+    # A merge, not a clobber: Claude Code owns keys such as enabledPlugins and
+    # the theme in this file, so the provisioned policy is deep merged over
+    # whatever is already there.
+    mkdir -p "$(dirname "$target")"
+    devbox_publish_atomic "$target" 644 --skip-if-same -- \
+        devbox_build_claude_settings "$source_file" "$target"
 }
 
 # Keep the user's .zshenv (or its dotfiles target) and place devbox defaults in

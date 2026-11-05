@@ -505,6 +505,8 @@ VERIFY_MARKER_HEADER
         chmod 700 "$1/.config/devbox"
         chmod 600 "$1/.config/devbox/config" "$1/.config/devbox/secrets"
         : >"$1/.claude/CLAUDE.md"
+        printf '%s\n' '{"attribution": {"commit": "", "pr": "", "sessionUrl": false}}' \
+            >"$1/.claude/settings.json"
         : >"$1/.config/opencode/opencode.jsonc"
         : >"$1/.config/opencode/AGENTS.md"
         : >"$1/.config/opencode/skills/multiphase/SKILL.md"

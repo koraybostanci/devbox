@@ -140,6 +140,8 @@ check "Chrome stable-channel path launches Chromium" chrome_channel_shim_launche
 # assert the directory's ownership and mode.
 check "devbox services root is root-owned and closed" services_root_is_root_owned_and_closed
 check "devbox Claude Code configuration" test -f "$HOME/.claude/CLAUDE.md"
+check "devbox Claude Code settings suite merged" test -f "$HOME/.claude/settings.json"
+check "devbox Claude Code attribution is disabled" jq -e '.attribution == {"commit": "", "pr": "", "sessionUrl": false}' "$HOME/.claude/settings.json"
 check "Git identity" test -n "$(git config --global user.name)"
 check "Git email" test -n "$(git config --global user.email)"
 check "zsh login shell starts cleanly" login_shell_is_clean
