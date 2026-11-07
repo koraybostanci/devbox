@@ -6,6 +6,9 @@ No trailing summaries. Don't recap what you just did. The user can read the diff
 ## Surgical Changes
 Don't improve adjacent code, comments, or formatting unless directly asked. Match existing style.
 
+## Subagents
+Delegate simple, mechanical work (searching and mapping files, listing usages, running commands or tests and reporting output, explicit bulk edits) to the `mechanical` agent, which runs on Haiku 5.5. Keep analysis, review, design and critical work on the main model or a stronger subagent.
+
 ## Commits
 Never add `Co-Authored-By` trailers.
 
