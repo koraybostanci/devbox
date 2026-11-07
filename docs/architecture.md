@@ -56,9 +56,10 @@ Provisioning creates an unprivileged `devbox` account:
 ### Guest agent defaults
 
 Provisioning manages the agent/config surface for the guest agents: the Claude
-Code guidance at `~/.claude/CLAUDE.md`, the OpenCode configuration at
+Code guidance at `~/.claude/CLAUDE.md`, the Haiku-pinned `mechanical` subagent
+under `~/.claude/agents` (manifest-synced like the OpenCode trees), the OpenCode configuration at
 `~/.config/opencode/opencode.jsonc`, a global OpenCode `AGENTS.md`, the
-reviewer subagent under `~/.config/opencode/agents`, and the multiphase skill
+reviewer and `mechanical` (GLM-5.3 Flash Free) subagents under `~/.config/opencode/agents`, and the multiphase skill
 plus its `/multiphase` command under `~/.config/opencode/skills` and
 `~/.config/opencode/commands`, with the vendored ub-mode skill alongside it in
 the skills tree (see `provision/config/skills/ub-mode/UPSTREAM.md` for the

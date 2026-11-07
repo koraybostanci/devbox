@@ -71,6 +71,9 @@ configure_claude() {
     local source_file="$DEVBOX_PROVISION_ROOT/config/claude/settings.json" target="$HOME/.claude/settings.json"
 
     atomic_copy "$DEVBOX_PROVISION_ROOT/config/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+    # Managed through a manifest so user-owned agents in ~/.claude/agents survive.
+    sync_managed_opencode_tree "$DEVBOX_PROVISION_ROOT/config/claude/agents" \
+        "$HOME/.claude/agents" "$HOME/.claude/.devbox-managed-agents"
     # A merge, not a clobber: Claude Code owns keys such as enabledPlugins and
     # the theme in this file, so the provisioned policy is deep merged over
     # whatever is already there.
