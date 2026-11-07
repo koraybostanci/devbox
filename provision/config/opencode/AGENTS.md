@@ -14,6 +14,13 @@ policy guidance, not technical network enforcement.
 Confirm before force-pushing, rebasing, hard-resetting, deleting branches,
 committing, pushing, or creating a pull request.
 
+## Subagents
+
+Delegate simple, mechanical work (searching and mapping files, listing usages,
+running commands or tests and reporting output, explicit bulk edits) to the
+`mechanical` subagent, which runs on GLM-5.3 Flash Free. Keep analysis, review
+and design on the main model.
+
 ## Browser
 The browser is a snap-confined Chromium (`/snap/bin/chromium`, also reachable as
 `/opt/google/chrome/chrome` for the Playwright and Chrome DevTools MCPs). It
