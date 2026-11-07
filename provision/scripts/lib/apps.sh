@@ -20,6 +20,22 @@ install_claude() {
     claude --version | grep -qF "$CLAUDE_CODE_VERSION"
 }
 
+install_playwright() {
+    stage "Playwright $PLAYWRIGHT_VERSION"
+    if ! npm ls --global --depth=0 playwright 2>/dev/null | grep -qF "playwright@$PLAYWRIGHT_VERSION"; then
+        # The npm package never downloads browsers; scripts launch the system
+        # Chromium through CHROMIUM_PATH (set in the managed .zshenv block).
+        npm install --global --silent "playwright@$PLAYWRIGHT_VERSION"
+        npm ls --global --depth=0 playwright | grep -qF "playwright@$PLAYWRIGHT_VERSION"
+    fi
+    # Node resolves bare imports (ESM and CJS) up the directory tree, and
+    # never consults global modules for ESM. Linking into ~/node_modules makes
+    # `import "playwright"` work from any script under $HOME; a project's own
+    # node_modules still wins. The link follows the nvm-versioned global root.
+    mkdir -p "$HOME/node_modules"
+    ln -sfn "$(npm root --global)/playwright" "$HOME/node_modules/playwright"
+}
+
 install_opencode() {
     local archive directory binary_directory
 
@@ -99,6 +115,7 @@ install_shell_sources() {
 
 install_apps() {
     install_claude
+    install_playwright
     install_opencode
     install_yq
     install_databricks

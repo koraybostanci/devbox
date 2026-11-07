@@ -162,6 +162,13 @@ script rather than a symlink because snap dispatches on `argv[0]`. The Claude
 in Chrome extension needs a GUI Chrome profile and is not available in the
 headless guest.
 
+Provisioning also installs `playwright` globally at `PLAYWRIGHT_VERSION` for
+scripts; it downloads no browsers, and links it into `~/node_modules` so a
+bare `import "playwright"` resolves from any script under `$HOME` (a project's
+own `node_modules` still wins). The managed `.zshenv` block exports
+`CHROMIUM_PATH=/snap/bin/chromium` (same unset-or-empty rule as
+`PUPPETEER_EXECUTABLE_PATH`) for scripts that launch the system Chromium.
+
 ### Finsights host metrics
 
 For Finsights, use a read-only `/:/host:ro,rslave` mount for the guest root and

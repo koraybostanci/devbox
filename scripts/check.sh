@@ -399,6 +399,10 @@ printf 'v%s\n' "$NODE_VERSION"
 EOF
     cat >"$verify_stub_bin/npm" <<'EOF'
 #!/bin/bash
+if [ "$1" = ls ]; then
+    printf 'playwright@%s\n' "$PLAYWRIGHT_VERSION"
+    exit 0
+fi
 printf '%s\n' "$NPM_VERSION"
 EOF
     cat >"$verify_stub_bin/python" <<'EOF'
@@ -499,7 +503,9 @@ VERIFY_MARKER_HEADER
     verify_marker_home_prepare() {
         rm -rf "$1/.local"
         mkdir -p "$1/.config/devbox" "$1/workspace" "$1/.claude" \
-            "$1/.config/opencode/skills/multiphase" "$1/.config/opencode/commands"
+            "$1/.config/opencode/skills/multiphase" "$1/.config/opencode/commands" \
+            "$1/node_modules/playwright"
+        : >"$1/node_modules/playwright/package.json"
         : >"$1/.config/devbox/config"
         : >"$1/.config/devbox/secrets"
         chmod 700 "$1/.config/devbox"

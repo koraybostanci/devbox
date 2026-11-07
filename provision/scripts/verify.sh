@@ -171,6 +171,8 @@ zsh -lic '
     check "Go version" test "$(go version 2>/dev/null | awk "{print \$3}" | sed "s/^go//")" = "$GO_VERSION"
     check "Rust version" test "$(rustc --version 2>/dev/null | awk "{print \$2}")" = "$RUST_VERSION"
     check "Claude Code version" grep -qF "$CLAUDE_CODE_VERSION" < <(claude --version 2>/dev/null)
+    check "Playwright version" grep -qF "playwright@$PLAYWRIGHT_VERSION" < <(npm ls --global --depth=0 playwright 2>/dev/null)
+    check "Playwright resolves from the home directory" test -f "$HOME/node_modules/playwright/package.json"
     check "opencode version" test "$(opencode --version 2>/dev/null | sed "s/^opencode v//")" = "$OPENCODE_VERSION"
     check "OpenCode MCP configuration" opencode mcp list
     check "Databricks CLI version" grep -qF "v$DATABRICKS_VERSION" < <(databricks version 2>/dev/null)
