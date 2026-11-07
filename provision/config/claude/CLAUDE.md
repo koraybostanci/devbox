@@ -27,3 +27,8 @@ The browser is a snap-confined Chromium (`/snap/bin/chromium`, also reachable as
 cannot read `/tmp` and can only write under `$HOME`, so keep screenshots and
 profiles there. Plain `chromium --headless --screenshot` does not render SPAs;
 use an MCP or Playwright. The Claude in Chrome extension is unavailable here.
+For scripts, Playwright is not installed globally; a copy sits in the npx cache
+(`ls -d ~/.npm/_npx/*/node_modules/playwright`) and its browsers in
+`~/.cache/ms-playwright`. Pass the Playwright directory and
+`CHROMIUM_PATH=/snap/bin/chromium` to the script (e.g. finsights
+`tools/design/capture.mjs`), and write output under `$HOME`.
