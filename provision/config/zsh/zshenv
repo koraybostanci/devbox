@@ -13,3 +13,4 @@ export NPM_CONFIG_INCLUDE=optional
 
 # Use Ubuntu's native ARM64 Chromium unless the user/project selected a browser.
 export PUPPETEER_EXECUTABLE_PATH="${PUPPETEER_EXECUTABLE_PATH:-/snap/bin/chromium}"
+export CHROMIUM_PATH="${CHROMIUM_PATH:-/snap/bin/chromium}"
