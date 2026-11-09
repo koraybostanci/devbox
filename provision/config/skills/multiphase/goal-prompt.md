@@ -10,3 +10,5 @@ OpenCode V2 (no `/goal`; plain prompt):
 Follow the multiphase skill using "<PLAN_PATH>". Stop when it reaches done,
 pauses for human input, or halts.
 ```
+
+`/goal` can only be typed by the user, and its evaluator reads only the transcript, so the line above makes the controller print its status before stopping. Every stop clears the goal; to resume, recall the line (up arrow) and append the answer.
