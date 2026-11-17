@@ -57,7 +57,10 @@ clone, and no `sudo` is used. Your configuration lives in
 clone-based install exists, its `.env` is copied there once.
 
 `devbox update` installs the latest release if it is newer than yours (or
-`--version X.Y.Z`, which also rolls back); the two newest versions are kept. `devbox uninstall` removes the
+`--version X.Y.Z`, which also rolls back); the two newest versions are kept.
+It updates only the host install, not the VM: run `devbox start` afterwards
+(also when the VM is already running) to reprovision the guest with the new
+tool versions. `devbox uninstall` removes the
 install but keeps the configuration and the VM. Then run `devbox init`.
 
 To work from a clone instead (development), use `./devbox init` below.
