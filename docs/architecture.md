@@ -45,6 +45,8 @@ Provisioning creates an unprivileged `devbox` account:
 - No sudo, no supplementary groups, and no access to the rootful Docker socket.
   `devbox` has a separate per-user rootless Engine, managed by its systemd user
   service and enabled at boot through root-managed lingering.
+  Root work in the guest goes through Colima's administrative user from the
+  host (`colima ssh -p devbox -- sudo …`), which is how provisioning runs it.
 - Guest agents run as the same `devbox` account and share its writable files,
   workspace, and provider credentials; there is no per-agent guest-user
   sandbox.
