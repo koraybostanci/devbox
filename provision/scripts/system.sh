@@ -123,6 +123,7 @@ fi
 cd /
 
 packages=(
+    age
     apparmor
     bat
     build-essential

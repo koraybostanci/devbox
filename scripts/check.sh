@@ -382,7 +382,7 @@ EOF
     chmod +x "$verify_stub_bin/docker"
     # The existence-only battery tools; the versioned ones below read the
     # exported pins so every version check passes on the actual values.
-    for verify_stub in gh pyenv jq vim git sudo systemctl loginctl dpkg; do
+    for verify_stub in gh pyenv jq age vim git sudo systemctl loginctl dpkg; do
         : >"$verify_stub_bin/$verify_stub"
     done
     printf '#!/bin/bash\ncase "$*" in *Linger*) printf "yes\\n" ;; esac\nexit 1\n' \
@@ -390,7 +390,7 @@ EOF
     printf '#!/bin/bash\nprintf "arm64\\n"\n' >"$verify_stub_bin/dpkg"
     printf '#!/bin/bash\nprintf "devbox\\n"\n' >"$verify_stub_bin/git"
     printf '#!/bin/bash\nexit 1\n' >"$verify_stub_bin/sudo"
-    for verify_stub in gh pyenv jq vim git sudo systemctl loginctl dpkg; do
+    for verify_stub in gh pyenv jq age vim git sudo systemctl loginctl dpkg; do
         chmod +x "$verify_stub_bin/$verify_stub"
     done
     cat >"$verify_stub_bin/node" <<'EOF'
