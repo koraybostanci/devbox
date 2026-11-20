@@ -234,6 +234,20 @@ removed only by `devbox destroy`.
 | `devbox update [--version X.Y.Z]` | update (or roll back) a release install |
 | `devbox uninstall` | remove the devbox symlink; for a release install, also the installed versions (config and VM are kept) |
 
+### Root commands in the guest
+
+The guest `devbox` user has no sudo, so `sudo` inside the VM (including `!`
+commands run from an agent session) fails whatever password you enter. Run
+root commands from a host terminal through Colima's administrative user,
+which has passwordless sudo:
+
+```sh
+colima ssh -p devbox -- sudo apt-get install -y <package>
+```
+
+Such ad-hoc changes are not tracked; to keep a package, add it to
+`provision/scripts/system.sh` and run `devbox provision`.
+
 ## Security
 
 - There are no host filesystem mounts, and the host SSH agent is not
