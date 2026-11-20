@@ -162,6 +162,7 @@ zsh -lic '
     check "zsh is available" command -v zsh
     check "pyenv is available" command -v pyenv
     check "jq is available" command -v jq
+    check "age is available" command -v age
     check "vim is available" command -v vim
     check "Node.js version" test "$(node --version 2>/dev/null)" = "v$NODE_VERSION"
     check "npm version" test "$(npm --version 2>/dev/null)" = "$NPM_VERSION"
